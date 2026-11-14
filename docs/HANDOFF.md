@@ -22,11 +22,12 @@ repo JSON over n8n's REST API and activated.
 - **Cold-start quirk:** the JS task runner can miss its 15 s grant-token window and loop on 403
   for a few minutes; Code nodes fail with "Task request timed out" until the log says
   `Registered runner`. Documented under Failure handling in `docs/PIPELINE.md`.
-- **n8n MCP server still blocked** (SSRF strict mode). Fix identified: `WEBHOOK_SECURITY_MODE=moderate`
-  in `automation/scripts/n8n-mcp.mjs`'s env block. Claude Code's permission classifier declined to
-  let this session make that edit (it loosens a security mode), so **Tristen adds that one line**
-  and restarts Claude Code. Until then, board changes go through the REST API with the `.env` key —
-  the exact calls are in `docs/PIPELINE.md`. Live board id: `gvu4dg0NPtND4tGG`.
+- **n8n MCP server fix applied** (`WEBHOOK_SECURITY_MODE: 'moderate'` in
+  `automation/scripts/n8n-mcp.mjs`, added at Tristen's request). It takes effect in the next
+  Claude Code session; verify with the n8n health-check tool. Until confirmed, board changes also
+  work through the REST API with the `.env` key — the exact calls are in `docs/PIPELINE.md`. Live
+  board id: `gvu4dg0NPtND4tGG`. Note the public API's list endpoint returns no executions for this
+  key; fetch by id (`GET /api/v1/executions/<id>`) instead — the first run is execution 4.
 
 **Verified this session:** Execute Command from n8n resolves `claude` (2.1.220) and runs with the
 repo as cwd; a throwaway webhook → Execute Command → Code smoke workflow completed end to end
@@ -42,8 +43,7 @@ repo as cwd; a throwaway webhook → Execute Command → Code smoke workflow com
 2. After the builder finishes (Summary node), review branch `auth-and-signup`, merge to `main`
    with `--no-ff`, and flip B05 to Built plus FND-2 / NFR-8 Status in `docs/BUILD_LIST.md` (Gate 2).
    Then `curl -X POST http://localhost:5678/webhook/astra-build-pipeline` starts B06.
-3. Apply the one-line n8n-mcp fix above so Claude sessions can inspect the board directly.
-4. Still outstanding from before: run the app on a device (flips FND-1/FND-4 to Done); decide the
+3. Still outstanding from before: run the app on a device (flips FND-1/FND-4 to Done); decide the
    six external blockers when ready.
 
 **Do not** edit files in this working tree while an execution is running: the planner and builder

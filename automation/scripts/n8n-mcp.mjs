@@ -49,6 +49,11 @@ const child = spawn('npx', ['-y', 'n8n-mcp'], {
     LOG_LEVEL: 'error',
     DISABLE_CONSOLE_OUTPUT: 'true',
     N8N_API_URL: 'http://localhost:5678',
+    // n8n-mcp's default SSRF mode ('strict') refuses every loopback address, including the local
+    // n8n this repo runs. 'moderate' permits loopback and still blocks cloud-metadata endpoints
+    // and private LAN ranges. Added at Tristen's request, Nov 14, 2026. Override in .env if n8n
+    // ever moves off this machine.
+    WEBHOOK_SECURITY_MODE: 'moderate',
     ...process.env,
     ...loadEnvFile(path.join(repoRoot, '.env')),
   },

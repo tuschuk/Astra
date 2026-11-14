@@ -29,13 +29,11 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   with "SSRF protection: Localhost access is blocked in strict mode". Fix confirmed in n8n-mcp's
   source (`dist/utils/ssrf-protection.js`): it reads `WEBHOOK_SECURITY_MODE`; `moderate` allows
   loopback while still blocking cloud-metadata and LAN ranges (`127.0.0.1` is blocked too, so
-  changing the URL alone does not help). **Tristen applies it** — add
-  `WEBHOOK_SECURITY_MODE: 'moderate',` under `N8N_API_URL` in the launcher's env block (or
-  `WEBHOOK_SECURITY_MODE=moderate` in `.env`) and restart Claude Code. The Nov 14 session's attempt
-  to make that edit was declined by Claude Code's permission classifier (loosening a security
-  mode), so it stays a human change. Until then, live-board work goes through n8n's REST API with
-  the `.env` key (see `docs/PIPELINE.md`, "The board" row), which is what updated the board on
-  Nov 14, 2026.
+  changing the URL alone does not help). **Applied Nov 14, 2026 at Tristen's explicit request**
+  (`WEBHOOK_SECURITY_MODE: 'moderate'` in the launcher's env block). It takes effect the next time
+  Claude Code starts, since MCP servers only launch at session start — confirm with the n8n
+  health-check tool in a fresh session, then delete this item. If it still fails, live-board work
+  goes through n8n's REST API with the `.env` key (see `docs/PIPELINE.md`, "The board" row).
 - Max Method data deliberately NOT imported with the launch library (`launch-library-seed`),
   re-import when a consumer exists:
   - Cardio-machine selector metadata (`MaxMethodBackendStructure/.../src/utils/cardioMachineMetadata.js`:
