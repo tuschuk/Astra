@@ -2,48 +2,33 @@
 
 _Overwritten at the end of every session with where things stand now. Not a log._
 
-## Where things stand (Nov 14, 2026 — B05 merged, pipeline continuing)
+## Where things stand (Nov 14, 2026 — B06 built on its branch, waiting for Gate 2)
 
-**B05 auth-and-signup is merged to `main`** (Gate 2 done by the session at Tristen's "keep
-building" instruction) and the pipeline is moving on to **B06 training-math**. The build list
-shows B05 Built, FND-2 Built, NFR-8 Built; all three still need Tristen's device run to become Done.
+**B06 training-math is built and committed on branch `training-math`** (`Build B06: training
+math module`), not merged. Next: Gate 2 — rerun tests/lint/tsc, skim the diff and the plan's
+"Builder deviations" section, merge `--no-ff`, flip B06 and its covered features (TK-1..4,
+LOG-4, LOG-6, all partial) to Built, fire B07.
 
-**Gate 2 record for B05:**
+**What B06 shipped:** the one training-math module at
+`backend/supabase/functions/_shared/training-math/` (units, e1rm, rpe, intensity, plates, prs,
+validate, index + a mirror test each), imported in the app as `@training-math` via
+`frontend/metro.config.js` (new), `tsconfig.json` and `jest.config.js`. No migrations. Nothing
+calls it yet — scaffolding for B13/B15/B16/B18, drawn as such in `docs/diagrams/app-flow.md`.
 
-- Migration `20261114130000_signup_birthdate_gate.sql` applied to the live project via the
-  Supabase MCP (six migrations now).
-- Live probe: under-18, missing and malformed birthdates refused through the real `signUp` API
-  with no `auth.users` row left behind. Supabase's email validation rejects undeliverable test
-  domains, so the 18+ path was exercised by inserting a synthetic row into `auth.users`: profile,
-  settings and body-data rows were created with the birthdate stamped; the check constraint then
-  refused an under-18 edit; the probe user was deleted and all four tables confirmed clean.
-- `frontend/.env` created (gitignored) with the project URL and publishable key.
-- Auth config read via the Management API: password minimum 6 (matches
-  `frontend/src/auth/password.ts`). **Email confirmation is still ON** — the approved plan says
-  off for launch, but the session's toggle was declined by the permission classifier.
-  **Tristen:** Dashboard → Authentication → Providers → Email → turn "Confirm email" off, or
-  decide it stays on (the code handles both; the device check then includes the email hop).
-- Independent re-run after the builder: Jest 15 suites / 126 tests, lint, `tsc --noEmit` all clean.
-- Not done: the device check (sign up under 18 → refused; sign up 18+; kill app; reopen still
-  signed in; sign out; sign in) — flips B05 / FND-2 / NFR-8 to Done and covers FND-1 / FND-4.
+**Builder verification:** Jest 23 suites / 193 tests green; `tsc --noEmit` clean (after
+regenerating the stale, gitignored `.expo/types/router.d.ts` with one `expo start`); `expo lint`
+clean; the shared dir linted by hand from the repo root, clean (see DEFERRED for why
+`expo lint` can't reach it); a temporary screen import bundled through Metro
+(`expo export --platform android`) with the module's code in the bundle, then reverted.
+Not verified: Mermaid render of the updated diagram (`mmdc` declined for headless runs), any Deno
+import (B18 is the first consumer).
 
-**Pipeline changes this session (all on `main`, see `docs/PIPELINE.md`):** n8n starts with
-`NODES_EXCLUDE=[]` (Execute Command is disabled by default in 2.x) and runs detached; the board
-(`gvu4dg0NPtND4tGG`) is Active with a POST webhook trigger; the `claude` CLI was updated to 2.1.325
-(2.1.220 refused Opus 5.5 and killed the first builder attempt, recovered with the execution
-retry); `mcp__supabase` is now in the headless allowlist so builders apply their own migrations;
-the n8n-mcp SSRF fix (`WEBHOOK_SECURITY_MODE=moderate`) is committed and takes effect at the next
-Claude Code start. Gate 1 approval is a GET on `http://localhost:5678/webhook-waiting/<exec id>`;
-the public API lists no executions for this key, fetch by id.
+**Gate 1 decisions worth Tristen's eyes (from the plan):** G1 Epley at 1 rep returns the weight
+itself; G2 the RPE chart is derived from Epley, not a published table.
 
-**B06 training-math** — the ONE shared math module (e1RM Epley, PR detection, plate math, strength
-grades). The planner must choose a home importable from both `frontend/` and
-`backend/supabase/functions/`; a mirrored copy is a bug. Its plan lands at
-`docs/feature_plans/training-math.md` and waits at Gate 1 for Tristen's approval (or the next
-session's, if Tristen delegates it).
-
-**Still Tristen's:** device runs (above); email-confirmation toggle; the six external blockers;
-whether to grant `mmdc` to headless runs (DEFERRED).
+**Still Tristen's (unchanged from B05):** device runs for B05 / FND-2 / NFR-8 (and FND-1 /
+FND-4); the email-confirmation toggle (still ON); the six external blockers; whether to grant
+`mmdc` to headless runs.
 
 Next pipeline step after B06 merges: **B07 local-store-and-sync** (move `uuidv5` out of
 `automation/scripts/generate-library-seed.ts`, never copy it).

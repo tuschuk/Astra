@@ -71,7 +71,13 @@ flowchart TD
 
   Tabs -.->|"not wired yet: workouts, feed and library still don't read or write<br/>Supabase; no on-device SQLite or sync (FND-3, B07)"| DB
 
-  class Home,Market,Workout,Communities scaffold
+  subgraph Shared["Shared training math (backend/supabase/functions/_shared/training-math)<br/>import name in the app: @training-math"]
+    MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification<br/>SCAFFOLDING: built and tested, not yet called by any screen<br/>or server function"]
+  end
+  MathMod -.->|"not wired yet: Tool Kit calculators (B16),<br/>logger PR badges (B13), unit setting (B15)"| Workout
+  MathMod -.->|"not wired yet: post-workout analysis<br/>server function (B18)"| Backend
+
+  class Home,Market,Workout,Communities,MathMod scaffold
   class Seed,Catalog,DB,Store data
 ```
 
@@ -114,5 +120,12 @@ flowchart TD
   (red alert line), all styled from `theme/tokens.ts`.
 - `components/auth/` holds SignInForm, SignUpForm, BirthdateInput and their shared layout styles.
   The route files in `app/(auth)/` only wire them to the router.
+- **Training math** (`backend/supabase/functions/_shared/training-math/`, imported in the app as
+  `@training-math`) is the only place e1RM, RPE and %1RM working weights, plate breakdowns, kg/lb
+  conversion and PR detection are computed. It lives beside the server functions so Supabase can
+  bundle it; `frontend/metro.config.js`, `tsconfig.json` and `jest.config.js` map the alias.
+  Weights go in and come out in kg (the plate loader alone works in the rack's own unit); rounded
+  display numbers are never stored. Nothing calls it yet — it is scaffolding for the calculators,
+  logger and analysis.
 - Test-only helpers live in `src/test-utils/`: a fake Supabase auth client and fake AppState, plus
   `renderWithAuth`. The app never imports them.

@@ -125,8 +125,9 @@ already too heavy" — a UI state, not an exception).
     (grilled decision G8).
   - **e1rm:** `epleyE1rm(set)` beats `e1RmKg`.
   - "Beats" = `candidate > current + ε` (ε = 1e-6) so float artifacts and exact ties never flag.
-  - One set can flag several kinds at once (a 110 kg single can be true1rm + repMax(1) + e1rm) —
-    that is correct, they are distinct record books.
+  - One set can flag several kinds at once (a 110 kg single can be true1rm + e1rm; a heavy 5 can
+    be repMax(5) + e1rm) — that is correct, they are distinct record books. _(Builder: the
+    original example also listed repMax(1), contradicting G8; G8 wins and the example is fixed.)_
   - **Volume is structurally excluded:** total sets/reps/tonnage are never inputs, so a
     volume-only improvement *cannot* flag — LOG-4's negative DoD holds by construction and is
     still asserted by test.
@@ -217,3 +218,46 @@ any of them). G1 and G2 interpret the PRD and deserve his eyes most.
 - **Scope verdict:** the step scope is right as written; nothing moved in or out beyond the
   strength-grades clarification above and the volume-computation deferral note (both are
   clarifications of where future work lands, not scope changes).
+
+## Builder deviations (B06 build run)
+
+Recorded so the plan stays the record of what shipped. None changes the public behaviour the
+plan specifies; the first two refine it where the plan was silent.
+
+- **`epleyMultiplier(reps)` is the one Epley expression**, not `weightForReps`. The RPE chart
+  needs *fractional* effective reps (5 @ RPE 8.5 = 6.5 all-out reps) and `weightForReps` takes
+  whole reps only, so `rpe.ts` calls the multiplier directly and `intensity.ts` needs no Epley at
+  all. `epleyE1rm` and `weightForReps` are thin wrappers over it; it is module-internal (not
+  re-exported from `index.ts`). `weightForReps` has no in-module caller yet — it is public API
+  for B16's "what can I do for N reps" display.
+- **PR edge cases the plan didn't name:** `reps` is `number | null` (mirrors the nullable
+  `sets.reps` column); null, fractional or < 1 reps never flag. Sets over 30 reps can still be a
+  rep max but get no e1RM PR, since Epley's domain ends at 30 — throwing would crash the logger
+  on a legitimate high-rep set.
+- **`validate.ts` added** (code-review fix): the shared `assertFinite` / `assertPositive` /
+  `assertWholeInRange` checks, so the domain guards aren't re-written per file. Mirror test added.
+- **`PrEvent` is a discriminated union** (code-review fix): only `repMax` events carry `reps`.
+- **Metro:** went straight to an explicit `resolveRequest` alias plus `watchFolders` (the plan's
+  stated fallback) rather than relying on Expo's tsconfig-paths reaching outside the project
+  root. Verified with a real `expo export --platform android` of a temporary screen import (the
+  module's strings were in the Hermes bundle; probe reverted).
+- **tsconfig also maps `@jest/globals`** to `frontend/node_modules/@jest/globals`. The repo
+  convention is to import Jest globals explicitly, and TypeScript resolves packages by walking up
+  from the importing file, which never reaches `frontend/node_modules` from `backend/`.
+- **Lint:** `expo lint` cannot reach `backend/…/_shared/` (outside ESLint's base path); linted by
+  hand from the repo root, clean. Proper wiring deferred to B18 (`docs/DEFERRED.md`).
+
+## Code review (B06 build run)
+
+`mattpocock-skills:code-review` ran both axes on the working tree against `2e4bb65`.
+
+- **Standards:** no hard violations. Fixed: duplicated input checks → `validate.ts`; `PrEvent`
+  optional-`reps` → discriminated union; redundant post-conversion check in `displayWeight`;
+  jargon in the plate-solver comment; uncommented tsconfig flags. Left as is: the four-place
+  alias wiring (tsconfig/metro/jest cannot share one source; each comment points at the others);
+  `true1rm` vs `true1RmKg` capitalisation (kind strings vs camelCase TS fields); the smoke test's
+  home in `src/__tests__/` (it mirrors no single module); the "within a couple of percent" note in
+  `rpe.ts` (a code comment, not product copy — B16's copy must cite a source if it repeats it).
+- **Spec:** no wrong behaviour; every hand-checked fixture is correct; repo grep finds no second
+  implementation. Missing items were the diagram (done in the Document step) and recording the
+  deviations above (done).

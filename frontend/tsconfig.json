@@ -2,12 +2,24 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    // The shared training-math module (backend/supabase/functions/_shared/training-math) spells
+    // out `.ts` in its imports because Supabase's Deno runtime requires it.
+    "allowImportingTsExtensions": true,
+    // `@training-math` is the app's one import name for that module (also mapped in
+    // metro.config.js and jest.config.js). `@jest/globals` is mapped so the module's tests,
+    // which live outside frontend/, still find Jest's types in frontend/node_modules.
     "paths": {
       "@/*": [
         "./src/*"
       ],
       "@/assets/*": [
         "./assets/*"
+      ],
+      "@training-math": [
+        "../backend/supabase/functions/_shared/training-math/index.ts"
+      ],
+      "@jest/globals": [
+        "./node_modules/@jest/globals"
       ]
     }
   },
@@ -15,6 +27,7 @@
     "**/*.ts",
     "**/*.tsx",
     ".expo/types/**/*.ts",
-    "expo-env.d.ts"
+    "expo-env.d.ts",
+    "../backend/supabase/functions/_shared/training-math/**/*.ts"
   ]
 }
