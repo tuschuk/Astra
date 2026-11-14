@@ -4,11 +4,11 @@ _Overwritten at the end of every session with where things stand now. Not a log.
 
 ## Where things stand (Nov 14, 2026 — library DB seed session)
 
-**The database is fully stood up for launch-scale identity + logging, and the launch library
-lives in it.** Branch stack to review/merge in order: `ui-foundation` → `supabase-schema` →
-`launch-library-seed` → `library-db-seed` (all pushed). The FND-2 commits sit inside
-`launch-library-seed`'s history (two sessions shared a working tree that day); each branch still
-diffs cleanly against its parent.
+**The database is fully stood up for launch-scale identity + logging, the launch library lives
+in it, and everything is MERGED:** at Tristen's direction, the whole stack (`ui-foundation` →
+`supabase-schema` → `launch-library-seed` → `library-db-seed`) went into `main` as four `--no-ff`
+merges, verified tree-identical to the stack tip, and `main` is pushed. The feature branches
+still exist locally and on origin; delete them whenever. Everything below shipped on `main`.
 
 **New on `library-db-seed`** (plan: `docs/feature_plans/library-db-seed.md`, grilled with
 `mattpocock-skills:grilling` — autonomous mode: the LIB-7 handoff's delegated decisions stood in
@@ -40,8 +40,8 @@ restart;** if it still times out, run
 `npx -y @supabase/mcp-server-supabase@0.17.0 --project-ref=qczhvuzdxpmfztxrifyg` once by hand and
 read its error.
 
-**For Tristen:** (1) review + merge the four-branch stack in order, run the app on a device
-(flips FND-1/FND-4 to Done); (2) still open: copy `automation/claude-settings.example.json` →
+**For Tristen:** (1) run the app on a device (`cd frontend && npx expo start`) — flips FND-1 and
+FND-4 to Done; (2) still open: copy `automation/claude-settings.example.json` →
 `.claude/settings.json`.
 
 Next build items: FND-2 part 2 (auth screens + supabase-js), FND-3 (SQLite + sync — the device
