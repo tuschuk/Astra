@@ -3,6 +3,10 @@
     "n8n": {
       "command": "node",
       "args": ["c:/Users/trist/Astra/Astra/automation/scripts/n8n-mcp.mjs"]
+    },
+    "supabase": {
+      "command": "node",
+      "args": ["c:/Users/trist/Astra/Astra/automation/scripts/supabase-mcp.mjs"]
     }
   }
 }

@@ -2,39 +2,56 @@
 
 _Overwritten at the end of every session with where things stand now. Not a log._
 
-## Where things stand (Nov 14, 2026 — UI foundation session)
+## Where things stand (Nov 14, 2026 — Supabase schema session)
 
-**The app now exists, in a monorepo.** The Expo app lives in `frontend/` (run app commands from
-there), Supabase will live in `backend/` (README maps the FND-2 structure). The `ui-ux-pro-max`
-skill is installed user-level (`~/.claude/skills/ui-ux-pro-max`) and was run against the tabs —
-findings and the carry-forward checklist are in `docs/ui_ux_audit.md`; its palette suggestion was
-rejected (brand is locked by `docs/styling_guide.md`), its UX fixes were applied (platform-aware
-48dp Android touch targets, pressed feedback everywhere, decorative icons hidden from screen
-readers, Workout CTAs honestly disabled until LOG-1).
+**FND-2 is underway.** Tristen created the Supabase project
+(`qczhvuzdxpmfztxrifyg.supabase.co`). Branch `supabase-schema` (based on `ui-foundation`, since
+`main` predates the monorepo split; plan: `docs/feature_plans/supabase-schema.md`) holds:
 
-Branch `ui-foundation` (plan: `docs/feature_plans/ui-foundation.md`,
-grilled + code-reviewed) holds the Expo SDK 58 / TypeScript scaffold with:
+- **Supabase MCP server** added to `.mcp.json` — launched via
+  `automation/scripts/supabase-mcp.mjs`, which loads `SUPABASE_ACCESS_TOKEN` from the gitignored
+  root `.env` (same pattern as the n8n server), so no secret is committed. Tristen pasted the
+  token; the MCP tools appear after the next Claude Code restart (servers load at session start).
+- **`backend/supabase/`** stood up via `supabase init` (config.toml), plus the first two
+  migrations, heavily commented:
+  - `20261114100000_identity.sql` — profiles (public, auto-created by an `auth.users` signup
+    trigger), `user_body_data` (sex/birthdate/bodyweight_kg — owner-only RLS, no public access at
+    all), `user_settings` (kg/lb unit, default workout visibility), `blocks` (insert trigger
+    severs follows both ways), `follows` (one-way; insert blocked when a block exists, via a
+    `security definer` helper since plain RLS would hide the other side's block row).
+  - `20261114100100_training.sql` — `exercises` (shared library rows have `owner_id null` +
+    private customs), `workouts` / `workout_exercises` / `sets` with **client-generated UUID PKs**
+    (offline-first: sync is an idempotent upsert, FND-3's schema half). Visibility
+    (public/followers/private + block checks) lives in one place — `private.workout_visible` —
+    and child tables delegate to it. Weights stored in kg only.
+- `docs/BUILD_LIST.md`: FND-2 → In progress.
 
-- `src/theme/` — single-home design tokens from `docs/styling_guide.md` (colors, 3-font type
-  system, spacing, radii, glows, motion). No color/font literal exists outside this module.
-- `src/components/` — `AppBackground` (maroon gradient + red SVG grid), `Screen` wrapper,
-  `AstraTabBar` (custom six-tab bar on headless `expo-router/ui`; raised red center Workout
-  action), and `ui/` primitives (Heading/SectionLabel/Body, Button ×3 variants, Card, EmptyState).
-- `src/app/(tabs)/` — six designed placeholder screens: Home, Marketplace, Workout, Communities,
-  Library, You.
-- Verified: `tsc` clean, 22/22 Jest tests (jest-expo + RNTL), `expo lint` clean, `expo export`
-  builds for both ios and android. **Not verified: a run on a real device/simulator** — FND-1 and
-  FND-4 sit at `Built`, and flip to `Done` after Tristen runs it on both platforms (`npx expo start`).
+**Verified — the schema is live and proven.** Once the token landed, all three migrations
+(a third, `20261114110000_fix_exercise_delete.sql`, see below) were applied to the remote project
+via the Management API, with CLI-compatible history rows in `supabase_migrations.schema_migrations`
+so `db push`/MCP see them as applied. A 30-assertion RLS probe with two throwaway users passed
+30/30: signup trigger rows, body-data invisible to others, private/followers/public workout
+visibility down to sets, write ownership, blocking (auto-unfollow, hides even public workouts,
+re-follow refused, invisible to the blocked), anonymous access, account-deletion cascade. Probe
+users were deleted; the project is clean. Desk-review earlier caught three bugs pre-apply
+(policy ordering, RLS-blind block check, signup-breaking display-name overflow); the live probe
+caught a fourth — account deletion failed on `workout_exercises.exercise_id` (no ON DELETE
+action, breaking NFR-6), fixed in the third migration as nullable + `on delete set null`.
 
-Notable: SDK 58 dropped `@react-navigation/bottom-tabs` from expo-router and doesn't bundle
-`@expo/vector-icons`; the tab bar uses the headless `expo-router/ui` kit. Unused template deps
-(react-native-web, reanimated, gesture-handler, …) were pruned per the no-speculation rule.
+**Process note:** `mattpocock-skills:grilling` and `mattpocock-skills:code-review` (CLAUDE.md
+workflow steps 3 and 6) are not installed in this environment — both were done as careful
+self-passes, flagged in the plan file. Install the skills if you want future sessions to use them.
 
-**For Tristen:** review + merge `ui-foundation` (Gate 2 style), run the app on a device. The
-"UI/UX max pro" skill wasn't installed on this machine — screens were designed from
-`docs/styling_guide.md` + Anthropic's frontend-design guidance; install `ui-ux-pro-max` if you
-want future sessions to audit against it. Also still open from the pipeline session: copy
-`automation/claude-settings.example.json` → `.claude/settings.json`; n8n API key is live in `.env`.
+**Heads-up:** while this session worked, uncommitted LIB-7 files appeared in the shared working
+tree (`docs/feature_plans/launch-library-seed.md`, `frontend/src/library/*`, a `library.tsx`
+edit) — apparently a concurrent session. They were deliberately left out of this session's commit;
+that session should commit them on its own branch. Two sessions sharing one working tree is how
+work gets tangled — avoid running them concurrently (or use git worktrees).
 
-Next build items: FND-2 (Supabase project + auth) or LOG-1/LOG-2 (logger core) — the tab shells
-are ready to receive them.
+**For Tristen:** (1) set `SUPABASE_ACCESS_TOKEN` as above; (2) review + merge `ui-foundation`
+first, then `supabase-schema` on top of it; (3) still open from earlier sessions: run the app on a
+device (flips FND-1/FND-4 to Done), copy `automation/claude-settings.example.json` →
+`.claude/settings.json`.
+
+Next build items after migrations apply: FND-2 part 2 (auth screens + supabase-js in
+`frontend/`), then FND-3 (SQLite + sync) or LOG-1/LOG-2 — the schema is shaped for them.
