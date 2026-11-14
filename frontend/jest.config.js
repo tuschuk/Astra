@@ -28,6 +28,13 @@ module.exports = {
   moduleNameMapper: {
     '^@training-math$': path.join(TRAINING_MATH, 'index.ts'),
   },
+  // Babel injects `@babel/runtime/helpers/*` imports into transformed files. For the
+  // training-math files, Jest's resolver walks up from backend/ and never reaches
+  // frontend/node_modules, so the suites fail with "Cannot find module
+  // '@babel/runtime/helpers/interopRequireDefault'" on a cold transform cache. Naming
+  // this project's node_modules as a module directory fixes resolution for files
+  // outside the project root without affecting anything inside it.
+  moduleDirectories: ['node_modules', path.join(__dirname, 'node_modules')],
   // Native-module mocks (AsyncStorage) — see jest.setup.js.
   setupFiles: ['<rootDir>/jest.setup.js'],
 };

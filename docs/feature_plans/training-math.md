@@ -247,6 +247,16 @@ plan specifies; the first two refine it where the plan was silent.
 - **Lint:** `expo lint` cannot reach `backend/…/_shared/` (outside ESLint's base path); linted by
   hand from the repo root, clean. Proper wiring deferred to B18 (`docs/DEFERRED.md`).
 
+## Gate 2 fix (session spot-check, Nov 14, 2026)
+
+An independent `npx jest` after the builder finished failed two suites (`plates.test.ts` and the
+alias smoke test) with `Cannot find module '@babel/runtime/helpers/interopRequireDefault'`: Babel
+injects that helper import into the transformed module files, and Jest's resolver walks up from
+`backend/` and never reaches `frontend/node_modules`. The builder's run passed on a warm transform
+cache. Fix: `moduleDirectories: ['node_modules', <frontend>/node_modules]` in
+`frontend/jest.config.js`, so files outside the project root resolve the app's packages. Verified
+on a cleared cache and twice warm: 23 suites / 193 tests.
+
 ## Code review (B06 build run)
 
 `mattpocock-skills:code-review` ran both axes on the working tree against `2e4bb65`.
