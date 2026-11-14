@@ -5,7 +5,9 @@ Every buildable feature from `Astra-PRD.pdf` (Draft v1.1), with current status a
 **Statuses:** `Not started` → `In progress` → `Built` (code complete) → `Done` (definition of done verified).
 **Phases:** P0 = Phase 1 (log and share), P1 = Phase 2 (programs and groups), P2 = Phase 3 (gyms and recovery). All ship in the first release; the phase sets build order only.
 
-As of Nov 14, 2026 the repository is empty — every item is `Not started`.
+As of Nov 14, 2026 the app foundation exists (`ui-foundation` branch): Expo SDK 58 scaffold, theme
+module from `docs/styling_guide.md`, six-tab custom navigation, and designed placeholder screens.
+Everything else is `Not started`.
 
 ## Foundation (prerequisites, derived from the PRD's Technology section)
 
@@ -13,10 +15,10 @@ These aren't numbered PRD requirements, but nothing below ships without them.
 
 | ID | Feature | Phase | Status | Definition of done |
 |---|---|---|---|---|
-| FND-1 | Expo/React Native app scaffold (TypeScript) | P0 | Not started | One codebase builds and runs on an iOS and an Android device/simulator |
+| FND-1 | Expo/React Native app scaffold (TypeScript) | P0 | Built | One codebase builds and runs on an iOS and an Android device/simulator |
 | FND-2 | Supabase project: Postgres schema, auth, storage, RLS baseline | P0 | Not started | A user can create an account, sign in on both platforms, and rows are protected by row-level security |
 | FND-3 | On-device SQLite store with server sync | P0 | Not started | A workout logged in airplane mode appears on the server after reconnecting, with no data loss or duplicates |
-| FND-4 | Six-tab navigation (Home, Marketplace, Workout, Communities, Library, You) with a custom bar or merge for iOS | P0 | Not started | All six destinations are reachable on both platforms without an iOS "More" overflow |
+| FND-4 | Navigation: five-tab bottom bar (Home, Marketplace, Workout center, Communities, Library) + persistent top-right You/profile button (founder revision Nov 14, 2026, from the PRD's six tabs) | P0 | Built | All six destinations are reachable on both platforms without an iOS "More" overflow |
 
 ## Workout logging (LOG)
 
