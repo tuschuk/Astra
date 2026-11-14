@@ -1,0 +1,164 @@
+# Astra database — entity relationship diagram
+
+The living picture of the Supabase (Postgres) schema. Every commit that adds or changes a
+migration updates this file in the same commit, so it always matches `backend/supabase/migrations/`.
+Read it top to bottom: the diagram shows the tables and how they connect; the notes below it cover
+the rules a diagram cannot draw (who can see what, what happens automatically, what cascades).
+
+Source migrations: `20261114100000_identity.sql`, `20261114100100_training.sql`,
+`20261114110000_fix_exercise_delete.sql`.
+
+```mermaid
+erDiagram
+  auth_users ||--|| profiles : "signup trigger creates"
+  profiles ||--|| user_settings : "has (created at signup)"
+  profiles ||--|| user_body_data : "has (created at signup)"
+  profiles ||--o{ follows : "follower_id"
+  profiles ||--o{ follows : "followee_id"
+  profiles ||--o{ blocks : "blocker_id"
+  profiles ||--o{ blocks : "blocked_id"
+  profiles |o--o{ exercises : "owner_id (null = launch library)"
+  profiles ||--o{ workouts : "user_id logs"
+  workouts ||--o{ workout_exercises : "contains, in position order"
+  exercises |o--o{ workout_exercises : "exercise_id (null if exercise deleted)"
+  workout_exercises ||--o{ sets : "contains, in position order"
+
+  auth_users {
+    uuid id PK "managed by Supabase Auth"
+    text email
+  }
+
+  profiles {
+    uuid id PK, FK "same id as auth.users"
+    citext username UK "3-30 chars, letters digits underscore; null until onboarding"
+    text display_name "max 50; seeded from the email's local part"
+    text bio "max 300"
+    text avatar_url
+    timestamptz created_at
+    timestamptz updated_at "trigger-maintained"
+  }
+
+  user_settings {
+    uuid user_id PK, FK
+    text unit "kg or lb; default lb"
+    workout_visibility default_workout_visibility "default public"
+    timestamptz updated_at
+  }
+
+  user_body_data {
+    uuid user_id PK, FK
+    text sex "male or female"
+    date birthdate
+    numeric bodyweight_kg "positive"
+    timestamptz updated_at
+  }
+
+  follows {
+    uuid follower_id PK, FK
+    uuid followee_id PK, FK "cannot equal follower_id"
+    timestamptz created_at
+  }
+
+  blocks {
+    uuid blocker_id PK, FK
+    uuid blocked_id PK, FK "cannot equal blocker_id"
+    timestamptz created_at
+  }
+
+  exercises {
+    uuid id PK "server-generated"
+    uuid owner_id FK "null means shared launch-library exercise"
+    text name "1-80 chars"
+    text primary_muscle
+    text equipment
+    timestamptz created_at
+    timestamptz updated_at
+  }
+
+  workouts {
+    uuid id PK "client-generated (offline-first)"
+    uuid user_id FK
+    text title "max 100"
+    text notes "max 2000"
+    timestamptz started_at
+    timestamptz ended_at "null while in progress; never before started_at"
+    workout_visibility visibility "public, followers or private"
+    timestamptz created_at
+    timestamptz updated_at
+  }
+
+  workout_exercises {
+    uuid id PK "client-generated"
+    uuid workout_id FK
+    uuid exercise_id FK "set null when the exercise is deleted"
+    smallint position "0-based display order; not unique so offline reorders sync row by row"
+    text notes "max 1000"
+    smallint superset_group "same number = performed as a superset"
+    timestamptz created_at
+    timestamptz updated_at
+  }
+
+  sets {
+    uuid id PK "client-generated"
+    uuid workout_exercise_id FK
+    smallint position "0-based order within the exercise"
+    integer reps "0 or more"
+    numeric weight_kg "0 or more; stored in kg, displayed per user unit"
+    numeric rpe "1 to 10"
+    boolean is_warmup "default false"
+    smallint drop_set_position "1-based; null when not part of a drop set"
+    integer duration_seconds "for timed work"
+    timestamptz created_at
+    timestamptz updated_at
+  }
+```
+
+## Enums
+
+- `workout_visibility`: `public` (any signed-in user), `followers` (people who follow the owner),
+  `private` (owner only). Used by `workouts.visibility` and as the per-user default in
+  `user_settings`.
+
+## What happens automatically (triggers)
+
+- **Signup creates the identity rows.** Inserting into `auth.users` fires `handle_new_user`, which
+  inserts a `profiles` row (display name taken from the email, before the `@`), an empty
+  `user_settings` row and an empty `user_body_data` row in the same transaction. An account can
+  never exist without its profile.
+- **Blocking severs follows.** Inserting a `blocks` row fires `handle_new_block`, which deletes any
+  `follows` row between the two people in either direction.
+- **`updated_at` is maintained** by a trigger on every table that has the column.
+
+## Who can see and change what (row-level security)
+
+All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
+
+| Table | Read | Write |
+| --- | --- | --- |
+| `profiles` | any signed-in user | only your own row (update) |
+| `user_settings`, `user_body_data` | only your own row | only your own row |
+| `follows` | rows you are part of | follow as yourself; remove follows you are part of |
+| `blocks` | only rows where you are the blocker | manage your own block list |
+| `exercises` | launch library (`owner_id` null) plus your own | create, update, delete only your own |
+| `workouts` | per the visibility rule below | insert, update, delete only your own |
+| `workout_exercises`, `sets` | visible when their workout is | only the workout's owner |
+
+**Workout visibility rule** (`private.workout_visible`): you always see your own; a block in either
+direction hides everything; otherwise `public` is open to any signed-in user, `followers` requires
+that you follow the owner, `private` is owner-only. Child tables ask the same question through the
+workout they belong to. These checks run as `security definer` helpers in the `private` schema so
+they can see rows the caller's own RLS would hide.
+
+## Deletion behaviour
+
+- Deleting an auth user cascades through `profiles` to settings, body data, follows, blocks, owned
+  exercises, workouts, their entries and sets.
+- Deleting a workout cascades to its `workout_exercises` and their `sets`.
+- Deleting an exercise keeps the history: `workout_exercises.exercise_id` becomes null rather than
+  deleting the logged work.
+
+## Why client-generated primary keys
+
+`workouts`, `workout_exercises` and `sets` get their UUIDs on the device, so a workout logged with
+no signal is complete and internally linked before it ever reaches the server. Sync then inserts
+the rows as they are, with no id remapping.

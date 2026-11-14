@@ -4,6 +4,14 @@ _Overwritten at the end of every session with where things stand now. Not a log.
 
 ## Where things stand (Nov 14, 2026 — two sessions landed: Supabase schema + launch library)
 
+**New standing rule (committed on `launch-library-seed` after the library work): living diagrams.**
+`docs/diagrams/database-erd.md` (full ERD, enums, triggers, RLS table, cascade rules) and
+`docs/diagrams/app-flow.md` (every screen, user action and data path, scaffolding marked) must be
+updated in the same commit as any migration, screen, module or data-path change — see the
+"Living diagrams" section in `CLAUDE.md`. Both are seeded from today's code and render cleanly
+with the Mermaid CLI (`mmdc`, installed globally on this machine; GitHub renders the fenced blocks
+without it).
+
 Two sessions ran concurrently in this working tree today and both finished. Branch stack (merge
 in this order): `ui-foundation` → `supabase-schema` → `launch-library-seed`. The FND-2 session
 committed while HEAD was on `launch-library-seed`, so that branch deliberately contains the
