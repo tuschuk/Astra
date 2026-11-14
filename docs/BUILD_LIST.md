@@ -16,7 +16,7 @@ These aren't numbered PRD requirements, but nothing below ships without them.
 | ID | Feature | Phase | Status | Definition of done |
 |---|---|---|---|---|
 | FND-1 | Expo/React Native app scaffold (TypeScript) | P0 | Built | One codebase builds and runs on an iOS and an Android device/simulator |
-| FND-2 | Supabase project: Postgres schema, auth, storage, RLS baseline | P0 | Not started | A user can create an account, sign in on both platforms, and rows are protected by row-level security |
+| FND-2 | Supabase project: Postgres schema, auth, storage, RLS baseline | P0 | In progress | A user can create an account, sign in on both platforms, and rows are protected by row-level security |
 | FND-3 | On-device SQLite store with server sync | P0 | Not started | A workout logged in airplane mode appears on the server after reconnecting, with no data loss or duplicates |
 | FND-4 | Navigation: five-tab bottom bar (Home, Marketplace, Workout center, Communities, Library) + persistent top-right You/profile button (founder revision Nov 14, 2026, from the PRD's six tabs) | P0 | Built | All six destinations are reachable on both platforms without an iOS "More" overflow |
 

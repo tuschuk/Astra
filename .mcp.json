@@ -3,6 +3,19 @@
     "n8n": {
       "command": "node",
       "args": ["c:/Users/trist/Astra/Astra/automation/scripts/n8n-mcp.mjs"]
+    },
+    "supabase": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@supabase/mcp-server-supabase@latest",
+        "--project-ref=qczhvuzdxpmfztxrifyg"
+      ],
+      "env": {
+        "SUPABASE_ACCESS_TOKEN": "${SUPABASE_ACCESS_TOKEN}"
+      }
     }
   }
 }
