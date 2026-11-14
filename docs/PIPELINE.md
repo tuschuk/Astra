@@ -35,7 +35,7 @@ tree clean again, and `next-item.mjs` enforces that before the next run can star
 | Prompts | `automation/prompts/planner.md`, `builder.md` | `{{ITEM_JSON}}` placeholder is replaced by the wrapper scripts |
 | Wrappers | `automation/scripts/run-planner.cmd`, `run-builder.cmd` | cd to the repo, inject the item into the prompt, call `claude -p` |
 | Item picker | `automation/scripts/pipeline.mjs` | `next` prints `{id, feature, phase, dod, branch}` as JSON; `prompt <role>` fills a template; `check` runs its self-tests |
-| n8n MCP server | `.mcp.json` (`n8n-mcp` via npx) | Lets Claude sessions inspect/modify the board; all its tools are allowlisted once Tristen installs the settings file (next row) |
+| n8n MCP server | `.mcp.json` → `automation/scripts/n8n-mcp.mjs` → `npx n8n-mcp`, API key from `.env` | Lets Claude sessions inspect/modify the board; all its tools are allowlisted once Tristen installs the settings file (next row) |
 | Permissions | `automation/claude-settings.example.json` → copy to `.claude/settings.json` | Tristen installs this by hand — Claude is intentionally barred from granting itself permissions |
 
 ## Headless run contract
@@ -71,8 +71,10 @@ claude -p <prompt> --output-format json --permission-mode acceptEdits
 1. Copy `automation/claude-settings.example.json` to `.claude/settings.json` (grants the n8n MCP
    tools and lets headless runs use git/node/npm without stalling).
 2. `n8n start`, open http://localhost:5678, create the owner account.
-3. Settings → n8n API → create an API key; paste it into `.mcp.json` as `N8N_API_KEY`. Until then
-   the MCP server runs docs-only (node documentation works; live board management doesn't).
+3. Settings → n8n API → create an API key; put it in the repo's `.env` as `N8N_API_KEY=<key>`
+   (gitignored; `automation/scripts/n8n-mcp.mjs` loads it when Claude starts the MCP server).
+   Until then the MCP server runs docs-only (node documentation works; live board management
+   doesn't).
 4. Import the board if not already imported (command in the table above), open it, and activate it.
 5. Run it once on FND-1 with eyes on it before trusting it further.
 

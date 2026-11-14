@@ -1,15 +1,8 @@
 {
   "mcpServers": {
     "n8n": {
-      "command": "npx",
-      "args": ["-y", "n8n-mcp"],
-      "env": {
-        "MCP_MODE": "stdio",
-        "LOG_LEVEL": "error",
-        "DISABLE_CONSOLE_OUTPUT": "true",
-        "N8N_API_URL": "http://localhost:5678",
-        "N8N_API_KEY": "REPLACE_WITH_KEY_FROM_N8N_UI_SETTINGS_API"
-      }
+      "command": "node",
+      "args": ["c:/Users/trist/Astra/Astra/automation/scripts/n8n-mcp.mjs"]
     }
   }
 }

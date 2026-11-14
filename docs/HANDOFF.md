@@ -28,7 +28,9 @@ Built and verified:
 Blocked on Tristen:
 1. Copy `automation/claude-settings.example.json` → `.claude/settings.json` (grants n8n MCP tools
    and git/node to headless runs).
-2. One-time n8n setup: `n8n start` → owner account → API key into `.mcp.json` → activate the board
-   (the n8n MCP server timed out this session — likely n8n isn't running).
+2. ~~One-time n8n setup~~ DONE (Nov 14): owner account created, API key in the repo `.env`, key
+   verified live against the API (HTTP 200, "Astra Build Pipeline" id gvu4dg0NPtND4tGG listed).
+   The MCP server starts via `automation/scripts/n8n-mcp.mjs`, which loads `.env`; it goes live
+   (not docs-only) in the next Claude session.
 
 Next after that: trigger the board once on FND-1 with eyes on it.

@@ -1,0 +1,17 @@
+{
+  "_comment": "Installed from automation/claude-settings.example.json at Tristen's explicit request (Nov 14, 2026). 'mcp__n8n' allows every tool of the n8n MCP server; the Bash/PowerShell entries let headless planner/builder runs use git, node, npm and npx without stalling on prompts. Edit the example file and re-copy to change grants.",
+  "enableAllProjectMcpServers": true,
+  "permissions": {
+    "allow": [
+      "mcp__n8n",
+      "Bash(node:*)",
+      "Bash(npx:*)",
+      "Bash(npm:*)",
+      "Bash(git:*)",
+      "PowerShell(node:*)",
+      "PowerShell(npx:*)",
+      "PowerShell(npm:*)",
+      "PowerShell(git:*)"
+    ]
+  }
+}
