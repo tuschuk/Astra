@@ -109,6 +109,21 @@ No Jest surface: this branch is SQL DDL + config. Real verification = applying m
 project and probing RLS, which needs the token. Documented as the first follow-up. (When server
 functions land, their tests use fakes per CLAUDE.md.)
 
+## Verification (done Nov 14, 2026 — deviation from "next session")
+
+Tristen pasted the access token mid-session, so verification happened immediately via the
+Management API instead of waiting for the MCP: both migrations applied, then a 30-assertion live
+RLS probe with two throwaway users (signup trigger, body-data privacy, profile/settings ownership,
+custom-exercise privacy, private → followers → public workout visibility incl. sets, write
+ownership, blocking semantics incl. auto-unfollow and re-follow refusal, anonymous access,
+account-deletion cascade). **30/30 passed**; probe users deleted afterwards, project left clean.
+
+The probe caught one real bug, fixed as migration `20261114110000_fix_exercise_delete.sql`:
+`workout_exercises.exercise_id` had no ON DELETE action, so deleting an account whose custom
+exercise appeared in a workout failed on the FK (breaks NFR-6 account deletion). Now nullable +
+`on delete set null` — history survives, the entry just loses its exercise link (name snapshot
+idea noted in DEFERRED).
+
 ## Grilling notes (self-grill — `mattpocock-skills:grilling` is not installed in this session; flagged to Tristen)
 
 - **"Why not the whole data-model sketch now?"** — Because empty social/geo tables would sit

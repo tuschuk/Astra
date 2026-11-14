@@ -10,10 +10,8 @@ _Overwritten at the end of every session with where things stand now. Not a log.
 
 - **Supabase MCP server** added to `.mcp.json` — launched via
   `automation/scripts/supabase-mcp.mjs`, which loads `SUPABASE_ACCESS_TOKEN` from the gitignored
-  root `.env` (same pattern as the n8n server), so no secret is committed. **Blocked on Tristen:**
-  create a token (Supabase dashboard → Account → Access Tokens), paste it on the
-  `SUPABASE_ACCESS_TOKEN=` line already waiting in `.env`, then restart Claude Code — MCP servers
-  only load at session start, so this session never had the tools.
+  root `.env` (same pattern as the n8n server), so no secret is committed. Tristen pasted the
+  token; the MCP tools appear after the next Claude Code restart (servers load at session start).
 - **`backend/supabase/`** stood up via `supabase init` (config.toml), plus the first two
   migrations, heavily commented:
   - `20261114100000_identity.sql` — profiles (public, auto-created by an `auth.users` signup
@@ -28,12 +26,17 @@ _Overwritten at the end of every session with where things stand now. Not a log.
     and child tables delegate to it. Weights stored in kg only.
 - `docs/BUILD_LIST.md`: FND-2 → In progress.
 
-**Verified:** nothing executed — no Docker/psql on this machine and no access token, so the SQL
-has only been desk-checked (a self-review caught and fixed three real bugs: policy referencing a
-not-yet-created table, an RLS-blind block check, a signup-breaking display-name overflow).
-**First task next session:** with the MCP connected, apply both migrations and probe RLS with two
-test users (can A read B's private workout / body data?). Until that passes, treat the schema as
-unproven.
+**Verified — the schema is live and proven.** Once the token landed, all three migrations
+(a third, `20261114110000_fix_exercise_delete.sql`, see below) were applied to the remote project
+via the Management API, with CLI-compatible history rows in `supabase_migrations.schema_migrations`
+so `db push`/MCP see them as applied. A 30-assertion RLS probe with two throwaway users passed
+30/30: signup trigger rows, body-data invisible to others, private/followers/public workout
+visibility down to sets, write ownership, blocking (auto-unfollow, hides even public workouts,
+re-follow refused, invisible to the blocked), anonymous access, account-deletion cascade. Probe
+users were deleted; the project is clean. Desk-review earlier caught three bugs pre-apply
+(policy ordering, RLS-blind block check, signup-breaking display-name overflow); the live probe
+caught a fourth — account deletion failed on `workout_exercises.exercise_id` (no ON DELETE
+action, breaking NFR-6), fixed in the third migration as nullable + `on delete set null`.
 
 **Process note:** `mattpocock-skills:grilling` and `mattpocock-skills:code-review` (CLAUDE.md
 workflow steps 3 and 6) are not installed in this environment — both were done as careful
