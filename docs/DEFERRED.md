@@ -38,17 +38,21 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   (Telegram/email), auto-updating build-list status at merge (now cheap: at Gate 2 the step row's
   Status and each covered feature's Status could be flipped by `pipeline.mjs` from the merge
   commit). Earn each with a few clean v1 runs.
+- Pipeline permissions: decide whether headless **builder** runs may use the Supabase MCP (add
+  `mcp__supabase` to `automation/claude-settings.example.json`, then re-copy to
+  `.claude/settings.json`). Without it the B05 builder committed its migration but could not apply
+  or probe it, pushing that work to Gate 2. Trade-off: a headless run altering the live project
+  versus Tristen applying every migration by hand. Also decide whether to grant `mmdc` (the
+  builder could not render the diagrams to check them).
 - n8n MCP server (`automation/scripts/n8n-mcp.mjs` → `npx n8n-mcp`) rejects `http://localhost:5678`
   with "SSRF protection: Localhost access is blocked in strict mode". Fix confirmed in n8n-mcp's
   source (`dist/utils/ssrf-protection.js`): it reads `WEBHOOK_SECURITY_MODE`; `moderate` allows
   loopback while still blocking cloud-metadata and LAN ranges (`127.0.0.1` is blocked too, so
-  changing the URL alone does not help). **Tristen applies it** — add
-  `WEBHOOK_SECURITY_MODE: 'moderate',` under `N8N_API_URL` in the launcher's env block (or
-  `WEBHOOK_SECURITY_MODE=moderate` in `.env`) and restart Claude Code. The Nov 14 session's attempt
-  to make that edit was declined by Claude Code's permission classifier (loosening a security
-  mode), so it stays a human change. Until then, live-board work goes through n8n's REST API with
-  the `.env` key (see `docs/PIPELINE.md`, "The board" row), which is what updated the board on
-  Nov 14, 2026.
+  changing the URL alone does not help). **Applied Nov 14, 2026 at Tristen's explicit request**
+  (`WEBHOOK_SECURITY_MODE: 'moderate'` in the launcher's env block). It takes effect the next time
+  Claude Code starts, since MCP servers only launch at session start — confirm with the n8n
+  health-check tool in a fresh session, then delete this item. If it still fails, live-board work
+  goes through n8n's REST API with the `.env` key (see `docs/PIPELINE.md`, "The board" row).
 - Max Method data deliberately NOT imported with the launch library (`launch-library-seed`),
   re-import when a consumer exists:
   - Cardio-machine selector metadata (`MaxMethodBackendStructure/.../src/utils/cardioMachineMetadata.js`:

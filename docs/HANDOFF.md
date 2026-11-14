@@ -2,50 +2,65 @@
 
 _Overwritten at the end of every session with where things stand now. Not a log._
 
-## Where things stand (Nov 14, 2026, pipeline builder run for B05)
+## Where things stand (Nov 14, 2026 — first full pipeline run, B05)
 
-**B05 auth-and-signup is built on branch `auth-and-signup` and waiting at Gate 2.** Nothing is
-merged. `main` is untouched and no BUILD_LIST status was changed.
+**The n8n pipeline completed its first step end to end.** B05 auth-and-signup was planned by
+Fable (7 min, 33 turns, about $5.32), approved at Gate 1, and built by Opus (30 min, 195 turns,
+about $6.78). The build is commit `6ddf543 Build B05: auth and signup` on branch
+`auth-and-signup`, pushed to origin, **not merged** — it waits at Gate 2. `main` holds only
+pipeline tooling and docs since the last merge; no BUILD_LIST status changed.
 
-What landed (the full list is in the commit; deviations are in `docs/feature_plans/auth-and-signup.md`,
-under "Build deviations"):
+This branch also carries a merge of `main` (so Gate 2's `git merge --no-ff auth-and-signup` is
+conflict-free). The app diff is exactly the builder's commit.
 
-- A supabase-js client (`frontend/src/lib/supabase.ts`). The session is saved in AsyncStorage and
-  tokens refresh only while the app is in the foreground.
-- `AuthProvider` / `useAuth` (`frontend/src/auth/`), which handles restore, sign in, sign up and
-  sign out.
-- An 18+ age gate (`auth/age.ts`) that matches Postgres's `current_date - interval '18 years'`
-  boundary, including Feb 29.
-- `(auth)` sign-in / sign-up screens behind `Stack.Protected`. The splash stays up until the
-  session restore finishes.
-- A Sign out button on You.
-- The migration `20261114130000_signup_birthdate_gate.sql`, which makes the signup trigger refuse
-  a missing or under-18 birthdate and stamp `user_body_data.birthdate`.
-- Both diagrams updated.
+**What the build contains** (deviations are recorded under "Build deviations" in
+`docs/feature_plans/auth-and-signup.md`): supabase-js client with an AsyncStorage-persisted
+session (`frontend/src/lib/supabase.ts`); `AuthProvider` / `useAuth` with offline-safe restore,
+sign in, sign up, local-scope sign out; an 18+ gate (`frontend/src/auth/age.ts`) matching the
+Postgres cutoff including Feb 29; `(auth)` sign-in / sign-up screens behind `Stack.Protected`
+with a root error boundary so a missing env var can never strand the splash; a Sign out button on
+You; migration `backend/supabase/migrations/20261114130000_signup_birthdate_gate.sql` making the
+signup trigger refuse missing or under-18 birthdates and stamp `user_body_data.birthdate`; both
+living diagrams updated.
 
-Verified: `npx jest` (15 suites, 126 tests), `npx tsc --noEmit` and `npm run lint` all clean in
-`frontend/`.
+**Verified independently after the builder finished** (in `frontend/`): `npx jest` 15 suites /
+126 tests pass, `npm run lint` clean, `npx tsc --noEmit` clean. Two-axis code review ran inside
+the builder; its fixes are listed in the plan file.
 
-**Not done, because the builder run could not use the Supabase MCP (permission declined). Tristen
-does these at Gate 2:**
+**Not verified:** the migration has never run against Postgres (the builder could not use the
+Supabase MCP — not in the headless allowlist); nothing ran on a device; the project's auth
+settings (email confirmation, password minimum) are unread; `frontend/.env` does not exist.
 
-1. **Apply the migration live.** Run Supabase MCP `apply_migration` with the contents of
-   `backend/supabase/migrations/20261114130000_signup_birthdate_gate.sql`, or paste it into the
-   SQL editor.
-2. **Probe it.** First, a raw `signUp` with `options.data.birthdate` under 18 must fail and leave
-   no `auth.users` row. Second, an 18+ signup must create `profiles`, `user_settings` and
-   `user_body_data` rows, with birthdate set on the body-data row.
-3. **Create `frontend/.env`** from `frontend/.env.example`: the project URL plus the publishable
-   key.
-4. **Check Auth → Providers → Email.** Confirmation should be off per the plan, so that "sign up,
-   then signed in" holds. Check the password minimum too: if it isn't 6, change
+**Gate 2 — what Tristen does now:**
+
+1. **Review the branch** (`git diff main..auth-and-signup`, or the GitHub compare link).
+2. **Apply the migration live** (Supabase MCP `apply_migration` with the file's contents, or the
+   SQL editor), then **probe it**: a raw `signUp` with `options.data.birthdate` under 18 must fail
+   and leave no `auth.users` row; an 18+ signup must create `profiles`, `user_settings` and
+   `user_body_data` with the birthdate set.
+3. **Create `frontend/.env`** from `frontend/.env.example` (project URL + publishable key).
+4. **Auth settings:** confirmation off per the plan; if the password minimum isn't 6, change
    `frontend/src/auth/password.ts`.
-5. **Device check on iOS and Android.** Run `npx expo start` from `frontend/`; it also regenerates
-   the gitignored typed routes. Then: sign up under 18 and see it refused, sign up 18+, kill the
-   app, reopen still signed in, sign out, sign in.
-6. Then merge `auth-and-signup` with `--no-ff` and flip B05, FND-2 and NFR-8 in `docs/BUILD_LIST.md`.
+5. **Device check** (`cd frontend && npx expo start`): sign up under 18 → refused; sign up 18+;
+   kill the app; reopen still signed in; sign out; sign in. This also covers FND-1 / FND-4's
+   pending device run.
+6. **Merge** `auth-and-signup` with `--no-ff`; in `docs/BUILD_LIST.md` flip B05 to Built and
+   update FND-2 / NFR-8 as their definitions of done become true.
+7. **Start B06 training-math:** `curl.exe -X POST http://localhost:5678/webhook/astra-build-pipeline`
+   (confirm first with `node automation/scripts/pipeline.mjs next --dry-run`). Gate 1 approval is a
+   GET on `http://localhost:5678/webhook-waiting/<execution id>`.
 
-Still outstanding from before: the n8n-mcp `WEBHOOK_SECURITY_MODE=moderate` one-liner (see
-DEFERRED), running the app on a device to flip FND-1 and FND-4, and the six external blockers.
+**Pipeline operations, learned this session** (all in `docs/PIPELINE.md`): n8n must start with
+`NODES_EXCLUDE=[]` or its Execute Command nodes are disabled; it is running detached now and must
+be restarted the same way after a reboot. The board (`gvu4dg0NPtND4tGG`) is Active with a POST
+webhook trigger beside the manual one. The `claude` CLI on PATH must support both models — it was
+2.1.220 and refused Opus 5.5, killing the first builder attempt; `claude update` → 2.1.325 fixed
+it, and the execution was resumed from the failed node with the API retry (execution 5, retryOf 4).
+The public API's list endpoint hides executions for this key; fetch by id. The n8n-mcp SSRF fix
+(`WEBHOOK_SECURITY_MODE=moderate`) is committed and takes effect on the next Claude Code start.
 
-The next pipeline step after B05 merges is **B06 training-math**.
+**Decisions queued in `docs/DEFERRED.md`:** whether headless builders may use the Supabase MCP and
+`mmdc`; B05 follow-ups (B02 RLS probe re-run with birthdate, auth-config read, password reset step,
+kv-store session swap at B07); the six external blockers.
+
+Next pipeline step after B05 merges: **B06 training-math**.
