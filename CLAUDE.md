@@ -75,6 +75,21 @@ the two runs; nothing else is. One step runs at a time, in table order, and neve
 `automation/` holds the pipeline's prompts, scripts and n8n board — local dev tooling, exempt from
 the app-stack rules, which govern the product only.
 
+## Autonomous sessions (Tristen's standing instructions, Nov 14, 2026)
+
+- **Don't stop.** Keep the Build order moving — step after step — until the context runs out or every
+  remaining step is Blocked. Never pause between steps to ask whether to continue.
+- **Both gates are the session's.** Gate 1: read the plan against the Rules above and the step's
+  scope, then approve (or fix/reject — never rubber-stamp). Gate 2: rerun tests/lint/tsc yourself,
+  skim the diff and the plan's deviations, apply and probe any migration live, merge `--no-ff`,
+  flip the step and its covered features to Built, fire the next step. Device verification
+  (Built → Done) stays Tristen's; so does anything the permission layer declines.
+- **Adjust the tooling as needed.** If an MCP server, its launcher, the n8n board or the pipeline
+  scripts stand in the way, change them and record the change in `docs/PIPELINE.md`.
+- **Spend no money.** No purchases, paid tiers, paid third-party services, or anything billed beyond
+  what Tristen already pays for. A step that needs one is marked Blocked with the reason, and the
+  pipeline moves on.
+
 ## Every session
 
 1. **Start:** read `docs/HANDOFF.md` and `docs/DEFERRED.md`.
