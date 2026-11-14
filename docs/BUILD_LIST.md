@@ -88,7 +88,7 @@ Opens from the active workout in one tap and closes without losing the user's pl
 | LIB-4 | User's PRs and full history on the card | P0 | Not started | A card shows that user's complete logged history and current PRs for the movement |
 | LIB-5 | Custom exercises become private cards with the same data | P0 | Not started | A user-created exercise gets a card, collects history/PRs, and is invisible to other users |
 | LIB-6 | Strength-level grade against published standards | P1 | Not started | Cards grade the user's 1RM against Strength Level standards using sex, bodyweight and age — blocked on the data licence |
-| LIB-7 | Launch library imported from the founder's library (~100 exercises, cues included) | P0 | Built (videos pending) | The founder's library is imported as seed data with videos and cues attached — 151 exercises with cues imported to `frontend/src/library/` (`launch-library-seed`); videos wait on the video-service choice (LIB-2) |
+| LIB-7 | Launch library imported from the founder's library (~100 exercises, cues included) | P0 | Built (videos pending) | The founder's library is imported as seed data with videos and cues attached — 151 exercises with cues imported to `frontend/src/library/` (`launch-library-seed`) and seeded into the live `exercises` table with deterministic ids (`library-db-seed`); videos wait on the video-service choice (LIB-2) |
 
 ## Social feed (SOC)
 
