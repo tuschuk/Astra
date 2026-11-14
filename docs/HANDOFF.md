@@ -38,8 +38,11 @@ Verified this session: `tsc` clean, 47/47 Jest, `expo lint` clean. Not verified:
 Test gotcha: RNTL 14 — `await` every `fireEvent` call or state updates silently don't flush.
 
 **Process note (both sessions):** `mattpocock-skills:grilling` / `mattpocock-skills:code-review`
-aren't installed here; grilling was done as a self-pass and review via the built-in `code-review`
-skill (8 findings on the library work, all fixed). Install the skills for future sessions.
+weren't installed when these sessions ran; grilling was done as a self-pass and review via the
+built-in `code-review` skill (8 findings on the library work, all fixed). **Now resolved:** the
+`mattpocock-skills` plugin (v1.3.1, official marketplace, user scope) was installed at Tristen's
+request after the library session — future sessions get both skills and should use them per the
+CLAUDE.md workflow.
 
 **For Tristen:** (1) review + merge the three-branch stack in order, run the app on a device
 (flips FND-1/FND-4 to Done — and eyeball the new Library tab while there); (2) set
