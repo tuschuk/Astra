@@ -6,7 +6,8 @@ Read it top to bottom: the diagram shows the tables and how they connect; the no
 the rules a diagram cannot draw (who can see what, what happens automatically, what cascades).
 
 Source migrations: `20261114100000_identity.sql`, `20261114100100_training.sql`,
-`20261114110000_fix_exercise_delete.sql`.
+`20261114110000_fix_exercise_delete.sql`, `20261114120000_exercises_slug.sql`,
+`20261114120100_library_seed.sql` (generated — see below).
 
 ```mermaid
 erDiagram
@@ -66,11 +67,12 @@ erDiagram
   }
 
   exercises {
-    uuid id PK "server-generated"
+    uuid id PK "library: uuidv5(namespace, slug); customs: client-generated"
     uuid owner_id FK "null means shared launch-library exercise"
+    text slug UK "library rows only (unique among them); null on customs"
     text name "1-80 chars"
     text primary_muscle
-    text equipment
+    text equipment "free-text until LIB-5 settles the customs vocabulary"
     timestamptz created_at
     timestamptz updated_at
   }
@@ -112,6 +114,18 @@ erDiagram
     timestamptz updated_at
   }
 ```
+
+## The launch library inside `exercises`
+
+The 151 shared launch exercises are rows with `owner_id` null, seeded by the generated migration
+`20261114120100_library_seed.sql` — written by `automation/scripts/generate-library-seed.ts` from
+`frontend/src/library/catalog.ts`, the library's one home; never edited by hand. Identity contract:
+each library row's `id` is `uuidv5(LIBRARY_EXERCISE_NAMESPACE, slug)` (namespace constant exported
+by `catalog.ts`), so the phone derives the same id offline without a sync round-trip. A check
+constraint makes `slug` mandatory on library rows and forbidden on customs, and a partial unique
+index (`slug` where `owner_id is null`) makes re-seeding idempotent. Seeds only upsert: a slug
+leaving the catalog never deletes or re-identifies a row (renames are a deliberate content
+migration, because workout history references these ids).
 
 ## Enums
 

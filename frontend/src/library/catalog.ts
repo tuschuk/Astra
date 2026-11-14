@@ -86,6 +86,17 @@ export interface ExerciseDef {
   equipment: Equipment;
 }
 
+/**
+ * The UUID namespace of library-exercise identity — the contract that lets the
+ * app and the database each compute the SAME `exercises.id` for a library
+ * exercise without talking to each other: `uuidv5(this, slug)`. The seed
+ * generator (`automation/scripts/generate-library-seed.ts`) uses it to emit the
+ * ids the database stores; the logger will use it to reference library
+ * exercises while offline. Fixed forever — changing it would orphan every
+ * seeded row.
+ */
+export const LIBRARY_EXERCISE_NAMESPACE = '87cc00da-e1d2-497b-9d5b-7c0090f308be';
+
 /** Turn an exercise name into its stable slug id ('Bench Press' → 'bench_press'). */
 export function slugify(name: string): string {
   return name
