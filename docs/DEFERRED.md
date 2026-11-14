@@ -25,6 +25,12 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   (Telegram/email), auto-updating build-list status at merge (now cheap: at Gate 2 the step row's
   Status and each covered feature's Status could be flipped by `pipeline.mjs` from the merge
   commit). Earn each with a few clean v1 runs.
+- Pipeline permissions: decide whether headless **builder** runs may use the Supabase MCP (add
+  `mcp__supabase` to `automation/claude-settings.example.json`, then re-copy to
+  `.claude/settings.json`). Without it the B05 builder committed its migration but could not apply
+  or probe it, pushing that work to Gate 2. Trade-off: a headless run altering the live project
+  versus Tristen applying every migration by hand. Also decide whether to grant `mmdc` (the
+  builder could not render the diagrams to check them).
 - n8n MCP server (`automation/scripts/n8n-mcp.mjs` → `npx n8n-mcp`) rejects `http://localhost:5678`
   with "SSRF protection: Localhost access is blocked in strict mode". Fix confirmed in n8n-mcp's
   source (`dist/utils/ssrf-protection.js`): it reads `WEBHOOK_SECURITY_MODE`; `moderate` allows

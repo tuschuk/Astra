@@ -23,7 +23,10 @@ n8n trigger        (either the manual trigger in the n8n UI, or
   → planner run      (claude -p, model claude-fable-5 — branches, explores, plans, grills,
                       commits docs/feature_plans/<branch>.md on the branch)
   → GATE 1           (n8n Wait node pauses; Tristen reads the plan file, then opens the
-                      execution's resume URL to approve — or cancels the execution to reject)
+                      execution's resume URL to approve — or cancels the execution to reject.
+                      The resume URL is http://localhost:5678/webhook-waiting/<execution id> and
+                      takes a GET: open it in a browser or `curl.exe <url>`; a POST gets a 404
+                      "no waiting webhook with a matching path/method")
   → builder run      (claude -p, model claude-opus-5-5 — implements the plan file on the branch:
                       Code → Test → Review → Document → commit; retries once on failure)
   → summary          (branch name, builder report, cost of both runs)
@@ -65,12 +68,29 @@ claude -p <prompt> --output-format json --permission-mode acceptEdits
   models load automatically as project instructions).
 - A `session_id` from the planner is recorded in the summary so a failed builder can be diagnosed
   by resuming either session interactively (`claude --resume <id>`).
+- The `claude` on n8n's PATH must be new enough for both models. Claude Code refuses a model it
+  predates ("Claude Code 2.1.220 does not support this model; version 2.1.280 or newer is
+  required") and exits non-zero within seconds, which the n8n node reports only as "Command
+  failed". The first B05 builder died this way; `claude update` fixed it (2.1.325). Check
+  `claude --version` after any long gap between runs.
+- Headless runs can use only what `.claude/settings.json` allows. The Supabase MCP tools are not
+  in the allowlist, so a builder cannot apply its own migration or read the project's auth config;
+  it commits the migration file and leaves the live apply + probe to Gate 2 (B05 did exactly
+  this). Widening the allowlist to `mcp__supabase` is Tristen's decision, not the agent's.
 
 ## Failure handling (v1)
 
 - The builder n8n node retries once (`retryOnFail`). A second failure stops the execution with the
   run's JSON attached; nothing is rolled back — the branch holds whatever state the run reached, and
   Tristen (or an interactive session) takes it from there.
+- **Resuming a failed builder without re-running the planner:** fix the cause, then retry the
+  execution from its failed node — in the n8n UI (execution → Retry → "with original workflow"),
+  or over the API: `POST /api/v1/executions/<id>/retry` with body `{"loadWorkflow":false}` and
+  the `X-N8N-API-KEY` header. The call blocks until the retried execution finishes (a client
+  timeout is harmless); the new execution carries `retryOf: <id>` and continues through Summary.
+  This is the recovery path — re-firing the trigger would not work, because `next` refuses while
+  the step's branch exists. The public API's *list* endpoint returns no executions for this key;
+  fetch by id (`GET /api/v1/executions/<id>?includeData=true`) instead.
 - A planner that ends in error stops the execution before Gate 1; the branch (if created) is simply
   deleted or re-run. While that branch exists, `next` refuses to pick the same step again.
 - A step that is `Blocked` in the Build order (waits on a decision only Tristen can make) is
