@@ -18,6 +18,8 @@ Gyms with video-verified PR leaderboards. The source of truth is `Astra-PRD.pdf`
 - **Stack is fixed:** React Native with Expo, TypeScript everywhere (no `any` by default). SQLite on
   device, synced to Supabase (Postgres + PostGIS, auth, storage, realtime, server functions). No other
   backend, no microservices, no self-operated infrastructure. Mobile only — no web app.
+- **Monorepo layout:** the Expo app lives in `frontend/`, everything Supabase in `backend/`.
+  Run app commands (`npm test`, `npx expo …`) from `frontend/`.
 - **Offline-first:** logging and the Tool Kit must work with no signal and sync on reconnect. An
   in-progress workout survives the app dying.
 - **No AI in the product:** post-workout analysis is deterministic scripted rules in server functions.
@@ -94,8 +96,10 @@ to this rule, since the plan file was already the artifact of record.
 - Write Jest unit tests whenever a function has testable logic (data transformations, training math,
   PR detection, query building, sync logic, API responses, business rules).
 - App tests (Jest + React Native Testing Library) live alongside what they test:
-  `app/components/Thing.tsx` → `app/components/Thing.test.tsx`. Supabase server-function tests live in
-  a `tests/` folder beside the functions (`supabase/functions/tests/`).
+  `frontend/src/components/Thing.tsx` → `frontend/src/components/Thing.test.tsx` (route files in
+  `frontend/src/app/` are the exception — their tests live in `frontend/src/__tests__/`, since
+  expo-router would register `*.test.tsx` as routes). Supabase server-function tests live in a
+  `tests/` folder beside the functions (`backend/supabase/functions/tests/`).
 - A test file mirrors the module it tests.
 - Tests never touch the real Supabase project, real storage, or the real video service; use fakes and
   synthetic data.

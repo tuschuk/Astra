@@ -52,6 +52,20 @@ Source of truth: the Technology section of `Astra-PRD.pdf` (founder-confirmed No
                                           Expo push (APNs / FCM)
 ```
 
+## Repository layout (monorepo)
+
+```
+frontend/   — the Expo / React Native app (src/app routes, src/components, src/theme, tests)
+backend/    — everything Supabase: config, SQL migrations, server functions + their tests
+docs/       — specs, plans, styling guide, build list (this file)
+automation/ — n8n build-pipeline tooling (local dev only; exempt from app-stack rules)
+```
+
+One repo, two deployables: the app ships from `frontend/`, the Supabase project deploys from
+`backend/`. Shared docs and process live at the root. Training math stays one module imported by
+both sides (a mirrored copy is a bug — CLAUDE.md); where that shared module physically lives is
+decided when FND-2 lands and the first server function needs it.
+
 ## Data model sketch (launch scale, one Postgres database)
 
 - **Identity:** users (sex, bodyweight, age — needed for strength grades), follows (one-way), blocks/mutes, settings (units kg/lb, privacy, notifications).
