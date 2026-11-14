@@ -60,6 +60,24 @@ Auth, Supabase, SQLite/sync (FND-2/FND-3), any real data or persistence, the act
 animations beyond the guide's hover/press equivalents, app icon/splash artwork (default
 placeholders keep the dark bg color).
 
+## Implementation notes (what changed during the build)
+
+- **SDK 58 reality check:** `create-expo-app` now ships Expo SDK 58, whose router no longer
+  wraps `@react-navigation/bottom-tabs` and whose template uses `NativeTabs` (the native iOS bar —
+  the exact thing that overflows at six tabs). The custom bar is therefore built on the headless
+  `expo-router/ui` kit (`Tabs`/`TabSlot`/`TabList`/`TabTrigger asChild`), which injects press
+  handlers and `isFocused` into our own button component. `@expo/vector-icons` is no longer
+  bundled and was installed explicitly.
+- **Code-review findings fixed** (built-in `code-review` skill, this plan as spec): font-load
+  errors no longer strand the splash screen; the center Workout button sits fully inside the bar's
+  bounds (a negative-margin raise is untouchable on Android) and, per the grilling decision, has
+  no text label; the shared `Screen` scroll view passes taps through with the keyboard open;
+  unused template deps (react-native-web, react-dom, reanimated, gesture-handler, etc.) pruned;
+  the `reactCompiler` experiment removed; jest types imported per test file instead of globally;
+  hardcoded font sizes replaced with a new `type.cardTitle` token; chip radius corrected to 6px.
+- **Verified:** `tsc --noEmit` clean, 22/22 Jest tests, `expo lint` clean, `expo export` succeeds
+  for both android and ios; no color/rgba literal exists outside `src/theme`.
+
 ## Grilling decisions (settled before code)
 
 - **"UI/UX max pro" skill is not installed on this machine** — substituted Anthropic's

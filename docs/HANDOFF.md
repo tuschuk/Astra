@@ -2,35 +2,31 @@
 
 _Overwritten at the end of every session with where things stand now. Not a log._
 
-## Where things stand (Nov 14, 2026 — styling guide session)
+## Where things stand (Nov 14, 2026 — UI foundation session)
 
-New this session: `docs/styling_guide.md` — the full design system extracted from the Max Method
-app (colors, three-font typography, background texture recipe, component recipes, a11y rules,
-plus RN/Expo translation notes). It is the visual reference for all Astra UI work.
+**The app now exists.** Branch `ui-foundation` (plan: `docs/feature_plans/ui-foundation.md`,
+grilled + code-reviewed) holds the Expo SDK 58 / TypeScript scaffold with:
 
-The spec baseline was committed on main (e63b0bd), so the git blocker from the pipeline session
-is resolved. Still true from that session:
+- `src/theme/` — single-home design tokens from `docs/styling_guide.md` (colors, 3-font type
+  system, spacing, radii, glows, motion). No color/font literal exists outside this module.
+- `src/components/` — `AppBackground` (maroon gradient + red SVG grid), `Screen` wrapper,
+  `AstraTabBar` (custom six-tab bar on headless `expo-router/ui`; raised red center Workout
+  action), and `ui/` primitives (Heading/SectionLabel/Body, Button ×3 variants, Card, EmptyState).
+- `src/app/(tabs)/` — six designed placeholder screens: Home, Marketplace, Workout, Communities,
+  Library, You.
+- Verified: `tsc` clean, 22/22 Jest tests (jest-expo + RNTL), `expo lint` clean, `expo export`
+  builds for both ios and android. **Not verified: a run on a real device/simulator** — FND-1 and
+  FND-4 sit at `Built`, and flip to `Done` after Tristen runs it on both platforms (`npx expo start`).
 
-The repo still has no app code; every build-list item is `Not started`. That session built the
-**autonomous build pipeline** (spec: `docs/PIPELINE.md`, plan:
-`docs/feature_plans/autonomous-build-pipeline.md`): n8n orchestrates a headless Fable planner run
-and an Opus builder run per build-list item, with Tristen approving at Gate 1 (plan) and Gate 2
-(branch merge). CLAUDE.md gained an "Autonomous pipeline" section; its Git section now makes Claude
-responsible for git work (changed by Tristen this session).
+Notable: SDK 58 dropped `@react-navigation/bottom-tabs` from expo-router and doesn't bundle
+`@expo/vector-icons`; the tab bar uses the headless `expo-router/ui` kit. Unused template deps
+(react-native-web, reanimated, gesture-handler, …) were pruned per the no-speculation rule.
 
-Built and verified:
-- `automation/scripts/pipeline.mjs` — item picker / prompt filler; `check` self-tests all pass
-- `automation/prompts/planner.md`, `builder.md`; `automation/scripts/run-planner.cmd`, `run-builder.cmd`
-- `automation/n8n/astra-build-pipeline.json` — the board (7 nodes, connections validated)
-- `.mcp.json` — `n8n-mcp` server; API key still a placeholder
-- n8n community edition installed globally via npm (see below for import status)
+**For Tristen:** review + merge `ui-foundation` (Gate 2 style), run the app on a device. The
+"UI/UX max pro" skill wasn't installed on this machine — screens were designed from
+`docs/styling_guide.md` + Anthropic's frontend-design guidance; install `ui-ux-pro-max` if you
+want future sessions to audit against it. Also still open from the pipeline session: copy
+`automation/claude-settings.example.json` → `.claude/settings.json`; n8n API key is live in `.env`.
 
-Blocked on Tristen:
-1. Copy `automation/claude-settings.example.json` → `.claude/settings.json` (grants n8n MCP tools
-   and git/node to headless runs).
-2. ~~One-time n8n setup~~ DONE (Nov 14): owner account created, API key in the repo `.env`, key
-   verified live against the API (HTTP 200, "Astra Build Pipeline" id gvu4dg0NPtND4tGG listed).
-   The MCP server starts via `automation/scripts/n8n-mcp.mjs`, which loads `.env`; it goes live
-   (not docs-only) in the next Claude session.
-
-Next after that: trigger the board once on FND-1 with eyes on it.
+Next build items: FND-2 (Supabase project + auth) or LOG-1/LOG-2 (logger core) — the tab shells
+are ready to receive them.
