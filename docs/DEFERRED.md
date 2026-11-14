@@ -22,7 +22,14 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   post-re-seed verification.
 - Autonomous pipeline v2 features, deliberately left out of v1 (see `docs/PIPELINE.md`): cron /
   unattended triggering, parallel items via git worktrees, external gate notifications
-  (Telegram/email), auto-updating build-list status at merge. Earn each with a few clean v1 runs.
+  (Telegram/email), auto-updating build-list status at merge (now cheap: at Gate 2 the step row's
+  Status and each covered feature's Status could be flipped by `pipeline.mjs` from the merge
+  commit). Earn each with a few clean v1 runs.
+- n8n MCP server (`automation/scripts/n8n-mcp.mjs` → `npx n8n-mcp`) rejects `http://localhost:5678`
+  with "SSRF protection: Localhost access is blocked in strict mode", so Claude sessions cannot
+  read or update the live board. Options: the server's SSRF-mode env var (check n8n-mcp docs), or
+  point `N8N_API_URL` at `http://127.0.0.1:5678` / a LAN address. Until fixed, board changes ship
+  as the committed JSON and Tristen re-imports.
 - Max Method data deliberately NOT imported with the launch library (`launch-library-seed`),
   re-import when a consumer exists:
   - Cardio-machine selector metadata (`MaxMethodBackendStructure/.../src/utils/cardioMachineMetadata.js`:
