@@ -198,6 +198,16 @@ export const type = {
     lineHeight: 21,
     color: colors.muted,
   },
+  /**
+   * Text typed into an input — Manrope at 16px. 16 is deliberate: smaller
+   * input text makes iOS zoom the page when the field is focused.
+   */
+  input: {
+    fontFamily: fonts.body,
+    fontSize: 16,
+    lineHeight: 22,
+    color: colors.text,
+  },
   /** Small body copy (card metadata). */
   bodySmall: {
     fontFamily: fonts.body,

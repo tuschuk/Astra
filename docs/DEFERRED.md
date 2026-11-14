@@ -7,7 +7,7 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   pending (flips them from Built to Done); re-audit screens with the `ui-ux-pro-max` skill if
   Tristen installs it.
 - FND-2 leftovers (branch `supabase-schema`; migrations applied + RLS-verified Nov 14, 2026):
-  frontend auth screens + supabase-js wiring (FND-2 part 2, own branch); storage buckets (land
+  storage buckets (land
   with avatar / progress-pic features); exercise library seed data (LIB items); replace the single
   `user_body_data.bodyweight_kg` value with a bodyweight history log when trends/REC items need it;
   add an exercise-name snapshot on `workout_exercises` when the logger (LOG items) lands, so
@@ -20,6 +20,19 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   Renaming/retiring a library exercise is a deliberate content migration (new slug = new id;
   history references ids) — never just rerun the generator; orphan-slug detection happens in
   post-re-seed verification.
+- B05 auth follow-ups (`auth-and-signup`):
+  - Apply `20261114130000_signup_birthdate_gate.sql` live, then run the live probe (under-18 raw
+    `signUp` refused with no `auth.users` row left; 18+ signup creates profile, settings and body
+    data with birthdate). The builder run couldn't reach the Supabase MCP.
+  - Re-run the B02 RLS probe with `birthdate` in `user_metadata`, since the trigger now refuses
+    users without one.
+  - Read the project's auth config. If the password minimum isn't 6, update
+    `frontend/src/auth/password.ts`. If email confirmation is on, decide whether it stays on (the
+    code already handles both).
+  - Password reset / "forgot password" flow deserves its own small step. Email change and the
+    account-deletion UI land with the You/settings features (NFR-6).
+  - At B07, consider swapping the session store from AsyncStorage to `expo-sqlite/kv-store` (a
+    one-line adapter change) so the app has one storage engine.
 - Autonomous pipeline v2 features, deliberately left out of v1 (see `docs/PIPELINE.md`): cron /
   unattended triggering, parallel items via git worktrees, external gate notifications
   (Telegram/email), auto-updating build-list status at merge (now cheap: at Gate 2 the step row's

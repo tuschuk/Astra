@@ -2,52 +2,50 @@
 
 _Overwritten at the end of every session with where things stand now. Not a log._
 
-## Where things stand (Nov 14, 2026 — pipeline go-live session)
+## Where things stand (Nov 14, 2026, pipeline builder run for B05)
 
-**The pipeline is live and its first run (B05 auth-and-signup) was started from this session.**
-`build-order-for-pipeline` is merged to `main` (merge commit `a3401d5`, pushed), so the picker
-now reads the audited build list and the 56-step Build order. The n8n board was brought up to the
-repo JSON over n8n's REST API and activated.
+**B05 auth-and-signup is built on branch `auth-and-signup` and waiting at Gate 2.** Nothing is
+merged. `main` is untouched and no BUILD_LIST status was changed.
 
-**What had to change to make n8n actually run the board (all in this commit):**
+What landed (the full list is in the commit; deviations are in `docs/feature_plans/auth-and-signup.md`,
+under "Build deviations"):
 
-- **n8n 2.x disables the Execute Command node by default** (`NODES_EXCLUDE` defaults to
-  `executeCommand` + `localFileTrigger`). That is why the board had zero executions before today.
-  n8n must be started with `NODES_EXCLUDE=[]`; it is running that way now as a detached hidden
-  process (`Start-Process n8n.cmd start`, logs in `automation/state/n8n.log`). After a reboot,
-  Tristen restarts it the same way — see `docs/PIPELINE.md`, "The pieces" and "Operator setup".
-- **The board gained a Webhook trigger** (`POST http://localhost:5678/webhook/astra-build-pipeline`)
-  beside the manual trigger, so a shell or a Claude session can start a run; the manual trigger
-  only works from the n8n UI. The board must be Active for the webhook URL to exist (it is).
-- **Cold-start quirk:** the JS task runner can miss its 15 s grant-token window and loop on 403
-  for a few minutes; Code nodes fail with "Task request timed out" until the log says
-  `Registered runner`. Documented under Failure handling in `docs/PIPELINE.md`.
-- **n8n MCP server still blocked** (SSRF strict mode). Fix identified: `WEBHOOK_SECURITY_MODE=moderate`
-  in `automation/scripts/n8n-mcp.mjs`'s env block. Claude Code's permission classifier declined to
-  let this session make that edit (it loosens a security mode), so **Tristen adds that one line**
-  and restarts Claude Code. Until then, board changes go through the REST API with the `.env` key —
-  the exact calls are in `docs/PIPELINE.md`. Live board id: `gvu4dg0NPtND4tGG`.
+- A supabase-js client (`frontend/src/lib/supabase.ts`). The session is saved in AsyncStorage and
+  tokens refresh only while the app is in the foreground.
+- `AuthProvider` / `useAuth` (`frontend/src/auth/`), which handles restore, sign in, sign up and
+  sign out.
+- An 18+ age gate (`auth/age.ts`) that matches Postgres's `current_date - interval '18 years'`
+  boundary, including Feb 29.
+- `(auth)` sign-in / sign-up screens behind `Stack.Protected`. The splash stays up until the
+  session restore finishes.
+- A Sign out button on You.
+- The migration `20261114130000_signup_birthdate_gate.sql`, which makes the signup trigger refuse
+  a missing or under-18 birthdate and stamp `user_body_data.birthdate`.
+- Both diagrams updated.
 
-**Verified this session:** Execute Command from n8n resolves `claude` (2.1.220) and runs with the
-repo as cwd; a throwaway webhook → Execute Command → Code smoke workflow completed end to end
-(then deleted); `pipeline.mjs check` 22/22, `lint` clean, `next --dry-run` → B05.
+Verified: `npx jest` (15 suites, 126 tests), `npx tsc --noEmit` and `npm run lint` all clean in
+`frontend/`.
 
-**For Tristen (Gate 1 is waiting on you):**
+**Not done, because the builder run could not use the Supabase MCP (permission declined). Tristen
+does these at Gate 2:**
 
-1. Open http://localhost:5678 → Astra Build Pipeline → Executions. The B05 execution runs the
-   planner (Fable) first, then pauses at **Gate 1 — plan approval**. Read
-   `docs/feature_plans/auth-and-signup.md` on branch `auth-and-signup`; to approve, open the
-   execution's `gate1_resume_url` (shown in the "Check planner result" node output); to reject,
-   cancel the execution and delete the branch.
-2. After the builder finishes (Summary node), review branch `auth-and-signup`, merge to `main`
-   with `--no-ff`, and flip B05 to Built plus FND-2 / NFR-8 Status in `docs/BUILD_LIST.md` (Gate 2).
-   Then `curl -X POST http://localhost:5678/webhook/astra-build-pipeline` starts B06.
-3. Apply the one-line n8n-mcp fix above so Claude sessions can inspect the board directly.
-4. Still outstanding from before: run the app on a device (flips FND-1/FND-4 to Done); decide the
-   six external blockers when ready.
+1. **Apply the migration live.** Run Supabase MCP `apply_migration` with the contents of
+   `backend/supabase/migrations/20261114130000_signup_birthdate_gate.sql`, or paste it into the
+   SQL editor.
+2. **Probe it.** First, a raw `signUp` with `options.data.birthdate` under 18 must fail and leave
+   no `auth.users` row. Second, an 18+ signup must create `profiles`, `user_settings` and
+   `user_body_data` rows, with birthdate set on the body-data row.
+3. **Create `frontend/.env`** from `frontend/.env.example`: the project URL plus the publishable
+   key.
+4. **Check Auth → Providers → Email.** Confirmation should be off per the plan, so that "sign up,
+   then signed in" holds. Check the password minimum too: if it isn't 6, change
+   `frontend/src/auth/password.ts`.
+5. **Device check on iOS and Android.** Run `npx expo start` from `frontend/`; it also regenerates
+   the gitignored typed routes. Then: sign up under 18 and see it refused, sign up 18+, kill the
+   app, reopen still signed in, sign out, sign in.
+6. Then merge `auth-and-signup` with `--no-ff` and flip B05, FND-2 and NFR-8 in `docs/BUILD_LIST.md`.
 
-**Do not** edit files in this working tree while an execution is running: the planner and builder
-run in the same checkout and switch it to the step's branch.
+Still outstanding from before: the n8n-mcp `WEBHOOK_SECURITY_MODE=moderate` one-liner (see
+DEFERRED), running the app on a device to flip FND-1 and FND-4, and the six external blockers.
 
-Next pipeline step after B05 merges: **B06 training-math** (`node automation/scripts/pipeline.mjs
-next --dry-run` to confirm).
+The next pipeline step after B05 merges is **B06 training-math**.

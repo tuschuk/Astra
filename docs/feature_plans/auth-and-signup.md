@@ -257,3 +257,51 @@ decide is flagged for Gate 1 rather than assumed).
   server's `current_date` (UTC). Within ±1 day of the 18th birthday these can disagree for a
   few hours; the strict side (server UTC) wins, which is the defensible direction for a legal
   gate.
+
+## Build deviations (recorded by the builder, Nov 14, 2026)
+
+What shipped differs from the plan above in these ways. Each is deliberate.
+
+- **Supabase MCP unavailable to the builder run.** `get_project_url`, `get_publishable_keys`,
+  `list_migrations` and `apply_migration` were declined by the headless run's permission layer.
+  Consequences:
+  - `frontend/.env` was **not created**. Tristen fills it from `.env.example`.
+  - The migration `20261114130000_signup_birthdate_gate.sql` is **in the repo but not applied
+    live**. Until it is, live signups are not 18+-enforced server-side and the birthdate isn't
+    stamped. Only the client gate holds.
+  - The §7 live probe (under-18 refused, 18+ creates three rows with birthdate) **did not run**.
+  - The project's auth config (email confirmation, password minimum) **was not read**.
+  All four are Gate 2 actions for Tristen. The steps are in `docs/HANDOFF.md`.
+- **Password minimum is a constant, not read from config.** `PASSWORD_MIN_LENGTH = 6` (Supabase's
+  default) lives in one place, `frontend/src/auth/password.ts`. Its comment says to raise it if
+  the dashboard minimum is raised. The server stays the enforcement point, so a mismatch only
+  makes the hint wrong; it can never let a weak password through.
+- **URL polyfill kept (checked, not speculative).** RN 0.88's built-in `URL`
+  (`react-native/Libraries/Blob/URL.js`) is a regex shim with no real parsing, so
+  `react-native-url-polyfill` stays.
+- **`Stack.Protected` used.** It exists in expo-router ~58.0.31, so the `<Redirect>` fallback
+  wasn't needed.
+- **Sign-out uses `scope: 'local'`.** supabase-js removes the device session before any request
+  in local scope, so sign-out works with no signal (offline-first). The server-side refresh token
+  for that one session is still revoked when the request gets through. Other devices stay signed
+  in, which is what a user expects from "Sign out" on a phone.
+- **Auto-refresh wiring lives in a function, not a module side effect.**
+  `refreshWhileForegrounded()` in `lib/supabase.ts` is called by AuthProvider's effect and
+  cleaned up on unmount, so it's testable. The singleton is lazy (`getSupabase()`), so importing
+  the module never needs env vars.
+- **Root `ErrorBoundary` added** (review finding). A missing env var throws inside AuthProvider
+  before the splash hides. The boundary hides the splash so the "set EXPO_PUBLIC_…" message is
+  visible rather than a frozen splash.
+- **Test layout.** Form tests sit beside their components (`components/auth/*.test.tsx`) per the
+  Testing rules, rather than in one `__tests__/auth-screens.test.tsx`. The route files are thin
+  wiring and the You screen test lives in `__tests__/screens.test.tsx`. Fakes live in
+  `src/test-utils/` (never imported by the app). A Jest setup file mocks AsyncStorage with the
+  package's own mock.
+- **Small UI additions the screens needed:** `ui/TextField` (labeled input), `ui/FormError`
+  (alert line), a `type.input` token (16px, which avoids iOS focus-zoom), and
+  `components/auth/formStyles.ts`. The You screen shows the signed-in email in place of its
+  "arrive with accounts" placeholder copy.
+- **Trigger-refusal copy is neutral.** "Database error saving new user" maps to "We couldn't
+  create your account. Check your details and try again." The client gate already catches
+  under-18 birthdates, so a server refusal is more likely some other failure. Blaming the
+  birthdate would mislead.

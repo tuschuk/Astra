@@ -7,7 +7,10 @@ the rules a diagram cannot draw (who can see what, what happens automatically, w
 
 Source migrations: `20261114100000_identity.sql`, `20261114100100_training.sql`,
 `20261114110000_fix_exercise_delete.sql`, `20261114120000_exercises_slug.sql`,
-`20261114120100_library_seed.sql` (generated — see below).
+`20261114120100_library_seed.sql` (generated — see below), `20261114130000_signup_birthdate_gate.sql`
+(**in the repo but not yet applied to the live project** as of the B05 build. The build session
+could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
+not stamp the birthdate).
 
 ```mermaid
 erDiagram
@@ -49,7 +52,7 @@ erDiagram
   user_body_data {
     uuid user_id PK, FK
     text sex "male or female"
-    date birthdate
+    date birthdate "set at signup; must be 18+ (null only on pre-gate rows)"
     numeric bodyweight_kg "positive"
     timestamptz updated_at
   }
@@ -135,10 +138,19 @@ migration, because workout history references these ids).
 
 ## What happens automatically (triggers)
 
-- **Signup creates the identity rows.** Inserting into `auth.users` fires `handle_new_user`, which
-  inserts a `profiles` row (display name taken from the email, before the `@`), an empty
-  `user_settings` row and an empty `user_body_data` row in the same transaction. An account can
-  never exist without its profile.
+- **Signup creates the identity rows — and enforces 18+.** Inserting into `auth.users` fires
+  `handle_new_user` (migration `20261114130000_signup_birthdate_gate.sql`). It first reads
+  `birthdate` (`YYYY-MM-DD`) from the signup's user metadata (`raw_user_meta_data`) and **refuses
+  the signup** (raises, rolling the whole account creation back) if it is missing, not a real date,
+  or later than `current_date - 18 years`. Otherwise it inserts a `profiles` row (display name taken
+  from the email, before the `@`), a default `user_settings` row and a `user_body_data` row with
+  `birthdate` stamped, all in the same transaction. An account can never exist without its profile
+  or without an 18+ birthdate on record. Every creation path, admin/dashboard and probe scripts
+  included, must send `birthdate` in user metadata. That metadata copy is transport only. Age is
+  always read from `user_body_data.birthdate`.
+- **Birthdates stay 18+ after signup.** The check constraint `user_body_data_birthdate_18_plus`
+  (`birthdate is null or birthdate <= current_date - 18 years`) stops a later edit from setting an
+  under-18 or future date.
 - **Blocking severs follows.** Inserting a `blocks` row fires `handle_new_block`, which deletes any
   `follows` row between the two people in either direction.
 - **`updated_at` is maintained** by a trigger on every table that has the column.
