@@ -73,10 +73,12 @@ claude -p <prompt> --output-format json --permission-mode acceptEdits
   required") and exits non-zero within seconds, which the n8n node reports only as "Command
   failed". The first B05 builder died this way; `claude update` fixed it (2.1.325). Check
   `claude --version` after any long gap between runs.
-- Headless runs can use only what `.claude/settings.json` allows. The Supabase MCP tools are not
-  in the allowlist, so a builder cannot apply its own migration or read the project's auth config;
-  it commits the migration file and leaves the live apply + probe to Gate 2 (B05 did exactly
-  this). Widening the allowlist to `mcp__supabase` is Tristen's decision, not the agent's.
+- Headless runs can use only what `.claude/settings.json` allows. The allowlist now includes
+  `mcp__supabase` (added Nov 14, 2026 at Tristen's request, after the B05 builder could not apply
+  its own migration and had to leave the live apply + probe to Gate 2), so a builder can apply
+  migrations, probe them and read the project URL/keys. The Management API (auth config such as
+  email confirmation) is not an MCP tool; a run that needs it reads it with the
+  `SUPABASE_ACCESS_TOKEN` from `.env`. `mmdc` (diagram rendering) is still not allowed.
 
 ## Failure handling (v1)
 
