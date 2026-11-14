@@ -1,0 +1,110 @@
+# CLAUDE.md
+
+Instructions for every Claude Code session in this repo. Follow them on every task, no exceptions.
+
+## What Astra is
+
+Astra is a social strength-training app — Strava for the barbell. A workout logger whose completed
+sessions feed a feed, post-workout analysis, an exercise library, a program Marketplace, Teams, and
+Gyms with video-verified PR leaderboards. The source of truth is `Astra-PRD.pdf`; the working specs are:
+
+- `docs/PROJECT_OVERVIEW.md` — product, phases, decisions, open questions
+- `docs/ARCHITECTURE.md` — the stack and how the pieces fit
+- `docs/BUILD_LIST.md` — every feature, its status, and its definition of done. Update the Status
+  column as features land; a feature is Done only when its definition of done is observably true.
+
+## Rules
+
+- **Stack is fixed:** React Native with Expo, TypeScript everywhere (no `any` by default). SQLite on
+  device, synced to Supabase (Postgres + PostGIS, auth, storage, realtime, server functions). No other
+  backend, no microservices, no self-operated infrastructure. Mobile only — no web app.
+- **Offline-first:** logging and the Tool Kit must work with no signal and sync on reconnect. An
+  in-progress workout survives the app dying.
+- **No AI in the product:** post-workout analysis is deterministic scripted rules in server functions.
+- **Training math has one home.** e1RM (Epley), PR detection, plate math, strength grades live in one
+  shared module imported everywhere. A mirrored copy is a bug.
+- **Privacy:** progress pics, body data and recovery data are sensitive — user-set visibility enforced
+  with row-level security, never client-side only. Physique Check posts take upvotes only. 18+ only.
+- **Add nothing speculative:** no Redis, no search service, no data pipeline until a measured problem
+  calls for it (see `docs/ARCHITECTURE.md`).
+- **Every numeric performance claim** in product copy cites a published source and is worded as an
+  estimate.
+
+## Workflow
+
+Every task — every feature and every fix, no matter how small — follows this sequence:
+
+1. **Explore** — read the relevant code, docs, and data model before touching anything. Understand
+   what exists before adding.
+2. **Plan** — outline the approach and confirm it fits `docs/ARCHITECTURE.md` and the Rules above. For
+   non-trivial changes, share the plan with Tristen before writing code. Propose a short kebab-case
+   name, save the plan as `docs/feature_plans/<name>.md`, and create the branch with that name.
+   Update the plan file if the approach changes during implementation.
+3. **Grill** — as soon as the plan file exists, invoke the `mattpocock-skills:grilling` skill on it.
+   Attack the plan before any code is written: unexamined assumptions, hard rules it would violate,
+   scope that should be a separate branch, cheaper alternatives. Revise the plan file in place (the
+   grilled version is the plan of record) and note the decisions the grilling settled. Do not start
+   coding until the plan has been through this.
+4. **Code** — implement the change, following the Rules here and the folder's own `CLAUDE.md` where
+   one exists.
+5. **Test** — write unit tests for every function or feature where applicable (see Testing rules).
+   All relevant tests and lint must pass before moving on.
+6. **Review** — with tests green, invoke the `mattpocock-skills:code-review` skill on the changes,
+   passing the plan file as the originating spec so the Spec axis has something to check against. Fix
+   what the review finds, then re-run the affected tests. If a fix deliberately deviates from the plan,
+   say so in the plan file rather than silently diverging. Report the review's findings to Tristen even
+   when nothing needed fixing.
+7. **Document** — add plain-language comments to every function and feature written (see
+   Documentation rules). This runs last so comments describe the code as it actually shipped, review
+   fixes included.
+
+Finish by committing the work with a clear, self-contained message and listing the files changed.
+
+## Every session
+
+1. **Start:** read `docs/HANDOFF.md` and `docs/DEFERRED.md`.
+2. **Work:** take the task through the Workflow above.
+3. **Report:** tell Tristen what changed, what was verified, and what wasn't.
+4. **End:** overwrite `docs/HANDOFF.md` with where things stand now (not an append-only log), and add
+   anything postponed to `docs/DEFERRED.md`.
+
+## Handoffs
+
+Handoffs are written in the session that was asked for them — never as a standalone file. When asked
+for a handoff, a summary for a new session, or a "take it from here" brief, output it as a paste-ready
+text block in the current session. Do not create a `*_handoff.md`, do not write it into
+`docs/feature_plans/`, and do not leave a scratch file behind. A handoff is stale the moment it is
+committed; anything durable belongs in that feature's plan file. This does not replace "Every session"
+step 4.
+
+## Testing rules
+
+- Write Jest unit tests whenever a function has testable logic (data transformations, training math,
+  PR detection, query building, sync logic, API responses, business rules).
+- App tests (Jest + React Native Testing Library) live alongside what they test:
+  `app/components/Thing.tsx` → `app/components/Thing.test.tsx`. Supabase server-function tests live in
+  a `tests/` folder beside the functions (`supabase/functions/tests/`).
+- A test file mirrors the module it tests.
+- Tests never touch the real Supabase project, real storage, or the real video service; use fakes and
+  synthetic data.
+- Do not write tests for trivial one-liners, but err on the side of more coverage rather than less.
+- Tests and lint must pass before work is committed. Never commit a failing test.
+
+## Documentation rules
+
+- Every function, class, and server function has a comment or docstring a non-programmer can follow.
+- Explain inputs, outputs, and *why* it exists — not just what the code does line by line. This
+  matters most for training math, PR detection, and verification code.
+- Components: a comment block at the top describing what it shows and what the user can do.
+- Keep comments current — if behavior changes, update the comment.
+- Handoffs are never written as files — see "Handoffs".
+
+## Git
+
+Claude does all the git work: branching, staging, committing, and pushing. Commit at the end of every
+completed task with a message that explains what changed and why. Create the feature branch named in
+the Plan step before coding starts.
+
+## Keep this file short
+
+This file must stay under 200 lines. Put detail in `docs/` or a folder's `CLAUDE.md` and link to it.
