@@ -8,11 +8,12 @@ _Overwritten at the end of every session with where things stand now. Not a log.
 (`qczhvuzdxpmfztxrifyg.supabase.co`). Branch `supabase-schema` (based on `ui-foundation`, since
 `main` predates the monorepo split; plan: `docs/feature_plans/supabase-schema.md`) holds:
 
-- **Supabase MCP server** added to `.mcp.json` — it reads a personal access token from the
-  `SUPABASE_ACCESS_TOKEN` environment variable, so no secret is committed. **Blocked on Tristen:**
-  create a token (Supabase dashboard → Account → Access Tokens), set it user-level on Windows
-  (`[Environment]::SetEnvironmentVariable('SUPABASE_ACCESS_TOKEN','<token>','User')`), then restart
-  Claude Code — MCP servers only load at session start, so this session never had the tools.
+- **Supabase MCP server** added to `.mcp.json` — launched via
+  `automation/scripts/supabase-mcp.mjs`, which loads `SUPABASE_ACCESS_TOKEN` from the gitignored
+  root `.env` (same pattern as the n8n server), so no secret is committed. **Blocked on Tristen:**
+  create a token (Supabase dashboard → Account → Access Tokens), paste it on the
+  `SUPABASE_ACCESS_TOKEN=` line already waiting in `.env`, then restart Claude Code — MCP servers
+  only load at session start, so this session never had the tools.
 - **`backend/supabase/`** stood up via `supabase init` (config.toml), plus the first two
   migrations, heavily commented:
   - `20261114100000_identity.sql` — profiles (public, auto-created by an `auth.users` signup
