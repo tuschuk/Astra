@@ -44,7 +44,11 @@ function loadEnvFile(file) {
 
 const child = spawn(
   'npx',
-  ['-y', '@supabase/mcp-server-supabase@latest', '--project-ref=qczhvuzdxpmfztxrifyg'],
+  // Pinned version, not @latest: Claude Code gives an MCP server 30s to come up, and
+  // @latest makes npx hit the registry (or re-download) on every launch — that caused a
+  // CONNECT_TIMEOUT on the first post-restart session. The pinned version runs from the
+  // npx cache. Bump deliberately when a new server version is wanted.
+  ['-y', '@supabase/mcp-server-supabase@0.17.0', '--project-ref=qczhvuzdxpmfztxrifyg'],
   {
     stdio: 'inherit',
     shell: true, // npx is npx.cmd on Windows; shell resolves it.
