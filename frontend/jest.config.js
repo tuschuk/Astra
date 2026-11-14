@@ -11,4 +11,6 @@ module.exports = {
   // Route files live in src/app; tests live beside src code, never in src/app
   // (expo-router would register them as routes).
   testMatch: ['**/src/**/*.test.ts', '**/src/**/*.test.tsx'],
+  // Native-module mocks (AsyncStorage) — see jest.setup.js.
+  setupFiles: ['<rootDir>/jest.setup.js'],
 };

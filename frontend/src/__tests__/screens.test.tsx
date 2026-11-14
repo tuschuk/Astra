@@ -5,9 +5,12 @@
  */
 import { describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
-import { fireEvent, render } from '@testing-library/react-native';
+import { fireEvent, render, waitFor } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
+import { AuthProvider } from '@/auth/AuthProvider';
+import { createFakeAppState, createFakeAuthClient, fakeSession } from '@/test-utils/fakeAuthClient';
+import { TEST_SAFE_AREA_METRICS } from '@/test-utils/renderWithAuth';
 import { ALL_EXERCISES } from '@/library/catalog';
 
 import HomeScreen from '@/app/(tabs)/index';
@@ -22,13 +25,8 @@ jest.mock('expo-router', () => ({
   useRouter: () => ({ push: jest.fn() }),
 }));
 
-const METRICS = {
-  insets: { top: 0, left: 0, right: 0, bottom: 0 },
-  frame: { x: 0, y: 0, width: 390, height: 844 },
-};
-
 function renderScreen(element: React.ReactElement) {
-  return render(<SafeAreaProvider initialMetrics={METRICS}>{element}</SafeAreaProvider>);
+  return render(<SafeAreaProvider initialMetrics={TEST_SAFE_AREA_METRICS}>{element}</SafeAreaProvider>);
 }
 
 describe('tab screens', () => {
@@ -101,10 +99,27 @@ describe('tab screens', () => {
     expect(screen.getByText(/No exercises match/)).toBeTruthy();
   });
 
-  it('You renders the profile skeleton with both follow counts', async () => {
-    const screen = await renderScreen(<YouScreen />);
+  it('You renders the profile skeleton with both follow counts and the signed-in email', async () => {
+    const client = createFakeAuthClient({ storedSession: fakeSession('me@example.com') });
+    const screen = await renderScreen(
+      <AuthProvider client={client} appState={createFakeAppState()}>
+        <YouScreen />
+      </AuthProvider>,
+    );
     expect(screen.getByText('Your profile')).toBeTruthy();
     expect(screen.getByText('Followers')).toBeTruthy();
     expect(screen.getByText('Following')).toBeTruthy();
+    await waitFor(() => expect(screen.getByText('me@example.com')).toBeTruthy());
+  });
+
+  it('You has a Sign out button that signs out of this device', async () => {
+    const client = createFakeAuthClient({ storedSession: fakeSession() });
+    const screen = await renderScreen(
+      <AuthProvider client={client} appState={createFakeAppState()}>
+        <YouScreen />
+      </AuthProvider>,
+    );
+    await fireEvent.press(screen.getByLabelText('Sign out'));
+    expect(client.signOut).toHaveBeenCalledWith({ scope: 'local' });
   });
 });

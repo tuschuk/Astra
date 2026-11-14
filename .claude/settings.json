@@ -1,9 +1,10 @@
 {
-  "_comment": "Installed from automation/claude-settings.example.json at Tristen's explicit request (Nov 14, 2026). 'mcp__n8n' allows every tool of the n8n MCP server; the Bash/PowerShell entries let headless planner/builder runs use git, node, npm and npx without stalling on prompts. Edit the example file and re-copy to change grants.",
+  "_comment": "Installed from automation/claude-settings.example.json at Tristen's explicit request (Nov 14, 2026). 'mcp__n8n' allows every tool of the n8n MCP server; 'mcp__supabase' allows every tool of the Supabase MCP server (added Nov 14, 2026 at Tristen's explicit request, after the B05 builder could not apply its own migration); the Bash/PowerShell entries let headless planner/builder runs use git, node, npm and npx without stalling on prompts. Edit the example file and re-copy to change grants.",
   "enableAllProjectMcpServers": true,
   "permissions": {
     "allow": [
       "mcp__n8n",
+      "mcp__supabase",
       "Bash(node:*)",
       "Bash(npx:*)",
       "Bash(npm:*)",

@@ -2,14 +2,19 @@
  * You — the profile (YOU-1..YOU-7): photo, name, bio, follower counts,
  * posts, history, PRs and settings. This foundation renders the profile
  * skeleton — avatar ring, counts row, and the PRs section label — in its
- * final layout, with empty values until accounts exist (FND-2).
+ * final layout with empty values, shows which email is signed in, and has
+ * the Sign out button (FND-2). Signing out needs no navigation here: the
+ * root guard sends the user to sign-in once the session is gone.
  */
-import React from 'react';
+import React, { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
+import { useAuth } from '@/auth/AuthProvider';
 import { Screen } from '@/components/Screen';
+import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { FormError } from '@/components/ui/FormError';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
 import { colors, radii, spacing, type } from '@/theme';
 
@@ -20,6 +25,19 @@ const COUNTS = [
 ] as const;
 
 export default function YouScreen() {
+  const { session, signOut } = useAuth();
+  const [signOutError, setSignOutError] = useState<string | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+
+  /** Signs out of this device; shows an error only if that somehow fails. */
+  const handleSignOut = async () => {
+    setSigningOut(true);
+    setSignOutError(null);
+    const result = await signOut();
+    setSigningOut(false);
+    if (!result.ok) setSignOutError(result.message);
+  };
+
   return (
     <Screen>
       <View style={styles.header}>
@@ -35,7 +53,7 @@ export default function YouScreen() {
         </View>
         <View style={styles.identity}>
           <Heading size="section">Your profile</Heading>
-          <Body variant="small">Name, photo and bio arrive with accounts.</Body>
+          <Body variant="small">{session?.user.email ?? 'Signed in'}</Body>
         </View>
       </View>
 
@@ -53,6 +71,15 @@ export default function YouScreen() {
         icon="trophy-outline"
         message="PRs are caught automatically while you log — true 1RMs, rep maxes and estimated 1RMs, each listed here by exercise."
       />
+
+      <Button
+        label="Sign out"
+        variant="ghost"
+        onPress={handleSignOut}
+        disabled={signingOut}
+        style={styles.signOut}
+      />
+      <FormError message={signOutError} style={styles.error} />
     </Screen>
   );
 }
@@ -98,5 +125,11 @@ const styles = StyleSheet.create({
   sectionLabel: {
     marginTop: spacing.xxl,
     marginBottom: spacing.sm,
+  },
+  signOut: {
+    marginTop: spacing.xxl,
+  },
+  error: {
+    marginTop: spacing.sm,
   },
 });
