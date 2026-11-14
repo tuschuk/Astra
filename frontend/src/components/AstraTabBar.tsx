@@ -15,6 +15,7 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import type { Href } from 'expo-router';
 import { TabList, TabTrigger, type TabTriggerSlotProps } from 'expo-router/ui';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -24,8 +25,8 @@ import { colors, glows, layout, radii, spacing, type } from '@/theme';
 export interface TabConfig {
   /** Route name registered with the tab navigator. */
   name: string;
-  /** Destination path for the trigger. */
-  href: string;
+  /** Destination path for the trigger (checked against generated typed routes). */
+  href: Href;
   /** Short label under the icon (space is tight with six tabs). */
   label: string;
   /** Ionicons name when idle. */
@@ -127,7 +128,14 @@ export function AstraTabBar() {
 
   return (
     <TabList asChild>
-      <View style={[styles.bar, { paddingBottom: Math.max(insets.bottom, spacing.sm) }]}>
+      {/* asChild requires a flattened style object — expo-router's Slot
+          throws at runtime on a style array. */}
+      <View
+        style={StyleSheet.flatten([
+          styles.bar,
+          { paddingBottom: Math.max(insets.bottom, spacing.sm) },
+        ])}
+      >
         {TABS.map((tab) => (
           <TabTrigger key={tab.name} name={tab.name} href={tab.href} asChild>
             <AstraTabButton tab={tab} />
