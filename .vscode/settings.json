@@ -1,0 +1,8 @@
+{
+  // Astra's SQL is PostgreSQL (Supabase). The globally installed IBM "Db2 for
+  // z/OS Developer Extension" claims every .sql file and floods the Problems
+  // panel with false errors because Postgres syntax is not Db2. This caps its
+  // reported problems at zero for this workspace; the migrations themselves
+  // are validated for real by being applied to the live Supabase project.
+  "db2forzosdeveloperextension.maxNumberOfProblems": 0
+}
