@@ -57,8 +57,9 @@ Every task — every feature and every fix, no matter how small — follows this
    say so in the plan file rather than silently diverging. Report the review's findings to Tristen even
    when nothing needed fixing.
 7. **Document** — add plain-language comments to every function and feature written (see
-   Documentation rules). This runs last so comments describe the code as it actually shipped, review
-   fixes included.
+   Documentation rules) and bring both living diagrams up to date with the change (see Living
+   diagrams). This runs last so comments and diagrams describe the code as it actually shipped,
+   review fixes included.
 
 Finish by committing the work with a clear, self-contained message and listing the files changed.
 
@@ -114,6 +115,23 @@ to this rule, since the plan file was already the artifact of record.
 - Components: a comment block at the top describing what it shows and what the user can do.
 - Keep comments current — if behavior changes, update the comment.
 - Handoffs are never written as files — see "Handoffs".
+
+## Living diagrams
+
+Two Mermaid diagrams are the whole-system picture, kept in `docs/diagrams/` and nowhere else:
+
+- `docs/diagrams/database-erd.md` — the database: every table, column, key and relationship, plus
+  the enums, triggers and row-level-security rules a reader needs to predict what a query returns.
+- `docs/diagrams/app-flow.md` — how the app works: every screen, what the user can do on it, and
+  the data path each action takes from device storage through sync to Supabase and back.
+
+Every commit leaves both diagrams matching the code it ships. A migration lands in the ERD; a
+screen, user action, module or data path lands in the flowchart; a change that touches neither
+leaves both untouched. The diagrams draw what exists in code, never what is planned, and mark
+scaffolding (placeholder screens, unwired services) as such. Done means someone who has never
+opened this repo can read the two files and answer any "how does the database / app work"
+question without reading code. Mermaid fenced blocks render on GitHub and in VS Code preview;
+the Mermaid CLI (`mmdc`, installed globally) renders them to SVG or PNG when an image is needed.
 
 ## Git
 

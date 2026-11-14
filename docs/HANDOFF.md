@@ -2,56 +2,61 @@
 
 _Overwritten at the end of every session with where things stand now. Not a log._
 
-## Where things stand (Nov 14, 2026 — Supabase schema session)
+## Where things stand (Nov 14, 2026 — two sessions landed: Supabase schema + launch library)
 
-**FND-2 is underway.** Tristen created the Supabase project
-(`qczhvuzdxpmfztxrifyg.supabase.co`). Branch `supabase-schema` (based on `ui-foundation`, since
-`main` predates the monorepo split; plan: `docs/feature_plans/supabase-schema.md`) holds:
+**New standing rule (committed on `launch-library-seed` after the library work): living diagrams.**
+`docs/diagrams/database-erd.md` (full ERD, enums, triggers, RLS table, cascade rules) and
+`docs/diagrams/app-flow.md` (every screen, user action and data path, scaffolding marked) must be
+updated in the same commit as any migration, screen, module or data-path change — see the
+"Living diagrams" section in `CLAUDE.md`. Both are seeded from today's code and render cleanly
+with the Mermaid CLI (`mmdc`, installed globally on this machine; GitHub renders the fenced blocks
+without it).
 
-- **Supabase MCP server** added to `.mcp.json` — launched via
-  `automation/scripts/supabase-mcp.mjs`, which loads `SUPABASE_ACCESS_TOKEN` from the gitignored
-  root `.env` (same pattern as the n8n server), so no secret is committed. Tristen pasted the
-  token; the MCP tools appear after the next Claude Code restart (servers load at session start).
-- **`backend/supabase/`** stood up via `supabase init` (config.toml), plus the first two
-  migrations, heavily commented:
-  - `20261114100000_identity.sql` — profiles (public, auto-created by an `auth.users` signup
-    trigger), `user_body_data` (sex/birthdate/bodyweight_kg — owner-only RLS, no public access at
-    all), `user_settings` (kg/lb unit, default workout visibility), `blocks` (insert trigger
-    severs follows both ways), `follows` (one-way; insert blocked when a block exists, via a
-    `security definer` helper since plain RLS would hide the other side's block row).
-  - `20261114100100_training.sql` — `exercises` (shared library rows have `owner_id null` +
-    private customs), `workouts` / `workout_exercises` / `sets` with **client-generated UUID PKs**
-    (offline-first: sync is an idempotent upsert, FND-3's schema half). Visibility
-    (public/followers/private + block checks) lives in one place — `private.workout_visible` —
-    and child tables delegate to it. Weights stored in kg only.
-- `docs/BUILD_LIST.md`: FND-2 → In progress.
+Two sessions ran concurrently in this working tree today and both finished. Branch stack (merge
+in this order): `ui-foundation` → `supabase-schema` → `launch-library-seed`. The FND-2 session
+committed while HEAD was on `launch-library-seed`, so that branch deliberately contains the
+schema commits plus the library import on top — each branch reviews cleanly as a diff against
+its parent. Avoid concurrent sessions in one working tree (or use git worktrees).
 
-**Verified — the schema is live and proven.** Once the token landed, all three migrations
-(a third, `20261114110000_fix_exercise_delete.sql`, see below) were applied to the remote project
-via the Management API, with CLI-compatible history rows in `supabase_migrations.schema_migrations`
-so `db push`/MCP see them as applied. A 30-assertion RLS probe with two throwaway users passed
-30/30: signup trigger rows, body-data invisible to others, private/followers/public workout
-visibility down to sets, write ownership, blocking (auto-unfollow, hides even public workouts,
-re-follow refused, invisible to the blocked), anonymous access, account-deletion cascade. Probe
-users were deleted; the project is clean. Desk-review earlier caught three bugs pre-apply
-(policy ordering, RLS-blind block check, signup-breaking display-name overflow); the live probe
-caught a fourth — account deletion failed on `workout_exercises.exercise_id` (no ON DELETE
-action, breaking NFR-6), fixed in the third migration as nullable + `on delete set null`.
+**FND-2 is underway (branch `supabase-schema`, plan `docs/feature_plans/supabase-schema.md`).**
+Supabase project `qczhvuzdxpmfztxrifyg.supabase.co` is live; three commented migrations
+(identity + RLS, training tables with client-generated UUID PKs for offline sync, FK delete fix)
+are applied remotely with CLI-compatible history; a 30/30 RLS probe with throwaway users verified
+visibility, blocking, ownership and deletion-cascade behavior (probe users cleaned up). The
+Supabase MCP server loads its token from the gitignored root `.env`
+(`automation/scripts/supabase-mcp.mjs`); MCP tools appear after a Claude Code restart.
 
-**Process note:** `mattpocock-skills:grilling` and `mattpocock-skills:code-review` (CLAUDE.md
-workflow steps 3 and 6) are not installed in this environment — both were done as careful
-self-passes, flagged in the plan file. Install the skills if you want future sessions to use them.
+**The founder's exercise library is imported (LIB-7, branch `launch-library-seed`, plan
+`docs/feature_plans/launch-library-seed.md`, grilled + code-reviewed).** Max Method's library —
+22 movement patterns, **151 unique exercises**, equipment, muscle intensities, the founder's
+5-step coaching cues and tips, squat-family aliases — now lives in `frontend/src/library/`:
 
-**Heads-up:** while this session worked, uncommitted LIB-7 files appeared in the shared working
-tree (`docs/feature_plans/launch-library-seed.md`, `frontend/src/library/*`, a `library.tsx`
-edit) — apparently a concurrent session. They were deliberately left out of this session's commit;
-that session should commit them on its own branch. Two sessions sharing one working tree is how
-work gets tangled — avoid running them concurrently (or use git worktrees).
+- `exercises.ts` — seed data, generated mechanically from Max Method's `config/exercises.js`
+  (brand colors → theme-independent intensities 0–1, `<strong>` → `**markers**`, legacy duplicate
+  keys dropped in favor of the alias map). Single home: the `exercises` table FND-2 created
+  should be seeded FROM this module — never hand-copied.
+- `catalog.ts` — deduplicated per-exercise catalog (`ExerciseDef`), `canonicalExerciseName`,
+  alias-aware `searchExercises`.
+- The Library tab renders the catalog: cards, live name search, four body-region chips, result
+  count, no-results state. LIB-1 → In progress; LIB-7 → Built (videos wait on LIB-2's service
+  choice). Deliberately not imported (see DEFERRED): cardio-selector metadata, Mux video aliases,
+  strength-classification tables (LIB-6, licence-blocked), user PRs/history, AI selector tools.
 
-**For Tristen:** (1) set `SUPABASE_ACCESS_TOKEN` as above; (2) review + merge `ui-foundation`
-first, then `supabase-schema` on top of it; (3) still open from earlier sessions: run the app on a
-device (flips FND-1/FND-4 to Done), copy `automation/claude-settings.example.json` →
-`.claude/settings.json`.
+Verified this session: `tsc` clean, 47/47 Jest, `expo lint` clean. Not verified: on-device run.
+Test gotcha: RNTL 14 — `await` every `fireEvent` call or state updates silently don't flush.
 
-Next build items after migrations apply: FND-2 part 2 (auth screens + supabase-js in
-`frontend/`), then FND-3 (SQLite + sync) or LOG-1/LOG-2 — the schema is shaped for them.
+**Process note (both sessions):** `mattpocock-skills:grilling` / `mattpocock-skills:code-review`
+weren't installed when these sessions ran; grilling was done as a self-pass and review via the
+built-in `code-review` skill (8 findings on the library work, all fixed). **Now resolved:** the
+`mattpocock-skills` plugin (v1.3.1, official marketplace, user scope) was installed at Tristen's
+request after the library session — future sessions get both skills and should use them per the
+CLAUDE.md workflow.
+
+**For Tristen:** (1) review + merge the three-branch stack in order, run the app on a device
+(flips FND-1/FND-4 to Done — and eyeball the new Library tab while there); (2) set
+`SUPABASE_ACCESS_TOKEN` in `.env` if not done; (3) still open: copy
+`automation/claude-settings.example.json` → `.claude/settings.json`.
+
+Next build items: FND-2 part 2 (auth screens + supabase-js), FND-3 (SQLite + sync, seeding the
+exercises table from `frontend/src/library/exercises.ts`), or LOG-1/LOG-2 — the logger can now
+pull exercises from the catalog.
