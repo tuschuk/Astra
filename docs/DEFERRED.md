@@ -15,5 +15,12 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
 - Autonomous pipeline v2 features, deliberately left out of v1 (see `docs/PIPELINE.md`): cron /
   unattended triggering, parallel items via git worktrees, external gate notifications
   (Telegram/email), auto-updating build-list status at merge. Earn each with a few clean v1 runs.
+- Max Method data deliberately NOT imported with the launch library (`launch-library-seed`),
+  re-import when a consumer exists:
+  - Cardio-machine selector metadata (`MaxMethodBackendStructure/.../src/utils/cardioMachineMetadata.js`:
+    skill floors, impact, HIIT/steady-state/warmup suitability, injury exclusions, main-lift fatigue
+    map) — useful when programs or cardio selection land.
+  - `VIDEO_NAME_ALIASES` (Mux video-name mapping in Max Method's `config/exercises.js`) — revisit
+    when the video service is chosen (LIB-2).
 - (External blockers from the PRD — Strength Level licence, food database, Denver gym data source,
   video provider, deload rules — are tracked in `docs/BUILD_LIST.md`.)

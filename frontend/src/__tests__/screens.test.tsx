@@ -5,8 +5,10 @@
  */
 import { describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
-import { render } from '@testing-library/react-native';
+import { fireEvent, render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+
+import { ALL_EXERCISES } from '@/library/catalog';
 
 import HomeScreen from '@/app/(tabs)/index';
 import MarketplaceScreen from '@/app/(tabs)/marketplace';
@@ -63,6 +65,40 @@ describe('tab screens', () => {
     for (const label of ['Upper', 'Lower', 'Core', 'Cardio']) {
       expect(screen.getByLabelText(`Filter: ${label}`)).toBeTruthy();
     }
+  });
+
+  it('Library renders imported exercise cards from the launch catalog', async () => {
+    const screen = await renderScreen(<LibraryScreen />);
+    // FlatList virtualizes; the first entries of the catalog are on screen.
+    expect(screen.getByText('Bench Press')).toBeTruthy();
+    expect(screen.getByText(`${ALL_EXERCISES.length} exercises`)).toBeTruthy();
+  });
+
+  it('Library search narrows the cards and shows the match count', async () => {
+    const screen = await renderScreen(<LibraryScreen />);
+    await fireEvent.changeText(screen.getByLabelText('Search exercises'), 'bench press');
+    expect(screen.getByText('Bench Press')).toBeTruthy();
+    // The count label proves the filter ran — a virtualization false-pass
+    // (unrendered off-screen rows) can't satisfy this.
+    const matches = ALL_EXERCISES.filter((e) => e.name.toLowerCase().includes('bench press'));
+    expect(matches.length).toBeGreaterThan(0);
+    expect(screen.getByText(`${matches.length} exercises`)).toBeTruthy();
+  });
+
+  it('Library region chips filter the catalog (Cardio shows machines only)', async () => {
+    const screen = await renderScreen(<LibraryScreen />);
+    await fireEvent.press(screen.getByLabelText('Filter: Cardio'));
+    const cardio = ALL_EXERCISES.filter((e) => e.body === 'cardio');
+    expect(cardio.length).toBeGreaterThan(0);
+    expect(screen.getByText(`${cardio.length} exercises`)).toBeTruthy();
+    expect(screen.getByText('Treadmill')).toBeTruthy();
+    expect(screen.queryByText('Bench Press')).toBeNull();
+  });
+
+  it('Library shows a no-results state when a search misses', async () => {
+    const screen = await renderScreen(<LibraryScreen />);
+    await fireEvent.changeText(screen.getByLabelText('Search exercises'), 'zzzz');
+    expect(screen.getByText(/No exercises match/)).toBeTruthy();
   });
 
   it('You renders the profile skeleton with both follow counts', async () => {
