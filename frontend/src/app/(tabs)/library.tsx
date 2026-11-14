@@ -36,7 +36,14 @@ export default function LibraryScreen() {
       </Body>
 
       <View style={styles.search}>
-        <Ionicons name="search" size={16} color={colors.muted} />
+        {/* Decorative — the input carries the accessible label. */}
+        <Ionicons
+          name="search"
+          size={16}
+          color={colors.muted}
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+        />
         <TextInput
           style={styles.searchInput}
           placeholder="Search exercises"
@@ -53,9 +60,10 @@ export default function LibraryScreen() {
           return (
             <Pressable
               key={category.key}
-              style={[
+              style={({ pressed }) => [
                 styles.chip,
                 active && { backgroundColor: category.dim, borderColor: category.color },
+                pressed && styles.chipPressed,
               ]}
               onPress={() => setSelected(active ? null : category.key)}
               accessibilityRole="button"
@@ -116,6 +124,9 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.lg,
     minHeight: 36,
+  },
+  chipPressed: {
+    opacity: 0.7,
   },
   chipDot: {
     width: 8,

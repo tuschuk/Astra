@@ -32,7 +32,14 @@ export function EmptyState({
 }: EmptyStateProps) {
   return (
     <View style={styles.root}>
-      <Ionicons name={icon} size={36} color={colors.mutedDecor} />
+      {/* Decorative — the message text carries the meaning. */}
+      <Ionicons
+        name={icon}
+        size={36}
+        color={colors.mutedDecor}
+        accessibilityElementsHidden
+        importantForAccessibility="no"
+      />
       <Body variant="muted" style={styles.message}>
         {message}
       </Body>

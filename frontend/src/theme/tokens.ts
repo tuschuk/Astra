@@ -8,6 +8,8 @@
  * font family or font size — import from here instead.
  */
 
+import { Platform } from 'react-native';
+
 /**
  * Color palette.
  *
@@ -266,6 +268,9 @@ export const layout = {
   screenPadding: spacing.lg,
   /** The background grid texture's cell size. */
   gridCell: 60,
-  /** Minimum touch target size (accessibility rule from the guide). */
-  minTouchTarget: 44,
+  /**
+   * Minimum touch target size. Platform guidance differs: 44pt on iOS,
+   * 48dp on Android (ui-ux-pro-max audit) — so Android gets the larger floor.
+   */
+  minTouchTarget: Platform.OS === 'android' ? 48 : 44,
 } as const;

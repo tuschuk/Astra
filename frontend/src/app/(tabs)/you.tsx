@@ -24,7 +24,14 @@ export default function YouScreen() {
     <Screen>
       <View style={styles.header}>
         <View style={styles.avatar}>
-          <Ionicons name="person" size={36} color={colors.muted} />
+          {/* Decorative avatar placeholder — the heading names the section. */}
+          <Ionicons
+            name="person"
+            size={36}
+            color={colors.muted}
+            accessibilityElementsHidden
+            importantForAccessibility="no"
+          />
         </View>
         <View style={styles.identity}>
           <Heading size="section">Your profile</Heading>

@@ -88,7 +88,13 @@ export function AstraTabButton({ tab, isFocused = false, ref, ...pressableProps 
       accessibilityLabel={tab.label}
       accessibilityState={{ selected: isFocused }}
       testID={`tab-${tab.name}`}
-      style={isCenter ? styles.centerSlot : styles.item}
+      // Pressed feedback without layout shift (pro-rules: 80–150ms visual
+      // response on every tap): Android ripple + opacity dip elsewhere.
+      android_ripple={{ color: colors.accentDim, borderless: true }}
+      style={({ pressed }) => [
+        isCenter ? styles.centerSlot : styles.item,
+        pressed && styles.pressed,
+      ]}
     >
       {isCenter ? (
         // No text label on the center action (plan decision: the red circle
@@ -179,5 +185,8 @@ const styles = StyleSheet.create({
   },
   labelFocused: {
     color: colors.accent,
+  },
+  pressed: {
+    opacity: 0.7,
   },
 });

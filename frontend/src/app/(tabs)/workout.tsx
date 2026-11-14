@@ -25,9 +25,13 @@ export default function WorkoutScreen() {
       </Body>
 
       <View style={styles.actions}>
-        {/* Wired to the logger when LOG-1 lands. */}
-        <Button label="Start empty workout" onPress={() => {}} />
-        <Button label="Start from a program" onPress={() => {}} variant="ghost" />
+        {/* Disabled until the logger exists (LOG-1): a control that looks
+            tappable but does nothing is worse than one that says it's coming. */}
+        <Button label="Start empty workout" onPress={() => {}} disabled />
+        <Button label="Start from a program" onPress={() => {}} variant="ghost" disabled />
+        <Body variant="small" style={styles.actionsHint}>
+          Logging opens here first — it&apos;s the next thing being built.
+        </Body>
       </View>
 
       <SectionLabel style={styles.toolkitLabel}>Tool Kit</SectionLabel>
@@ -52,6 +56,9 @@ const styles = StyleSheet.create({
   actions: {
     marginTop: spacing.xl,
     gap: spacing.md,
+  },
+  actionsHint: {
+    textAlign: 'center',
   },
   toolkitLabel: {
     marginTop: spacing.xxl,
