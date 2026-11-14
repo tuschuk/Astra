@@ -1,0 +1,17 @@
+{
+  "_comment": "Copy this to .claude/settings.json yourself to grant the pipeline's permissions. Claude is deliberately not allowed to install this file: a human grants permissions, not the agent. 'mcp__n8n' allows every tool of the n8n MCP server; the Bash/PowerShell entries let headless planner/builder runs use git, node, npm and npx without stalling on prompts.",
+  "enableAllProjectMcpServers": true,
+  "permissions": {
+    "allow": [
+      "mcp__n8n",
+      "Bash(node:*)",
+      "Bash(npx:*)",
+      "Bash(npm:*)",
+      "Bash(git:*)",
+      "PowerShell(node:*)",
+      "PowerShell(npx:*)",
+      "PowerShell(npm:*)",
+      "PowerShell(git:*)"
+    ]
+  }
+}

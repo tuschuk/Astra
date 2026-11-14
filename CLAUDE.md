@@ -60,6 +60,17 @@ Every task — every feature and every fix, no matter how small — follows this
 
 Finish by committing the work with a clear, self-contained message and listing the files changed.
 
+## Autonomous pipeline
+
+Build-list items may be run by the n8n pipeline instead of a hand-driven session — full spec in
+`docs/PIPELINE.md`. Two headless runs per item: a **planner** (`claude-fable-5`) does Explore → Plan
+→ Grill and commits the plan file on a fresh branch named for the item; after Tristen approves the
+plan (Gate 1 — the execution's resume URL), a **builder** (`claude-opus-5-5`) does Code → Test →
+Review → Document on that branch and commits. Tristen reviews and merges the branch (Gate 2). The
+plan file is the handoff between the two runs; nothing else is. One item runs at a time, and an item
+never starts on a dirty working tree. `automation/` holds the pipeline's prompts, scripts and n8n
+board — local dev tooling, exempt from the app-stack rules, which govern the product only.
+
 ## Every session
 
 1. **Start:** read `docs/HANDOFF.md` and `docs/DEFERRED.md`.
@@ -75,7 +86,8 @@ for a handoff, a summary for a new session, or a "take it from here" brief, outp
 text block in the current session. Do not create a `*_handoff.md`, do not write it into
 `docs/feature_plans/`, and do not leave a scratch file behind. A handoff is stale the moment it is
 committed; anything durable belongs in that feature's plan file. This does not replace "Every session"
-step 4.
+step 4. The autonomous pipeline's planner→builder handoff is the plan file itself — not an exception
+to this rule, since the plan file was already the artifact of record.
 
 ## Testing rules
 
