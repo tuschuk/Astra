@@ -5,7 +5,7 @@ guide live in [docs/PIPELINE.md](../docs/PIPELINE.md); the short rules are in th
 [CLAUDE.md](../CLAUDE.md) under "Autonomous pipeline".
 
 - `n8n/astra-build-pipeline.json` — the n8n board. Import: `n8n import:workflow --input=automation/n8n/astra-build-pipeline.json`
-- `prompts/` — planner (Fable) and builder (Opus) prompt templates; `{{ITEM_JSON}}` is filled per item
-- `scripts/pipeline.mjs` — picks the next build-list item, fills prompts; `node automation/scripts/pipeline.mjs check` runs its self-tests
+- `prompts/` — planner (Fable) and builder (Opus) prompt templates; `{{ITEM_JSON}}` is filled per step
+- `scripts/pipeline.mjs` — picks the next Build-order step from `docs/BUILD_LIST.md` (`next`, `next --dry-run`), validates the list (`lint`), fills prompts; `node automation/scripts/pipeline.mjs check` runs its self-tests
 - `scripts/run-planner.cmd`, `scripts/run-builder.cmd` — what the n8n Execute Command nodes call
 - `state/` — runtime scratch (current item, generated prompts); gitignored

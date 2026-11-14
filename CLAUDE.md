@@ -65,14 +65,15 @@ Finish by committing the work with a clear, self-contained message and listing t
 
 ## Autonomous pipeline
 
-Build-list items may be run by the n8n pipeline instead of a hand-driven session — full spec in
-`docs/PIPELINE.md`. Two headless runs per item: a **planner** (`claude-fable-5`) does Explore → Plan
-→ Grill and commits the plan file on a fresh branch named for the item; after Tristen approves the
-plan (Gate 1 — the execution's resume URL), a **builder** (`claude-opus-5-5`) does Code → Test →
-Review → Document on that branch and commits. Tristen reviews and merges the branch (Gate 2). The
-plan file is the handoff between the two runs; nothing else is. One item runs at a time, and an item
-never starts on a dirty working tree. `automation/` holds the pipeline's prompts, scripts and n8n
-board — local dev tooling, exempt from the app-stack rules, which govern the product only.
+Steps of the Build order table in `docs/BUILD_LIST.md` may be run by the n8n pipeline instead of a
+hand-driven session — full spec in `docs/PIPELINE.md`. Two headless runs per step: a **planner**
+(`claude-fable-5`) does Explore → Plan → Grill and commits the plan file on the step's branch; after
+Tristen approves the plan (Gate 1 — the execution's resume URL), a **builder** (`claude-opus-5-5`)
+does Code → Test → Review → Document on that branch and commits. Tristen reviews and merges the
+branch, then flips the step and its covered features (Gate 2). The plan file is the handoff between
+the two runs; nothing else is. One step runs at a time, in table order, and never on a dirty tree.
+`automation/` holds the pipeline's prompts, scripts and n8n board — local dev tooling, exempt from
+the app-stack rules, which govern the product only.
 
 ## Every session
 

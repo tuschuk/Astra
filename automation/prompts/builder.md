@@ -1,8 +1,9 @@
 You are the BUILDER run of the Astra autonomous pipeline (read docs/PIPELINE.md if anything here
 is unclear). Work only inside this repository and follow CLAUDE.md throughout.
 
-Your assigned build-list item — its plan has already been written, grilled, and approved by
-Tristen at Gate 1:
+Your assigned build-order step — its plan has already been written, grilled, and approved by
+Tristen at Gate 1. `covers` lists the PRD features this step advances with their definitions of
+done; `scope` ends with the step's own definition of done:
 
 ```json
 {{ITEM_JSON}}
@@ -21,14 +22,17 @@ Do CLAUDE.md workflow steps 4–7:
    file as the originating spec; fix what it finds and re-run affected tests. If the skill is
    unavailable, do a severe self-review on the same axes and say you did.
 7. **Document** — plain-language comments per the Documentation rules, written after review
-   fixes so they describe the code as it ships.
+   fixes so they describe the code as it ships, and bring both living diagrams in
+   `docs/diagrams/` up to date per CLAUDE.md's "Living diagrams" section.
 
-Then commit the work on this branch, message `Build <ITEM-ID>: <short title>`. If anything
+Then commit the work on this branch, message `Build <STEP-ID>: <short title>`. If anything
 deviated from the plan, record the deviation in the plan file before committing. Append anything
 postponed to docs/DEFERRED.md.
 
-Hard limits: do NOT merge, do NOT touch main, do NOT start any other build-list item, do NOT
-update the item's status in docs/BUILD_LIST.md (Tristen flips it at merge).
+Hard limits: do NOT merge, do NOT touch main, do NOT start any other build-order step, do NOT
+change any Status in docs/BUILD_LIST.md (Tristen flips the step and its covered features at
+merge).
 
 End your final message with: files changed, exactly what was verified (commands and results),
-what was NOT verified, and anything deferred.
+what was NOT verified, which covered features' definitions of done are now observably true and
+which still need Tristen's device check, and anything deferred.
