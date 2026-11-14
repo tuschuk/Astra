@@ -1,21 +1,46 @@
 {
   "name": "Astra Build Pipeline",
-  "settings": { "executionOrder": "v1" },
+  "settings": {
+    "executionOrder": "v1"
+  },
   "nodes": [
     {
       "id": "a1a1a1a1-0001-4000-8000-000000000001",
       "name": "Run next build item",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [0, 0],
+      "position": [
+        0,
+        0
+      ],
       "parameters": {}
+    },
+    {
+      "id": "a1a1a1a1-0008-4000-8000-000000000008",
+      "name": "Run next build item (webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        200
+      ],
+      "webhookId": "b2b2b2b2-0008-4000-8000-000000000008",
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "astra-build-pipeline",
+        "responseMode": "onReceived",
+        "options": {}
+      }
     },
     {
       "id": "a1a1a1a1-0002-4000-8000-000000000002",
       "name": "Pick next item",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [220, 0],
+      "position": [
+        220,
+        0
+      ],
       "parameters": {
         "command": "node \"C:\\Users\\trist\\Astra\\Astra\\automation\\scripts\\pipeline.mjs\" next"
       }
@@ -25,7 +50,10 @@
       "name": "Planner (Fable)",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [440, 0],
+      "position": [
+        440,
+        0
+      ],
       "parameters": {
         "command": "\"C:\\Users\\trist\\Astra\\Astra\\automation\\scripts\\run-planner.cmd\""
       }
@@ -35,7 +63,10 @@
       "name": "Check planner result",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [660, 0],
+      "position": [
+        660,
+        0
+      ],
       "parameters": {
         "jsCode": "// Parse the headless planner run and stage everything Tristen needs at Gate 1.\nconst run = JSON.parse($input.first().json.stdout);\nif (run.is_error) {\n  throw new Error('Planner run failed: ' + String(run.result || '').slice(0, 2000));\n}\nconst item = JSON.parse($('Pick next item').first().json.stdout);\nreturn [{ json: {\n  item,\n  planner_session: run.session_id,\n  planner_cost_usd: run.total_cost_usd,\n  planner_report: run.result,\n  gate1_resume_url: $execution.resumeUrl,\n  gate1_instructions: 'Step ' + item.id + ' (' + item.feature + ') covers ' + item.covers.map(c => c.id).join(', ') + '. Read docs/feature_plans/' + item.branch + '.md on branch ' + item.branch + '. To approve the plan and start the builder, open gate1_resume_url. To reject, cancel this execution.'\n} }];"
       }
@@ -45,7 +76,10 @@
       "name": "Gate 1 — plan approval",
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
-      "position": [880, 0],
+      "position": [
+        880,
+        0
+      ],
       "webhookId": "b2b2b2b2-0005-4000-8000-000000000005",
       "parameters": {
         "resume": "webhook",
@@ -57,7 +91,10 @@
       "name": "Builder (Opus)",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [1100, 0],
+      "position": [
+        1100,
+        0
+      ],
       "retryOnFail": true,
       "maxTries": 2,
       "parameters": {
@@ -69,18 +106,92 @@
       "name": "Summary",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [1320, 0],
+      "position": [
+        1320,
+        0
+      ],
       "parameters": {
         "jsCode": "// Combine both runs into the Gate 2 hand-over: what was built, what it cost, what to do next.\nconst run = JSON.parse($input.first().json.stdout);\nconst staged = $('Check planner result').first().json;\nif (run.is_error) {\n  throw new Error('Builder run failed after retry: ' + String(run.result || '').slice(0, 2000));\n}\nreturn [{ json: {\n  item: staged.item.id,\n  feature: staged.item.feature,\n  branch: staged.item.branch,\n  builder_report: run.result,\n  sessions: { planner: staged.planner_session, builder: run.session_id },\n  cost_usd: { planner: staged.planner_cost_usd || 0, builder: run.total_cost_usd || 0, total: (staged.planner_cost_usd || 0) + (run.total_cost_usd || 0) },\n  gate2: 'Review branch ' + staged.item.branch + ', merge to main, then in docs/BUILD_LIST.md flip step ' + staged.item.id + ' to Built and update the Status of ' + staged.item.covers.map(c => c.id).join(', ') + ' as their definitions of done become true.'\n} }];"
       }
     }
   ],
   "connections": {
-    "Run next build item": { "main": [[{ "node": "Pick next item", "type": "main", "index": 0 }]] },
-    "Pick next item": { "main": [[{ "node": "Planner (Fable)", "type": "main", "index": 0 }]] },
-    "Planner (Fable)": { "main": [[{ "node": "Check planner result", "type": "main", "index": 0 }]] },
-    "Check planner result": { "main": [[{ "node": "Gate 1 — plan approval", "type": "main", "index": 0 }]] },
-    "Gate 1 — plan approval": { "main": [[{ "node": "Builder (Opus)", "type": "main", "index": 0 }]] },
-    "Builder (Opus)": { "main": [[{ "node": "Summary", "type": "main", "index": 0 }]] }
+    "Run next build item": {
+      "main": [
+        [
+          {
+            "node": "Pick next item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick next item": {
+      "main": [
+        [
+          {
+            "node": "Planner (Fable)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Planner (Fable)": {
+      "main": [
+        [
+          {
+            "node": "Check planner result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check planner result": {
+      "main": [
+        [
+          {
+            "node": "Gate 1 — plan approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gate 1 — plan approval": {
+      "main": [
+        [
+          {
+            "node": "Builder (Opus)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Builder (Opus)": {
+      "main": [
+        [
+          {
+            "node": "Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run next build item (webhook)": {
+      "main": [
+        [
+          {
+            "node": "Pick next item",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
   }
 }

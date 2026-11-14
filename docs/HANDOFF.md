@@ -2,50 +2,52 @@
 
 _Overwritten at the end of every session with where things stand now. Not a log._
 
-## Where things stand (Nov 14, 2026 — build-order audit session)
+## Where things stand (Nov 14, 2026 — pipeline go-live session)
 
-**The build list is now the pipeline's queue.** Branch `build-order-for-pipeline` (plan:
-`docs/feature_plans/build-order-for-pipeline.md`, grilled autonomously, two-axis reviewed) audits
-`docs/BUILD_LIST.md` against `main` and adds a **Build order** table of 56 steps (B01–B56) that
-`automation/scripts/pipeline.mjs next` consumes directly. **Not merged** — Tristen merges (Gate 2);
-the pipeline only reads `main`, so nothing changes for it until then.
+**The pipeline is live and its first run (B05 auth-and-signup) was started from this session.**
+`build-order-for-pipeline` is merged to `main` (merge commit `a3401d5`, pushed), so the picker
+now reads the audited build list and the 56-step Build order. The n8n board was brought up to the
+repo JSON over n8n's REST API and activated.
 
-**Audit result (all merged on `main`):** FND-1 and FND-4 Built (device run pending → Done);
-FND-2 In progress (schema + RLS live on Supabase — five migrations confirmed applied via MCP;
-auth screens missing); LIB-7 Built (151 exercises in the TS catalog and the live `exercises`
-table; videos pending); LIB-1 In progress (cards, search, region chips; muscle/equipment filters
-pending). Everything else Not started. Several feature rows now note which columns already exist
-(`sets.rpe`, `is_warmup`, `drop_set_position`, `duration_seconds`, `superset_group`,
-`user_settings.unit`, `follows`, `blocks`) so planners don't re-migrate them.
+**What had to change to make n8n actually run the board (all in this commit):**
 
-**Build order shape:** B01–B04 are the four shipped branches (Built). Phase 1 queue: B05
-auth-and-signup → B06 training-math (the one shared math module) → B07 local-store-and-sync →
-B08 active-workout-store → B09 logger-screen → set types / notes / history+PRs / edit-delete →
-settings → Tool Kit → analysis engine + muscle map → posts/feed → finish-to-post → image posts →
-votes/comments → sort/filter → profile → privacy → moderation → share cards → library detail /
-history / customs → export+delete → B33 video-service (Blocked). Phase 2: programs → teams →
-visibility → marketplace → trend analysis → prefill → B44 deload rules (Blocked) → B45 grades
-(Blocked) → trends → push → DMs → accessibility. Phase 3: gyms core → B51 Denver import (Blocked)
-→ leaderboards → PR verification (waits on video) → hydration/sleep → B55 nutrition (Blocked) →
-B56 recovery-aware analysis (Blocked). Six Blocked steps map 1:1 to the External blockers table.
+- **n8n 2.x disables the Execute Command node by default** (`NODES_EXCLUDE` defaults to
+  `executeCommand` + `localFileTrigger`). That is why the board had zero executions before today.
+  n8n must be started with `NODES_EXCLUDE=[]`; it is running that way now as a detached hidden
+  process (`Start-Process n8n.cmd start`, logs in `automation/state/n8n.log`). After a reboot,
+  Tristen restarts it the same way — see `docs/PIPELINE.md`, "The pieces" and "Operator setup".
+- **The board gained a Webhook trigger** (`POST http://localhost:5678/webhook/astra-build-pipeline`)
+  beside the manual trigger, so a shell or a Claude session can start a run; the manual trigger
+  only works from the n8n UI. The board must be Active for the webhook URL to exist (it is).
+- **Cold-start quirk:** the JS task runner can miss its 15 s grant-token window and loop on 403
+  for a few minutes; Code nodes fail with "Task request timed out" until the log says
+  `Registered runner`. Documented under Failure handling in `docs/PIPELINE.md`.
+- **n8n MCP server still blocked** (SSRF strict mode). Fix identified: `WEBHOOK_SECURITY_MODE=moderate`
+  in `automation/scripts/n8n-mcp.mjs`'s env block. Claude Code's permission classifier declined to
+  let this session make that edit (it loosens a security mode), so **Tristen adds that one line**
+  and restarts Claude Code. Until then, board changes go through the REST API with the `.env` key —
+  the exact calls are in `docs/PIPELINE.md`. Live board id: `gvu4dg0NPtND4tGG`.
 
-**Picker changes (`pipeline.mjs`):** parses only the Build order section; `lint` validates the
-list (every Covers ID exists, every unfinished feature is covered or listed under "Not steps",
-deps point at earlier steps, unique kebab branches); `next` lints first, picks the first `Not
-started` step with all deps Built/Done, skips Blocked and unmet-dep steps (stderr notes), refuses
-on an `In progress` step or an already-existing branch, and emits
-`{id, feature, branch, phase, status, dependsOn, covers[{id, feature, phase, status, dod,
-partial}], scope}` (the keys the n8n board reads are unchanged); `next --dry-run` previews
-without git or state writes. 22/22 self-tests (`check`), real list lints clean, dry run picks
-**B05 auth-and-signup**. Prompts speak in steps and tell the builder to update the living
-diagrams; the board JSON's gate texts name the step and its covered features.
+**Verified this session:** Execute Command from n8n resolves `claude` (2.1.220) and runs with the
+repo as cwd; a throwaway webhook → Execute Command → Code smoke workflow completed end to end
+(then deleted); `pipeline.mjs check` 22/22, `lint` clean, `next --dry-run` → B05.
 
-**For Tristen:** (1) review and merge `build-order-for-pipeline`; (2) re-import the board
-(`n8n import:workflow --input=automation/n8n/astra-build-pipeline.json`) — the n8n MCP server
-refuses `localhost` in its strict SSRF mode, so this session could not update the live board;
-(3) run the app on a device to flip FND-1/FND-4 to Done; (4) skim the Build order for the two
-P1 pull-forwards (LOG-10 in B10, SOC-9 in B24) and the step sizing; (5) the six blockers are
-yours — editing a Blocked step's Status to `Not started` is how a step enters the queue.
+**For Tristen (Gate 1 is waiting on you):**
 
-Next pipeline step after merge: **B05 auth-and-signup** (`node automation/scripts/pipeline.mjs
+1. Open http://localhost:5678 → Astra Build Pipeline → Executions. The B05 execution runs the
+   planner (Fable) first, then pauses at **Gate 1 — plan approval**. Read
+   `docs/feature_plans/auth-and-signup.md` on branch `auth-and-signup`; to approve, open the
+   execution's `gate1_resume_url` (shown in the "Check planner result" node output); to reject,
+   cancel the execution and delete the branch.
+2. After the builder finishes (Summary node), review branch `auth-and-signup`, merge to `main`
+   with `--no-ff`, and flip B05 to Built plus FND-2 / NFR-8 Status in `docs/BUILD_LIST.md` (Gate 2).
+   Then `curl -X POST http://localhost:5678/webhook/astra-build-pipeline` starts B06.
+3. Apply the one-line n8n-mcp fix above so Claude sessions can inspect the board directly.
+4. Still outstanding from before: run the app on a device (flips FND-1/FND-4 to Done); decide the
+   six external blockers when ready.
+
+**Do not** edit files in this working tree while an execution is running: the planner and builder
+run in the same checkout and switch it to the step's branch.
+
+Next pipeline step after B05 merges: **B06 training-math** (`node automation/scripts/pipeline.mjs
 next --dry-run` to confirm).

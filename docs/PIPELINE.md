@@ -12,7 +12,10 @@ and is not covered by (nor a violation of) the app's "no self-operated infrastru
 ## The flow
 
 ```
-n8n manual trigger
+n8n trigger        (either the manual trigger in the n8n UI, or
+                      `curl -X POST http://localhost:5678/webhook/astra-build-pipeline` — the
+                      board carries a Webhook trigger so a shell or Claude session can start a
+                      run; the board must be Active for the webhook URL to exist)
   → next-step        (automation/scripts/pipeline.mjs next: lints the build list, then picks the
                       first `Not started` Build-order step whose dependencies are all Built/Done,
                       skipping Blocked steps; refuses on lint errors, a step In progress, a dirty
@@ -37,8 +40,8 @@ can start. Preview the queue any time with `node automation/scripts/pipeline.mjs
 
 | Piece | Where | Notes |
 |---|---|---|
-| n8n | global npm package (`npm i -g n8n`), data in `~/.n8n` | Start with `n8n start`; UI at http://localhost:5678 |
-| The board | `automation/n8n/astra-build-pipeline.json` | Import: `n8n import:workflow --input=automation/n8n/astra-build-pipeline.json` |
+| n8n | global npm package (`npm i -g n8n`), data in `~/.n8n` | Start with `NODES_EXCLUDE=[]` in the environment (PowerShell: `$env:NODES_EXCLUDE='[]'; n8n start`) — n8n 2.x disables the Execute Command node by default and the board is built on it; without this the board imports but never runs. UI at http://localhost:5678 |
+| The board | `automation/n8n/astra-build-pipeline.json` | Import: `n8n import:workflow --input=automation/n8n/astra-build-pipeline.json`. To update an already-imported board while n8n runs: `PUT /api/v1/workflows/<id>` with `{name, nodes, connections, settings}` from the JSON (header `X-N8N-API-KEY` from `.env`), then `POST /api/v1/workflows/<id>/activate`. Live board id on Tristen's machine: `gvu4dg0NPtND4tGG` |
 | Prompts | `automation/prompts/planner.md`, `builder.md` | `{{ITEM_JSON}}` placeholder is replaced by the wrapper scripts |
 | Wrappers | `automation/scripts/run-planner.cmd`, `run-builder.cmd` | cd to the repo, inject the item into the prompt, call `claude -p` |
 | Step picker | `automation/scripts/pipeline.mjs` | `next [--dry-run]` prints the step as JSON — `{id, feature, branch, phase, status, dependsOn, covers: [{id, feature, phase, status, dod, partial}], scope}`; `lint` validates the build list; `prompt <role>` fills a template; `check` runs its self-tests |
@@ -75,12 +78,20 @@ claude -p <prompt> --output-format json --permission-mode acceptEdits
   cell to `Not started` once the decision is made.
 - The builder never hands over failing tests (CLAUDE.md Testing rules); if it cannot get green, it
   must say so in its final report rather than committing broken work.
+- **Cold-start quirk (n8n 2.x on Windows):** the internal JS task runner that executes Code nodes
+  can take longer than the broker's 15-second grant-token window to spawn, after which it loops on
+  `Task runner connection attempt failed with status code 403` in the n8n log until n8n's
+  heartbeat check restarts it (a few minutes). Until the log shows `Registered runner "JS Task
+  Runner"`, every Code node fails with `Task request timed out after 60 seconds`. Wait for that
+  line before triggering a run; if an execution died this way, just re-trigger.
 
 ## Operator setup (one-time, Tristen)
 
 1. Copy `automation/claude-settings.example.json` to `.claude/settings.json` (grants the n8n MCP
    tools and lets headless runs use git/node/npm without stalling).
-2. `n8n start`, open http://localhost:5678, create the owner account.
+2. `$env:NODES_EXCLUDE='[]'; n8n start` (see the n8n row above for why), open http://localhost:5678,
+   create the owner account. To keep n8n alive after the terminal closes, start it detached:
+   `Start-Process n8n.cmd -ArgumentList start -WindowStyle Hidden` with that env var set.
 3. Settings → n8n API → create an API key; put it in the repo's `.env` as `N8N_API_KEY=<key>`
    (gitignored; `automation/scripts/n8n-mcp.mjs` loads it when Claude starts the MCP server).
    Until then the MCP server runs docs-only (node documentation works; live board management
