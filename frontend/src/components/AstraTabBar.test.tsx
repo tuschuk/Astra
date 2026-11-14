@@ -8,28 +8,35 @@ import { describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
 import { fireEvent, render } from '@testing-library/react-native';
 
-import { AstraTabButton, TABS } from './AstraTabBar';
+import { AstraTabButton, TABS, YOU_TAB } from './AstraTabBar';
 
 describe('TABS config', () => {
-  it('defines exactly the six destinations, in order', () => {
+  it('defines exactly the five bar destinations, in order', () => {
     expect(TABS.map((tab) => tab.name)).toEqual([
       'index',
       'marketplace',
       'workout',
       'communities',
       'library',
-      'you',
     ]);
   });
 
-  it('gives every destination a unique href', () => {
-    const hrefs = TABS.map((tab) => tab.href);
-    expect(new Set(hrefs).size).toBe(TABS.length);
+  it('gives every destination a unique href, including You', () => {
+    const hrefs = [...TABS.map((tab) => tab.href), YOU_TAB.href];
+    expect(new Set(hrefs).size).toBe(TABS.length + 1);
   });
 
-  it('keeps Workout in the center slot', () => {
+  it('keeps Workout dead center of the five', () => {
     // The raised red action must sit mid-bar; moving it breaks the layout.
     expect(TABS[2].name).toBe('workout');
+    expect(TABS.length % 2).toBe(1);
+  });
+
+  it('keeps You out of the bar but fully configured', () => {
+    // You lives in the top-right ProfileButton, not the bottom bar.
+    expect(TABS.some((tab) => tab.name === 'you')).toBe(false);
+    expect(YOU_TAB.name).toBe('you');
+    expect(YOU_TAB.href).toBe('/you');
   });
 });
 

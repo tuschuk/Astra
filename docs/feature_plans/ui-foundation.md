@@ -78,6 +78,11 @@ placeholders keep the dark bg color).
 - **Verified:** `tsc --noEmit` clean, 22/22 Jest tests, `expo lint` clean, `expo export` succeeds
   for both android and ios; no color/rgba literal exists outside `src/theme`.
 
+- **Navigation revision (Tristen, Nov 14, 2026):** five bottom tabs with Workout dead center;
+  You moved to a floating top-right ProfileButton (hidden TabList trigger registers the route;
+  a TabTrigger-by-name drives the button). Supersedes the six-tab layout below and resolves the
+  bottom-nav ≤5 guideline deviation noted in `docs/ui_ux_audit.md`.
+
 ## Grilling decisions (settled before code)
 
 - **"UI/UX max pro" skill is not installed on this machine** — substituted Anthropic's

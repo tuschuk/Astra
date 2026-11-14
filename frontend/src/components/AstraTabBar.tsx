@@ -1,12 +1,12 @@
 /**
  * AstraTabBar — the custom bottom tab bar (build-list item FND-4).
  *
- * Why custom: the native iOS tab bar overflows a sixth destination into a
- * "More" menu. Built on expo-router's headless tabs (TabList/TabTrigger),
- * this bar renders all six destinations on both platforms:
- * Home · Market · [Workout] · Groups · Library · You, with Workout as the
- * elevated red circular action in the center — the app's single boldest
- * element, per the design plan.
+ * Built on expo-router's headless tabs (TabList/TabTrigger), this bar renders
+ * five destinations identically on both platforms:
+ * Home · Market · [Workout] · Groups · Library, with Workout as the red
+ * circular action dead center — the app's single boldest element. The sixth
+ * destination (You) is reached through the top-right ProfileButton; its route
+ * is registered here via a hidden trigger.
  *
  * Styling follows the nav recipe in docs/styling_guide.md: pure black bar,
  * red hairline top border, uppercase tracked labels, accent color on the
@@ -27,7 +27,7 @@ export interface TabConfig {
   name: string;
   /** Destination path for the trigger (checked against generated typed routes). */
   href: Href;
-  /** Short label under the icon (space is tight with six tabs). */
+  /** Short label under the icon (or the accessible name for icon-only controls). */
   label: string;
   /** Ionicons name when idle. */
   icon: keyof typeof Ionicons.glyphMap;
@@ -36,8 +36,10 @@ export interface TabConfig {
 }
 
 /**
- * The six destinations in display order (FND-4). `index` is the Home route
- * (expo-router's name for src/app/(tabs)/index.tsx). Workout sits center.
+ * The five bottom-bar destinations in display order (FND-4). `index` is the
+ * Home route (expo-router's name for src/app/(tabs)/index.tsx). Workout sits
+ * dead center. The sixth destination, You, is not in the bar — it lives as
+ * the floating top-right ProfileButton (see YOU_TAB below).
  */
 export const TABS: readonly TabConfig[] = [
   { name: 'index', href: '/', label: 'Home', icon: 'home-outline', iconActive: 'home' },
@@ -63,8 +65,21 @@ export const TABS: readonly TabConfig[] = [
     iconActive: 'people',
   },
   { name: 'library', href: '/library', label: 'Library', icon: 'book-outline', iconActive: 'book' },
-  { name: 'you', href: '/you', label: 'You', icon: 'person-outline', iconActive: 'person' },
 ] as const;
+
+/**
+ * The You/profile destination. Registered in the tab navigator through a
+ * hidden trigger inside the TabList (headless-tabs requirement: only TabList
+ * triggers define routes), and reached through the ProfileButton pinned to
+ * the top-right of every tab screen.
+ */
+export const YOU_TAB: TabConfig = {
+  name: 'you',
+  href: '/you',
+  label: 'Your profile',
+  icon: 'person-outline',
+  iconActive: 'person',
+};
 
 type TabButtonProps = TabTriggerSlotProps & {
   tab: TabConfig;
@@ -74,7 +89,7 @@ type TabButtonProps = TabTriggerSlotProps & {
  * A single tab button. Rendered as the child of a `TabTrigger asChild`, so
  * expo-router injects the press handlers, ref and `isFocused`; this component
  * only decides how the tab looks in each state. The Workout tab renders as
- * the raised red circle; the other five are icon-over-label items.
+ * the raised red circle; the other four are icon-over-label items.
  */
 export function AstraTabButton({ tab, isFocused = false, ref, ...pressableProps }: TabButtonProps) {
   const isCenter = tab.name === 'workout';
@@ -141,6 +156,9 @@ export function AstraTabBar() {
             <AstraTabButton tab={tab} />
           </TabTrigger>
         ))}
+        {/* Registers the You route without showing it in the bar; the
+            visible control is the top-right ProfileButton. */}
+        <TabTrigger name={YOU_TAB.name} href={YOU_TAB.href} style={styles.hiddenTrigger} />
       </View>
     </TabList>
   );
@@ -196,5 +214,8 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.7,
+  },
+  hiddenTrigger: {
+    display: 'none',
   },
 });

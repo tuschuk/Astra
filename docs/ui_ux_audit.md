@@ -27,9 +27,9 @@ independently validates the direction: Fitness/Gym apps → "Vibrant & Block-bas
 
 ## Accepted deviations
 
-- **Six bottom-nav destinations** (guideline: ≤5): mandated by the PRD (FND-4). Mitigations: the
-  center Workout action carries no label chrome, labels are short (Market, Groups), and the
-  custom bar avoids the iOS "More" overflow entirely.
+- ~~**Six bottom-nav destinations** (guideline: ≤5)~~ **Resolved** (founder decision, Nov 14,
+  2026): the bar now holds five tabs with Workout dead center, and You moved to a persistent
+  top-right profile button — the layout now meets the ≤5 guideline outright.
 - **Outline icons idle / filled icons active** in the tab bar: a deliberate state signal, not a
   mixed-style violation (one family — Ionicons — throughout).
 
