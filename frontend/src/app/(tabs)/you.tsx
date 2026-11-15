@@ -1,100 +1,65 @@
 /**
- * You — the profile (YOU-1..YOU-7): photo, name, bio, follower counts,
- * posts, history, PRs and settings. This foundation renders the profile
- * skeleton — avatar ring, counts row, and the PRs section label — in its
- * final layout with empty values.
+ * You — the signed-in lifter's own profile (YOU-1, YOU-2, YOU-3; B25).
  *
- * The gear button in the header opens Settings (B15), where the lifter picks
- * kg or lb, sees which email is signed in, and signs out — the email and
- * sign-out moved there from this screen, so the account has one home.
+ * What it shows: the whole profile (`ProfileView`) for the signed-in lifter — photo, name, bio,
+ * Followers / Following counts, an Edit profile button, and the Posts / History / PRs tabs. Your
+ * own History and PRs come from the phone, so they work offline; your name, bio and photo are
+ * remembered on the phone too.
+ *
+ * The gear button at the top opens Settings (B15), where the lifter picks kg or lb, sees which
+ * email is signed in, and signs out — the account's one home.
  */
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
+import { useAuth } from '@/auth/AuthProvider';
+import { ProfileView } from '@/components/profile/ProfileView';
 import { Screen } from '@/components/Screen';
-import { EmptyState } from '@/components/ui/EmptyState';
-import { Body, Heading, SectionLabel } from '@/components/ui/Text';
-import { colors, layout, radii, spacing, type } from '@/theme';
-
-/** The two follow counts shown on every profile (YOU-1). */
-const COUNTS = [
-  { label: 'Followers', value: 0 },
-  { label: 'Following', value: 0 },
-] as const;
+import { Body } from '@/components/ui/Text';
+import { colors, layout, radii, spacing } from '@/theme';
 
 /** Size of the round gear button: the platform's minimum touch target. */
 const GEAR_SIZE = layout.minTouchTarget;
 
 export default function YouScreen() {
   const router = useRouter();
+  const { session } = useAuth();
+  const me = session?.user.id ?? null;
 
-  return (
-    <Screen>
-      <View style={styles.header}>
-        <View style={styles.avatar}>
-          {/* Decorative avatar placeholder — the heading names the section. */}
-          <Ionicons
-            name="person"
-            size={36}
-            color={colors.muted}
-            accessibilityElementsHidden
-            importantForAccessibility="no"
-          />
-        </View>
-        <View style={styles.identity}>
-          <Heading size="section">Your profile</Heading>
-        </View>
-        <Pressable
-          onPress={() => router.push('/settings')}
-          accessibilityRole="button"
-          accessibilityLabel="Settings"
-          style={({ pressed }) => [styles.gear, pressed && styles.pressed]}
-        >
-          <Ionicons name="settings-outline" size={20} color={colors.muted} />
-        </Pressable>
-      </View>
-
-      <View style={styles.counts}>
-        {COUNTS.map((count) => (
-          <View key={count.label} style={styles.count}>
-            <Body style={styles.countValue}>{String(count.value)}</Body>
-            <SectionLabel size="small">{count.label}</SectionLabel>
-          </View>
-        ))}
-      </View>
-
-      <SectionLabel style={styles.sectionLabel}>Personal records</SectionLabel>
-      <EmptyState
-        icon="trophy-outline"
-        message="PRs are caught automatically while you log — true 1RMs, rep maxes and estimated 1RMs, each listed here by exercise."
-      />
-    </Screen>
+  const gear = (
+    <View style={styles.topBar}>
+      <Pressable
+        onPress={() => router.push('/settings')}
+        accessibilityRole="button"
+        accessibilityLabel="Settings"
+        style={({ pressed }) => [styles.gear, pressed && styles.pressed]}
+      >
+        <Ionicons name="settings-outline" size={20} color={colors.muted} />
+      </Pressable>
+    </View>
   );
+
+  // Only reachable for a moment while signing out (the guard then leaves this screen).
+  if (!me) {
+    return (
+      <Screen>
+        {gear}
+        <Body variant="muted">Signing out…</Body>
+      </Screen>
+    );
+  }
+  return <ProfileView profileId={me} topBar={gear} />;
 }
 
 const styles = StyleSheet.create({
-  header: {
+  topBar: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.lg,
+    marginBottom: spacing.md,
     // Leaves room on the right for the floating profile button every tab screen shows.
     paddingRight: GEAR_SIZE + spacing.sm,
-  },
-  avatar: {
-    width: 72,
-    height: 72,
-    borderRadius: radii.round,
-    borderWidth: 2,
-    borderColor: colors.accentBorder,
-    backgroundColor: colors.surfaceDeep,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  identity: {
-    flex: 1,
-    gap: spacing.xs,
+    justifyContent: 'flex-end',
   },
   gear: {
     width: GEAR_SIZE,
@@ -108,27 +73,5 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.7,
-  },
-  counts: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.xl,
-  },
-  count: {
-    flex: 1,
-    alignItems: 'center',
-    gap: spacing.xs,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radii.lg,
-    paddingVertical: spacing.md,
-  },
-  countValue: {
-    ...type.statValue,
-  },
-  sectionLabel: {
-    marginTop: spacing.xxl,
-    marginBottom: spacing.sm,
   },
 });

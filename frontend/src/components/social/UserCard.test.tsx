@@ -10,9 +10,20 @@ import { FOLLOW_REFUSED, type FollowResult, type LifterResult } from '@/social/f
 
 import { UserCard } from './UserCard';
 
-const lifter: LifterResult = { id: 'u2', username: 'big_sam', displayName: 'Big Sam', following: false };
+const lifter: LifterResult = { id: 'u2', username: 'big_sam', displayName: 'Big Sam', avatarPath: null, following: false };
 
 describe('UserCard', () => {
+  it('opens the lifter’s profile when the card is tapped, without following (B25)', async () => {
+    const onOpenProfile = jest.fn();
+    const onSetFollowing = jest.fn(async (): Promise<FollowResult> => ({ ok: true }));
+    await render(<UserCard lifter={lifter} onSetFollowing={onSetFollowing} onOpenProfile={onOpenProfile} />);
+    await fireEvent.press(screen.getByLabelText('Open Big Sam’s profile'));
+    expect(onOpenProfile).toHaveBeenCalledTimes(1);
+    expect(onSetFollowing).not.toHaveBeenCalled();
+    // No photo set → the letter avatar.
+    expect(screen.getByTestId('letter-avatar', { includeHiddenElements: true })).toBeTruthy();
+  });
+
   it('shows the name and handle, and follows then unfollows', async () => {
     const onSetFollowing = jest.fn(async (_next: boolean): Promise<FollowResult> => ({ ok: true }));
     await render(<UserCard lifter={lifter} onSetFollowing={onSetFollowing} />);

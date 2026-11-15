@@ -25,6 +25,8 @@ export const SEARCH_LIMIT = 20;
 /** One person in the search results, and whether the lifter already follows them. */
 export interface LifterResult extends PersonName {
   id: string;
+  /** Their photo's path in the avatars bucket, or null (B25). */
+  avatarPath: string | null;
   following: boolean;
 }
 
@@ -78,11 +80,16 @@ export async function searchLifters(client: SupabaseClient, me: string, query: s
 
   // People I blocked are left out by the query itself, so they never use up one of the
   // SEARCH_LIMIT places. Ids are uuids from the server, so the list needs no escaping.
-  let request = client.from('profiles').select('id,username,display_name').or(searchFilter(term)).neq('id', me);
+  let request = client.from('profiles').select('id,username,display_name,avatar_url').or(searchFilter(term)).neq('id', me);
   if (blockedIds.length > 0) request = request.not('id', 'in', `(${blockedIds.join(',')})`);
   const found = await request.order('username', { ascending: true }).limit(SEARCH_LIMIT);
   throwIfError(found.error, 'Search failed');
-  const people = (found.data ?? []) as { id: string; username: string | null; display_name: string | null }[];
+  const people = (found.data ?? []) as {
+    id: string;
+    username: string | null;
+    display_name: string | null;
+    avatar_url?: string | null;
+  }[];
   if (people.length === 0) return [];
 
   const follows = await client
@@ -100,6 +107,7 @@ export async function searchLifters(client: SupabaseClient, me: string, query: s
     id: p.id,
     username: p.username,
     displayName: p.display_name,
+    avatarPath: p.avatar_url ?? null,
     following: followingIds.has(p.id),
   }));
 }

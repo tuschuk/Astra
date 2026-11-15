@@ -18,6 +18,7 @@ import { OTHER_USER_ID, USER_ID } from '@/test-utils/workoutFixtures';
 
 import { startActiveWorkout, type SetInput } from './activeWorkout';
 import {
+  allCurrentPrs,
   currentPrs,
   improvedRecords,
   personalRecordId,
@@ -69,6 +70,34 @@ async function books(db: SqlDriver, exerciseId: string, userId = USER_ID) {
 async function recordCount(db: SqlDriver): Promise<number> {
   return (await db.getFirstAsync<{ n: number }>('select count(*) as n from personal_records'))?.n ?? 0;
 }
+
+describe('allCurrentPrs (B25) — the own profile’s PR list', () => {
+  it('lists exactly the stored records, grouped per exercise by name, in record-book order', async () => {
+    const db = await createPreparedDb();
+    await finishWorkout(db, 10, [
+      [SQUAT, [kg(1, 180), kg(5, 150)]],
+      [BENCH, [kg(5, 100), kg(1, 120)]],
+    ]);
+    await finishWorkout(db, 11, [[SQUAT, [kg(3, 165)]]], OTHER_USER_ID);
+
+    const groups = await allCurrentPrs(db, USER_ID);
+    expect(groups.map((g) => g.exerciseName)).toEqual(['Bench Press', 'Squat']);
+    // "PRs equal B13's records": every stored row of the user, nothing more, nothing recomputed.
+    for (const group of groups) {
+      const stored = await currentPrs(db, USER_ID, group.exerciseId);
+      expect(group.records).toEqual(stored.map((r) => ({ id: r.id, kind: r.kind, reps: r.reps, value_kg: r.value_kg })));
+    }
+    const total = groups.reduce((n, g) => n + g.records.length, 0);
+    const mine = await db.getFirstAsync<{ n: number }>('select count(*) as n from personal_records where user_id = ?', [USER_ID]);
+    expect(total).toBe(mine?.n);
+    expect(groups[1].records.map((r) => r.kind)).toEqual(['true1rm', 'e1rm', 'repMax']);
+  });
+
+  it('is empty for a lifter with no records', async () => {
+    const db = await createPreparedDb();
+    expect(await allCurrentPrs(db, USER_ID)).toEqual([]);
+  });
+});
 
 describe('personalRecordId', () => {
   it('is the same for the same book and different for every other book', () => {

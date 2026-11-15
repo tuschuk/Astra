@@ -37,6 +37,8 @@ import {
 } from '@/db/dao';
 import type { SqlExecutor } from '@/db/driver';
 import { uuidv5 } from '@/library/uuidv5';
+
+import { groupPrs, type ExercisePrs } from './prList';
 import { enqueueTx } from '@/sync/outbox';
 
 /**
@@ -71,6 +73,38 @@ export async function currentPrs(db: SqlExecutor, userId: string, exerciseId: st
     [userId, exerciseId],
   );
   return rows.map((r) => fromSqlRow('personal_records', r)).sort(compareRecordBooks);
+}
+
+/**
+ * Every current record the lifter holds, one group per exercise (YOU-3, B25) — the own profile's
+ * PR list, read from the phone so it works offline. Names come from the phone's exercise list
+ * (the library plus the lifter's own customs); exercises are ordered by name and each one's
+ * records in the usual record-book order (`groupPrs`, shared with another lifter's list so both
+ * look the same). These are exactly the rows `improvedRecords` / `recomputeRecords` wrote — nothing
+ * is recomputed here.
+ */
+export async function allCurrentPrs(db: SqlExecutor, userId: string): Promise<ExercisePrs[]> {
+  const rows = await db.getAllAsync<{
+    id: string;
+    exercise_id: string;
+    kind: PersonalRecordRow['kind'];
+    reps: number | null;
+    value_kg: number;
+    exercise_name: string | null;
+  }>(
+    `select pr.id, pr.exercise_id, pr.kind, pr.reps, pr.value_kg, e.name as exercise_name
+     from personal_records pr
+     left join exercises e on e.id = pr.exercise_id and (e.owner_id is null or e.owner_id = ?)
+     where pr.user_id = ?`,
+    [userId, userId],
+  );
+  return groupPrs(
+    rows.map((r) => ({
+      exerciseId: r.exercise_id,
+      exerciseName: typeof r.exercise_name === 'string' ? r.exercise_name : null,
+      record: { id: r.id, kind: r.kind, reps: r.reps ?? null, value_kg: Number(r.value_kg) },
+    })),
+  );
 }
 
 /** The parts of a set the PR math reads, plus its id (the proof a record points at). */

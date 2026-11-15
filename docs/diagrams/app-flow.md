@@ -33,7 +33,7 @@ flowchart TD
   Tabs --> Home["Home (app/(tabs)/index.tsx, B20, SOC-1)<br/>FlatList of PostCards: followed lifters' + my own posts, newest first —<br/>workout posts, and (B22) progress-pic / PR photo posts: the photo is an RN Image of<br/>/storage/v1/object/authenticated/post-images/path with the viewer's Bearer token + apikey<br/>(postImageSource; 'Photo unavailable' panel on error); my own progress pic: 'Only you can see this post';<br/>reloads page 1 on every focus; pull-to-refresh; end of list → next page (20, keyset);<br/>card footer (B23, SOC-4/5): Upvote · net score · Downvote (no Downvote at all when flair.upvotesOnly,<br/>e.g. Physique Check) — tap = optimistic score ± voteDelta, revert + message on refusal;<br/>'n comments' / 'Comment' button;<br/>header 'Share a photo' (B22) + 'Find lifters' buttons;<br/>under 'Your feed' (B24): order chips Latest | Hot (SOC-11) and a scrolling flair row All + one chip per<br/>device flairs row (SOC-9) — shown once the remembered choice AND the flair list are read; first feed read waits for both;<br/>a remembered flair not in the flair list reads as All; tap = save + reload page 1 ('Loading your feed…'<br/>whenever the list on screen was loaded for another order / flair);<br/>empty: filtered to a flair → 'No Form Check posts yet.' + Show all posts;<br/>follow nobody → Find lifters + Log a workout, follow people who haven't posted → Find lifters;<br/>request failed / offline → 'The feed needs a connection' + Retry (nothing queued)"]
   Home <-->|"social/feedPrefs.ts (B24): loadFeedPrefs (cached per user; damaged → Latest + All),<br/>saveFeedPrefs on every chip tap (fire-and-forget)"| FeedPrefsStore[("kv-store key astra.social.feedPrefs.userId<br/>JSON v1: sort latest | hot + flairId (null = All);<br/>this phone only, not synced, one entry per account")]
   Home -->|"readFlairs on focus (B24): flair chips, by position"| LocalDB
-  Home -->|"Find lifters: router.push('/find-lifters')"| FindScr["Find lifters (app/find-lifters.tsx, B20, SOC-7 part)<br/>search box (≥ 2 letters, 300 ms after typing stops);<br/>UserCards (letter avatar, name, @handle, Follow / Following) — never me,<br/>never someone I blocked; no match / no connection messages; Back"]
+  Home -->|"Find lifters: router.push('/find-lifters')"| FindScr["Find lifters (app/find-lifters.tsx, B20, SOC-7 part)<br/>search box (≥ 2 letters, 300 ms after typing stops);<br/>UserCards (Avatar, name, @handle, FollowButton) — never me,<br/>never someone I blocked; no match / no connection messages; Back"]
   Home -->|"Log a workout (empty feed)"| Workout
   FindScr -->|"Back: router.back (Home reloads on focus)"| Home
   Home -->|"Share a photo: router.push('/new-post')"| NewPostScr["Share a photo (app/new-post.tsx, B22: SOC-2, NFR-4, NFR-5)<br/>type chips Progress pic | PR photo; privacy line (progress pics private for now,<br/>PR photos public) + the kind's flair name from the device flairs rows;<br/>Choose photo → expo-image-picker library (images, quality 0.9 → iOS HEIC re-encoded to JPEG);<br/>preview; checkPostImage (social/mediaLimits.ts: ≤ 10 MiB, jpeg / png / webp) at pick time —<br/>over limit → 'This photo is 12.4 MB — the limit is 10 MB…', Post disabled;<br/>no flairs synced → Post disabled + a line why; Post · Cancel"]
@@ -50,8 +50,10 @@ flowchart TD
     FeedQ["feed.ts: feedAuthorIds = me + follows.followee_id where follower_id = me;<br/>loadFeedPage(client, me, authors, sort, flairId, after) — B24: Latest → from posts, Hot → from the<br/>post_hot_scores view (same select + hot_score); .select(FEED_SELECT: kind, image_path, visibility,<br/>flair (id, name, upvotes_only — B23), author:profiles!posts_user_id_fkey (hint required through the view, B24),<br/>workout (plain left embed since B22) → entries → exercise name, sets, my_vote:votes(value) — B23)<br/>.in(user_id, authors) .eq(my_vote.user_id, me) [.eq(flair_id, flairId) — B24, SOC-9]<br/>Latest: [.or(beforeCursorFilter)] order created_at desc, id desc;<br/>Hot: [.or(beforeHotCursorFilter: hot_score lt, or eq + id lt)] order hot_score desc, id desc; limit 20;<br/>the bookmark is tagged latest | hot — one from the other order is refused;<br/>then (B23) loadPostScores: post_scores.select(post_id, score, comment_count).in(post_id, page ids);<br/>toFeedPost: photo post → kind + imagePath; workout post → sort entries + sets, weight → number;<br/>+ score, commentCount (0 without a scores row), myVote (+1 / −1 / null);<br/>a workout post whose workout RLS withheld (null) is dropped; appendPage drops repeats"]
     VoteQ["votes.ts (B23): castVote → votes.upsert(onConflict post_id,user_id);<br/>clearVote → delete where post_id + user_id = me; never throw:<br/>P0001 (upvote-only trigger) → 'This post takes upvotes only.', anything else → 'didn't go through';<br/>voteDelta / nextVote: the card's optimistic arithmetic (the tally itself stays on the server)"]
     CommentQ["comments.ts (B23): loadComments → comments.select(…, author:profiles) eq post_id<br/>order created_at, id asc, limit 200; addComment → commentBodyError first<br/>(commentLimits.ts: 500 chars, not blank — mirrors the CHECK), then insert(…).select().single()"]
-    FollowQ["follows.ts: searchLifters (sanitized ilike on username / display_name,<br/>not me, not in my blocks, limit 20, + which I follow);<br/>follow = insert follows row (duplicate = ok; RLS refusal → 'You can't follow this lifter.');<br/>unfollow = delete my row"]
+    FollowQ["follows.ts: searchLifters (sanitized ilike on username / display_name,<br/>not me, not in my blocks, limit 20, + which I follow);<br/>follow = insert follows row (duplicate = ok; RLS refusal → 'You can't follow this lifter.');<br/>unfollow = delete my row; results carry avatar_url (B25)"]
+    ProfileQ["profile.ts (B25): loadProfileRow (profiles row) · loadProfileHeader = row + rpc follow_counts<br/>+ (others) my follows row → viewerFollows; updateProfile → profiles.update eq id = me<br/>(23505 username → 'That username is taken.', 23514 → the box's message, else the calm line);<br/>loadWorkoutHistory → workouts.select(HISTORY_SELECT) eq user_id, ended_at not null,<br/>[.or(beforeStartedFilter)] order started_at, id desc, limit 20;<br/>loadProfilePrs → personal_records.select(…, exercise:exercises(name)) eq user_id → groupPrs"]
   end
+  ProfileQ -->|"select profiles / follows / workouts / personal_records, rpc follow_counts, update my profile (RLS decides)"| DB
   Home --> FeedQ
   FindScr --> FollowQ
   FeedQ -->|"supabase-js select as the signed-in user"| DB
@@ -63,7 +65,19 @@ flowchart TD
   Tabs --> Workout["Workout tab (on focus: re-read astra.db)<br/>no draft: Start empty workout (program start disabled, B35)<br/>draft on phone: Resume workout / Discard (asks first)<br/>Tool Kit tiles: 1RM / RPE / %1RM / Plates / Timer open the Tool Kit at that tool (B16, B17)<br/>Past workouts: newest 100 finished, date + duration + counts"]
   Tabs --> Communities["Communities<br/>Teams and Gyms<br/>today: two sections, each an empty state"]
   Tabs --> Library["Library<br/>browse every launch exercise as a card"]
-  Tabs -->|profile button| You["You<br/>profile skeleton: avatar ring, follow counts, PRs label (empty values)<br/>gear button → Settings"]
+  Tabs -->|profile button| You["You (app/(tabs)/you.tsx, B25: YOU-1/2/3)<br/>ProfileView for me + gear button → Settings"]
+  You --> ProfileView
+  Home -->|"card author tap (B25): router.push('/profile/[id]')"| ProfileScr["Profile (app/profile/[id].tsx, B25)<br/>ProfileView for the route id (my own id → my own view); Back"]
+  FindScr -->|"card tap (B25): router.push('/profile/[id]')"| ProfileScr
+  ProfileScr --> ProfileView
+  ProfileView["ProfileView (components/profile, B25)<br/>header: Avatar (public avatars URL, else letter) · display name · @username · bio<br/>(own null → 'Add a bio…', other null → 'No bio yet.') · Followers / Following counts ('—' while unknown);<br/>own: Edit profile · other: FollowButton (optimistic; refusal flips back + line) → header re-read so counts match;<br/>header offline → 'Counts and posts need a connection.' + Retry; no profile row → 'This lifter isn't available.';<br/>tabs Posts | History | PRs (ChoiceChips), reloaded on focus, Posts / History page at the list end:<br/>Posts = PostCards (vote, comments) · History own = WorkoutListItem → workout/[id], other = not tappable rows<br/>· PRs = one card per exercise, formatPrLine in the viewer's unit"]
+  ProfileView -->|"own header: saveOwnProfile on load; read first at mount (offline identity)"| OwnProfileStore[("kv-store key astra.social.ownProfile.userId<br/>JSON v1: username, displayName, bio, avatarPath<br/>(no counts); per account, not synced")]
+  ProfileView -->|"own History: listPastWorkouts(db, me, 20, before-cursor) · own PRs: allCurrentPrs (workout/prs.ts + prList.groupPrs)"| LocalDB
+  ProfileView --> ProfileQ
+  ProfileView -->|"Posts: loadFeedPage(client, me, [profileId], 'latest', null, after)"| FeedQ
+  ProfileView -->|"Edit profile: router.push('/edit-profile')"| EditProfileScr["Edit profile (app/edit-profile.tsx, B25, YOU-1)<br/>loadProfileRow fills Display name / Username / Bio; Change photo → expo-image-picker<br/>(square crop, quality 0.8) → checkAvatarImage (≤ 5 MiB, jpeg / png / webp; refusal line, Save disabled);<br/>Save: checkProfileText (profileLimits: 50 / 300 / username pattern; a set username can't be cleared)<br/>→ uploadAvatar to avatars/me/uuid.ext (new name each time) → updateProfile(avatar_url = path)<br/>→ deleteAvatar(old) best effort (or the new one if the update failed) → saveOwnProfile → Back;<br/>offline → 'Editing your profile needs a connection.' + Retry; nothing queued"]
+  EditProfileScr --> ProfileQ
+  EditProfileScr -->|"FileSystem.uploadAsync POST /storage/v1/object/avatars/path (Bearer + apikey);<br/>DELETE same address for the old photo"| DB
   You -->|"gear: router.push('/settings')"| SettingsScr["Settings (app/settings.tsx, B15, YOU-4 part)<br/>Units: kg | lb segmented toggle (radio roles for screen readers)<br/>Account: signed-in email + Sign out<br/>Back (or /you); no Notifications / Privacy until B47 / B26"]
   SettingsScr -->|"tap kg / lb: unitStore.setUnit"| UnitStore
   subgraph UnitsMod["Units (src/settings, B15)"]
@@ -427,7 +441,8 @@ flowchart TD
    row), the workout's title, its "58 min · 3 exercises · 12 sets" line, up to four exercises
    with every set printed exactly as the logger prints it in the *viewer's* kg / lb (supersets
    grouped, drop sets on one row; "+ n more exercises" after four; another lifter's custom
-   exercise reads "Custom exercise"), and the workout's notes. Cards can't be tapped yet. The
+   exercise reads "Custom exercise"), and the workout's notes. Tapping the author opens their
+   profile (B25, item 18); the rest of the card isn't tappable yet. The
    **Find lifters** button opens a search by name or username; each result has **Follow** /
    **Following** (one-way, no approval; it flips at once and flips back with "You can't follow
    this lifter." if a block stops it). Posts are made at the Post step after Finish (item 13).
@@ -456,7 +471,22 @@ flowchart TD
    Check* posts yet." with **Show all posts**. Both choices are remembered on this phone for this
    account and come back after the app is closed; a remembered flair that no longer exists reads
    as All.
-18. Everything else is a placeholder that renders its final layout with inert controls (Start
+18. **Profiles (B25, YOU-1, YOU-2, YOU-3, SOC-7).** The **You** tab is the lifter's own profile:
+   photo (or letter badge), name, @username, bio, and **Followers / Following** counts (every
+   follow, counted on the server), with **Edit profile** and the Settings gear. Tapping a post
+   card's author on Home, or a card on Find lifters, opens that lifter's profile with a
+   **Follow / Following** button — after a follow the counts update to match. Under the header,
+   **Posts** (their posts as feed cards), **History** (every finished workout, newest first,
+   paging back to the first; your own open the saved workout) and **PRs** (current records per
+   exercise, e.g. "1RM 140 kg · e1RM 151.7 kg · 5RM 130 kg"). Only what the server lets you see
+   comes back: someone's private workouts, and the PRs they prove, never show. Your own history
+   and PRs come from the phone and work offline, and your own name, bio and photo are remembered
+   on the phone; counts and posts need a connection (a dash and a Retry line without one).
+   **Edit profile** changes the name, username (3–30 letters, numbers or underscores; once set it
+   can be changed, not removed; "That username is taken." if someone has it), bio (300
+   characters) and photo (square crop, up to 5 MB, JPEG / PNG / WebP; refused at pick time
+   otherwise). Saving needs a connection.
+19. Everything else is a placeholder that renders its final layout with inert controls (Start
    from a program, Marketplace, Communities).
 
 ## Data path today
@@ -711,7 +741,24 @@ flowchart TD
   never throws, in-memory cache per user). The fake social client grows a computed
   `post_hot_scores` (same formula, test-only), numeric comparison for number cells, and the
   PGRST201 refusal of an un-hinted `profiles(` embed on the view; feed fixtures carry `flair_id`.
-- **Still unwired:** the Library reads the bundled catalog, not `astra.db`; posts can't be
+- **Profiles (B25).** Another lifter's profile is read online only, as the viewer (never mirrored):
+  `social/profile.ts` — `loadProfileRow`, `loadProfileHeader` (row + `rpc('follow_counts')` +
+  my follows row), `loadWorkoutHistory` (keyset on `(started_at, id)` via `beforeStartedFilter`,
+  20 a page), `loadProfilePrs`, and `updateProfile` (maps 23505 / 23514 to field messages). The
+  own profile reads its History from SQLite (`listPastWorkouts` gained a `before` cursor; the
+  Workout tab still lists 100 with none) and its PRs with `allCurrentPrs` — both sides group PRs
+  through `workout/prList.ts` (`groupPrs`, record order from `@training-math`). Posts reuse
+  `loadFeedPage` with a one-author list. The own identity is warm-cached in the kv-store
+  (`social/ownProfileCache.ts`, per user id, no counts). Avatars: `social/avatars.ts` (path
+  `<me>/<uuid>.<ext>`, public URL, streamed upload, best-effort DELETE), the cap and check in
+  `social/mediaLimits.ts` (`MAX_AVATAR_BYTES`, `checkAvatarImage`), text rules in
+  `social/profileLimits.ts` (mirrors the B02 CHECKs). `FEED_SELECT`'s author embed and
+  `searchLifters` carry `avatar_url`. `profile/[id]` and `edit-profile` are declared in the root
+  layout's signed-in guard. The fake social client grows `workouts` / `personal_records` tables,
+  `update` with the profiles unique / CHECK refusals, `not(col, 'is', null)` and
+  `rpc('follow_counts')`.
+- **Still unwired:** follower / following counts don't open lists; another lifter's workout rows
+  on a profile aren't tappable; there is no "remove photo"; the Library reads the bundled catalog, not `astra.db`; posts can't be
   edited, deleted or re-offered from old workouts (photo posts can't be deleted either, so their
   storage objects are never removed); progress pics have no visibility choice (B26); feed cards don't
   open a detail screen; comments can't be deleted from the app (the RLS allows your own) and
@@ -725,8 +772,12 @@ flowchart TD
 - `components/ProfileButton.tsx` is the floating route to You.
 - `components/ui/` holds Button, Card, EmptyState, Text, TextField (labeled input) and FormError
   (red alert line), all styled from `theme/tokens.ts`.
-- `components/social/` (B20) holds PostCard (one feed post — a workout, or since B22 a photo; since B23 with the vote / comments footer), UserCard (a person + Follow /
-  Following, optimistic with revert) and LetterAvatar (the initial badge both use).
+- `components/social/` (B20) holds PostCard (one feed post — a workout, or since B22 a photo; since B23 with the vote / comments footer; since B25 a tappable author), UserCard (a person + FollowButton; since B25 tappable to their profile),
+  FollowButton (B25: Follow / Following, optimistic with revert, `onSettled` after an accepted
+  change), Avatar (B25: the public-bucket photo, else LetterAvatar — the initial badge),
+  and `usePostPhotoSource` (B25: the viewer-token photo fetch Home and profiles share).
+- `components/profile/ProfileView.tsx` (B25) is the whole profile body, used by the You tab and
+  `profile/[id]`.
 - `components/auth/` holds SignInForm, SignUpForm, BirthdateInput and their shared layout styles.
   The route files in `app/(auth)/` only wire them to the router.
 - `components/workout/` holds EntryCard (one exercise in the logger), ExercisePicker (the

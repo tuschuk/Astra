@@ -3,7 +3,33 @@
  */
 import { describe, expect, it } from '@jest/globals';
 
-import { checkPostImage, extensionFor, MAX_POST_IMAGE_BYTES, mimeTypeForPath } from './mediaLimits';
+import {
+  checkAvatarImage,
+  checkPostImage,
+  extensionFor,
+  MAX_AVATAR_BYTES,
+  MAX_POST_IMAGE_BYTES,
+  mimeTypeForPath,
+} from './mediaLimits';
+
+describe('checkAvatarImage (B25)', () => {
+  it('is 5 MiB — the avatars bucket’s file_size_limit (5242880) in the B25 migration', () => {
+    expect(MAX_AVATAR_BYTES).toBe(5242880);
+  });
+
+  it('accepts exactly the cap and refuses one byte over, with the avatar wording', () => {
+    expect(checkAvatarImage({ byteSize: MAX_AVATAR_BYTES, mimeType: 'image/png' })).toEqual({ ok: true, mimeType: 'image/png' });
+    expect(checkAvatarImage({ byteSize: MAX_AVATAR_BYTES + 1, mimeType: 'image/jpeg' })).toEqual({
+      ok: false,
+      message: 'This photo is 5.1 MB — profile photos can be up to 5 MB. Choose a smaller photo.',
+    });
+  });
+
+  it('refuses HEIC and an unreadable size, like post photos', () => {
+    expect(checkAvatarImage({ byteSize: 10, mimeType: 'image/heic' }).ok).toBe(false);
+    expect(checkAvatarImage({ byteSize: null, mimeType: 'image/jpeg' }).ok).toBe(false);
+  });
+});
 
 describe('checkPostImage', () => {
   it('is 10 MiB — the same number as the bucket’s file_size_limit (10485760)', () => {

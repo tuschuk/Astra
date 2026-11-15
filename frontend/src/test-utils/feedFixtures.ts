@@ -5,9 +5,17 @@
  */
 import type { FeedSet, RawFeedPost } from '@/social/feed';
 
-/** A profile row as the server stores it. */
-export function profile(id: string, username: string | null, displayName: string | null = null) {
-  return { id, username, display_name: displayName };
+/**
+ * A profile row as the server stores it. `extra` (B25) adds the profile-only columns a test needs
+ * (`bio`, `avatar_url`); left out, the row has just the three name columns the feed reads.
+ */
+export function profile(
+  id: string,
+  username: string | null,
+  displayName: string | null = null,
+  extra: { bio?: string | null; avatar_url?: string | null } = {},
+) {
+  return { id, username, display_name: displayName, ...extra };
 }
 
 let counter = 0;

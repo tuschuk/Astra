@@ -6,7 +6,8 @@
  * Following button. You never appear in your own results, nor does anyone you've blocked.
  *
  * What the user can do: type to search (results update a moment after typing stops), and
- * follow or unfollow anyone in the results (SOC-7: one-way, no approval). Back returns to
+ * follow or unfollow anyone in the results (SOC-7: one-way, no approval), and tap a card to open
+ * that lifter's profile (B25). Back returns to
  * Home, which reloads so a newly followed lifter's posts show up.
  *
  * Searching needs a connection — people are looked up on the server; with no signal the
@@ -111,6 +112,7 @@ export default function FindLiftersScreen() {
               key={lifter.id}
               lifter={lifter}
               onSetFollowing={(next) => (next ? follow(client, me, lifter.id) : unfollow(client, me, lifter.id))}
+              onOpenProfile={() => router.push({ pathname: '/profile/[id]', params: { id: lifter.id } })}
             />
           ))
         : null}

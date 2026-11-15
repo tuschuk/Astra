@@ -50,7 +50,15 @@ function megabytes(bytes: number): string {
  * wording lives in one place. An unknown size is refused too: the phone can't promise the server
  * will take it, and a post that can never upload is worse than a clear "try another photo".
  */
-export function checkPostImage({ byteSize, mimeType }: PostImageFacts): PostImageCheck {
+export function checkPostImage(facts: PostImageFacts): PostImageCheck {
+  return checkImage(facts, MAX_POST_IMAGE_BYTES, 'the limit is');
+}
+
+/**
+ * The shared check behind `checkPostImage` and `checkAvatarImage`: format first, then a readable
+ * size, then the cap. `limitPhrase` is the words before the cap in the over-limit sentence.
+ */
+function checkImage({ byteSize, mimeType }: PostImageFacts, maxBytes: number, limitPhrase: string): PostImageCheck {
   const format = POST_IMAGE_MIME_TYPES.find((m) => m === mimeType?.toLowerCase());
   if (!format) {
     return { ok: false, message: 'This photo’s format isn’t supported — choose a JPEG, PNG or WebP photo.' };
@@ -58,13 +66,30 @@ export function checkPostImage({ byteSize, mimeType }: PostImageFacts): PostImag
   if (byteSize === null || !Number.isFinite(byteSize) || byteSize < 0) {
     return { ok: false, message: 'This photo’s size couldn’t be read — try choosing it again, or pick another.' };
   }
-  if (byteSize > MAX_POST_IMAGE_BYTES) {
+  if (byteSize > maxBytes) {
     return {
       ok: false,
-      message: `This photo is ${megabytes(byteSize)} — the limit is ${MAX_POST_IMAGE_BYTES / (1024 * 1024)} MB. Choose a smaller photo.`,
+      message: `This photo is ${megabytes(byteSize)} — ${limitPhrase} ${maxBytes / (1024 * 1024)} MB. Choose a smaller photo.`,
     };
   }
   return { ok: true, mimeType: format };
+}
+
+/**
+ * The biggest profile photo a lifter may upload: 5 MiB (B25) — the `avatars` bucket's
+ * `file_size_limit` in `…_profile_reads_and_avatars.sql`. Change the two together. Smaller than a
+ * post photo's cap because an avatar is only ever shown small.
+ */
+export const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+
+/**
+ * Decides whether a picked profile photo may be uploaded (B25): the same formats as post photos
+ * (the avatars bucket allows the same three), at most `MAX_AVATAR_BYTES`. Same answer shape and
+ * wording style as `checkPostImage`, so the Edit profile screen shows the refusal under the
+ * picture and keeps Save disabled.
+ */
+export function checkAvatarImage(facts: PostImageFacts): PostImageCheck {
+  return checkImage(facts, MAX_AVATAR_BYTES, 'profile photos can be up to');
 }
 
 /** The file ending a photo of this format is saved under ("jpg", "png", "webp"). */

@@ -292,7 +292,7 @@ describe('loadFeedPage — order and flair (B24)', () => {
   });
 
   it('names the author relationship, which the live server needs through the view', async () => {
-    expect(FEED_SELECT).toContain('author:profiles!posts_user_id_fkey(id,username,display_name)');
+    expect(FEED_SELECT).toContain('author:profiles!posts_user_id_fkey(id,username,display_name,avatar_url)');
     // The fake reproduces the live refusal of the bare name on the view.
     const { client } = seeded();
     const { error } = await client.from(HOT_SOURCE).select('id,author:profiles(id)');
@@ -320,14 +320,19 @@ describe('toFeedPost', () => {
     expect(post.workout.entries.map((e) => e.exerciseName)).toEqual(['Squat', null]);
     expect(post.workout.entries[0].sets.map((s) => s.reps)).toEqual([5, 3]);
     expect(post.workout.entries[0].sets[1].weight_kg).toBe(102.5);
-    expect(post.author).toEqual({ id: ME, username: 'me_lifts', displayName: null });
+    expect(post.author).toEqual({ id: ME, username: 'me_lifts', displayName: null, avatarPath: null });
+  });
+
+  it('B25: carries the author’s photo path for the avatar', () => {
+    const raw = rawPost({ id: 'p1', author: { ...me, avatar_url: `${ME}/face.jpg` }, createdAt: '2026-11-15T08:00:00.000Z' });
+    expect(toFeedPost(raw)?.author.avatarPath).toBe(`${ME}/face.jpg`);
   });
 
   it('fills in a missing flair or author instead of crashing', () => {
     const raw = { ...rawPost({ id: 'p1', author: me, createdAt: '2026-11-15T08:00:00.000Z' }), flair: null, author: null };
     const post = toFeedPost(raw);
     expect(post?.flair.name).toBe('Post');
-    expect(post?.author).toEqual({ id: '', username: null, displayName: null });
+    expect(post?.author).toEqual({ id: '', username: null, displayName: null, avatarPath: null });
   });
 
   it('B22: shapes a photo post (kind, photo path, visibility, flair) and drops one with no photo', () => {
@@ -339,7 +344,7 @@ describe('toFeedPost', () => {
       imagePath: `${ME}/pic.jpg`,
       visibility: 'private',
       flair: { id: 'physique-check', name: 'Physique Check', upvotesOnly: true },
-      author: { id: ME, username: 'me_lifts', displayName: null },
+      author: { id: ME, username: 'me_lifts', displayName: null, avatarPath: null },
       score: 0,
       commentCount: 0,
       myVote: null,

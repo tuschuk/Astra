@@ -12,7 +12,7 @@
  * progress pic or PR photo, and open Find lifters to search for people and follow them. On each
  * card (B23): upvote or downvote (no downvote on upvote-only posts such as Physique Check), and
  * open the post's comments. Votes go straight to the server; the card shows the change at once
- * and takes it back if refused.
+ * and takes it back if refused. Tapping a card's author opens their profile (B25).
  *
  * Order and flair (B24): under "Your feed", Latest | Hot picks newest first or the server's
  * vote ranking (SOC-11), and a row of flair chips — All plus one per flair on the phone — shows
@@ -39,6 +39,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useAuth } from '@/auth/AuthProvider';
 import { Screen } from '@/components/Screen';
 import { PostCard } from '@/components/social/PostCard';
+import { usePostPhotoSource } from '@/components/social/usePostPhotoSource';
 import { ChoiceChips, type ChoiceOption } from '@/components/toolkit/ChoiceChips';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -46,10 +47,9 @@ import { Body, Heading, SectionLabel } from '@/components/ui/Text';
 import type { FlairRow } from '@/db/dao';
 import { readFlairs } from '@/db/flairs';
 import { useAppDatabase } from '@/db/useAppDatabase';
-import { getSupabase, readSupabaseConfig, type SupabaseConfig } from '@/lib/supabase';
+import { getSupabase } from '@/lib/supabase';
 import { appendPage, feedAuthorIds, loadFeedPage, type FeedCursor, type FeedPost } from '@/social/feed';
 import { getCachedFeedPrefs, loadFeedPrefs, saveFeedPrefs, type FeedPrefs, type FeedSort } from '@/social/feedPrefs';
-import { postImageSource } from '@/social/postImages';
 import { castVote, clearVote, type VoteResult, type VoteValue } from '@/social/votes';
 import { colors, spacing } from '@/theme';
 
@@ -85,18 +85,7 @@ export default function HomeScreen() {
   const me = session?.user.id ?? null;
   const client = useMemo(() => getSupabase(), []);
   // How photo posts' pictures are fetched (B22): as this viewer, so the server's rules decide.
-  const accessToken = session?.access_token ?? null;
-  const photoSource = useMemo(() => {
-    let config: SupabaseConfig | null = null;
-    try {
-      config = readSupabaseConfig();
-    } catch {
-      // Only reachable unconfigured (Jest): in the app a missing address already failed
-      // `getSupabase()` above, loudly. Photos then show the plain panel instead of crashing.
-      config = null;
-    }
-    return (imagePath: string) => (config && accessToken ? postImageSource(config, imagePath, accessToken) : null);
-  }, [accessToken]);
+  const photoSource = usePostPhotoSource();
 
   const [state, setState] = useState<FeedState>({ status: 'loading' });
   const [refreshing, setRefreshing] = useState(false);
@@ -256,6 +245,12 @@ export default function HomeScreen() {
     [router],
   );
 
+  /** A card's author header (B25): that lifter's profile. */
+  const openProfile = useCallback(
+    (userId: string) => router.push({ pathname: '/profile/[id]', params: { id: userId } }),
+    [router],
+  );
+
   const header = (
     <View style={styles.header}>
       <Heading size="display">Astra</Heading>
@@ -362,7 +357,14 @@ export default function HomeScreen() {
         data={state.posts}
         keyExtractor={(post) => post.id}
         renderItem={({ item }) => (
-          <PostCard post={item} viewerId={me} photoSource={photoSource} onVote={vote} onOpenComments={openComments} />
+          <PostCard
+            post={item}
+            viewerId={me}
+            photoSource={photoSource}
+            onVote={vote}
+            onOpenComments={openComments}
+            onOpenProfile={openProfile}
+          />
         )}
         ListHeaderComponent={header}
         ListEmptyComponent={empty}
