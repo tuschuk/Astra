@@ -5,7 +5,9 @@
  * A sync is "push, then pull": upload the user's changes first so the
  * download that follows already reflects them. The pull runs even if the push
  * failed — one row the server keeps refusing must not stop the device from
- * ever receiving updates.
+ * ever receiving updates. One exception (B14): deletions made on other
+ * devices are read and applied BEFORE the push, so this phone never uploads
+ * an edit of a workout that no longer exists.
  *
  * When a sync happens (all without the user doing anything — NFR-1):
  *   - when the engine starts (the app opened with someone signed in, or they
@@ -25,7 +27,7 @@ import type { SqlDriver } from '@/db/driver';
 import { onLocalWrite } from '@/db/dao';
 import type { AppStateLike } from '@/lib/supabase';
 
-import { pullChanges, type PullResult } from './pull';
+import { pullChanges, pullTombstonePass, type PullResult } from './pull';
 import { pushOutbox, type PushResult } from './push';
 import type { SyncTransport } from './transport';
 
@@ -158,6 +160,10 @@ export class SyncEngine {
     const { db, transport, userId } = this.options;
     const result: SyncRunResult = { push: null, pull: null };
     try {
+      // Deletions from other devices first (B14): otherwise an unsent edit of a workout someone
+      // deleted elsewhere would be uploaded — re-creating it, empty, on the server — before the
+      // download below could tell this phone it was gone.
+      await pullTombstonePass(db, transport, userId);
       result.push = await pushOutbox(db, transport);
     } catch (error) {
       result.pushError = error;

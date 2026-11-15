@@ -75,9 +75,10 @@ export default function RootLayout() {
 
 /**
  * The router stack, split into the two guarded halves of the app:
- * - (tabs), active-workout (the logger), workout/[id] (a saved workout)
- *   and exercise-history/[exerciseId] (one exercise's past sessions and
- *   PRs): the signed-in app — only with a session.
+ * - (tabs), active-workout (the logger), workout/[id] (a saved workout),
+ *   edit-workout/[id] (changing a saved workout, B14) and
+ *   exercise-history/[exerciseId] (one exercise's past sessions and PRs):
+ *   the signed-in app — only with a session.
  * - (auth): sign-in / sign-up — only without one.
  * When the session appears or disappears, expo-router moves the user to
  * whichever half is now allowed, so screens never navigate on sign-in/out.
@@ -120,6 +121,7 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
           {/* The logger and the saved-workout view fill the screen, above the tab bar. */}
           <Stack.Screen name="active-workout" />
           <Stack.Screen name="workout/[id]" />
+          <Stack.Screen name="edit-workout/[id]" />
           <Stack.Screen name="exercise-history/[exerciseId]" />
         </Stack.Protected>
         <Stack.Protected guard={!signedIn}>

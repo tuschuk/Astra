@@ -160,3 +160,21 @@ describe('SyncEngine.start (automatic triggers)', () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('SyncEngine — deletions from other devices (B14)', () => {
+  it('reads tombstones BEFORE uploading, so an unsent edit cannot re-create a workout deleted elsewhere', async () => {
+    const { db, server, engine } = await setup();
+    await writeLocal(db, 'workouts', [WORKOUT]);
+    await engine.syncNow();
+    expect(server.tables.workouts.has(WORKOUT.id)).toBe(true);
+
+    // Offline here: the title is edited. Meanwhile another device deletes the workout.
+    await writeLocal(db, 'workouts', [{ ...WORKOUT, title: 'renamed offline' }]);
+    await server.deleteRows('workouts', [WORKOUT.id]);
+
+    await engine.syncNow();
+    expect(server.tables.workouts.has(WORKOUT.id)).toBe(false);
+    expect(await db.getFirstAsync('select count(*) as n from workouts')).toEqual({ n: 0 });
+    expect(await outboxSize(db)).toBe(0);
+  });
+});

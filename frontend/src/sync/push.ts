@@ -31,8 +31,11 @@
  * row twice updates it to the same values. Exactly-once is the primary key's
  * doing, not this code's.
  *
- * A row in the outbox that no longer exists on the device (possible once
- * deletes arrive in B14) uploads nothing; its lines are simply cleared.
+ * Deletes (B14) are sent in a phase of their own BEFORE all of the above —
+ * see `pushOutbox` for why that order matters. A row with upload lines that
+ * no longer exists on the device (it was deleted after being edited) uploads
+ * nothing; those lines are simply cleared, and its delete line has already
+ * told the server.
  */
 import type { SqlDriver } from '@/db/driver';
 import { getRowsByIds, rootWorkoutIds, SYNC_ORDER, type RowByTable, type SyncedTable } from '@/db/dao';
@@ -60,24 +63,57 @@ export const PUSH_BATCH_SIZE = 500;
  */
 export const PUSH_PASSES: readonly SyncedTable[] = [...SYNC_ORDER, 'workouts'];
 
+/**
+ * The delete phase's table order: children first (the reverse of SYNC_ORDER).
+ * Mostly a tidiness rule — the server cascades a parent's children anyway —
+ * but it means a personal record's delete always lands before anything that
+ * could re-create it.
+ */
+export const DELETE_PASSES: readonly SyncedTable[] = [...SYNC_ORDER].reverse();
+
+/** Most ids in one delete request (they travel in the URL, like the pull's id lists). */
+export const DELETE_BATCH_SIZE = 100;
+
 /** What one push did (returned to the engine; the tests check it). */
 export interface PushResult {
   /** Rows the server accepted per table, counting both workout passes. */
   pushed: Record<SyncedTable, number>;
+  /** Rows deleted on the server per table (B14) — explicit deletes only, not cascades. */
+  deleted: Record<SyncedTable, number>;
+}
+
+/** A per-table counter starting at zero. */
+function zeroCounts(): Record<SyncedTable, number> {
+  return { exercises: 0, workouts: 0, workout_exercises: 0, sets: 0, personal_records: 0 };
 }
 
 /**
- * Uploads everything waiting in the outbox (see the file comment). Throws the
+ * Sends everything waiting in the outbox (see the file comment). Throws the
  * transport's error if a batch fails; batches already accepted stay cleared.
+ *
+ * Deletes go FIRST (B14), before any upload. That order is what makes
+ * lowering a personal record work: the phone queues "delete record R" then
+ * "upload record R" (the new, lower value). Sent in that order, the server
+ * removes the old row and inserts the new one — its keep-best rule, which only
+ * guards updates, never sees a lowered update to refuse. Upload first and the
+ * keep-best rule would quietly keep the old, wrong record.
  */
 export async function pushOutbox(db: SqlDriver, transport: SyncTransport): Promise<PushResult> {
-  const pushed: Record<SyncedTable, number> = {
-    exercises: 0,
-    workouts: 0,
-    workout_exercises: 0,
-    sets: 0,
-    personal_records: 0,
-  };
+  const pushed = zeroCounts();
+  const deleted = zeroCounts();
+
+  for (const tbl of DELETE_PASSES) {
+    const pending = await pendingRows(db, tbl, 'delete');
+    for (let start = 0; start < pending.length; start += DELETE_BATCH_SIZE) {
+      const batch = pending.slice(start, start + DELETE_BATCH_SIZE);
+      await transport.deleteRows(
+        tbl,
+        batch.map((p) => p.rowId),
+      );
+      await acknowledge(db, tbl, batch, [], 'delete');
+      deleted[tbl] += batch.length;
+    }
+  }
 
   for (const tbl of PUSH_PASSES) {
     // Marks are read BEFORE the rows, so the rows sent are at least as new as
@@ -100,5 +136,5 @@ export async function pushOutbox(db: SqlDriver, transport: SyncTransport): Promi
     }
   }
 
-  return { pushed };
+  return { pushed, deleted };
 }

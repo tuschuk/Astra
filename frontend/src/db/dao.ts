@@ -4,9 +4,11 @@
  * Rows get written in four ways, each separate on purpose. Every feature that
  * changes training data goes through one of them, never through raw SQL:
  *
- *   - `writeLocal` — the USER changed something synced (a custom exercise,
- *     later an edit to a past workout). The row is saved AND recorded in the
- *     outbox so the sync engine pushes it, in one transaction.
+ *   - `writeLocal` / `writeLocalRowsTx` — the USER changed something synced
+ *     (a custom exercise, an edit to a past workout). The row is saved AND
+ *     recorded in the outbox so the sync engine pushes it, in one
+ *     transaction. `deleteLocalRowsTx` is its delete counterpart (B14): the
+ *     row is removed and a `delete` line queued for the server.
  *   - `writeLocalTree` — the same, for a whole workout at once (workout +
  *     entries + sets) in ONE transaction. Finishing a workout uses it: the
  *     workout and everything in it are queued together or not at all, so a
@@ -334,20 +336,83 @@ export async function writeLocal<T extends SyncedTable>(
     throw new Error('Library exercises (owner_id null) cannot be written locally; they sync down from the server');
   }
   const now = options.now ?? new Date().toISOString();
+  await db.withTransactionAsync((tx) => writeLocalRowsTx(tx, tbl, rows, now));
+  notifyLocalWrite(db, [tbl]);
+}
+
+/**
+ * The heart of `writeLocal`, inside an already-open transaction: stamps each
+ * row `updated_at = now`, saves it, queues it for upload, and applies the
+ * touch-the-root rule (an entry's or set's workout is re-stamped and queued
+ * too). The one home of that rule for single-table writes — editing a
+ * finished workout (B14, `workout/editWorkout.ts`) writes through here so its
+ * changes reach other devices exactly like any other synced change.
+ *
+ * The caller must tell the listeners afterwards (`notifyLocalWrite`), once its
+ * transaction has committed.
+ */
+export async function writeLocalRowsTx<T extends SyncedTable>(
+  tx: SqlExecutor,
+  tbl: T,
+  rows: readonly RowByTable[T][],
+  now: string,
+): Promise<void> {
+  if (rows.length === 0) return;
   const stamped = rows.map((r) => ({ ...r, updated_at: now }));
+  await upsertRowsTx(tx, tbl, stamped);
+  for (const row of stamped) await enqueueTx(tx, tbl, row.id, now);
+  await touchRootsTx(tx, await rootWorkoutIds(tx, tbl, stamped), now);
+}
 
-  await db.withTransactionAsync(async (tx) => {
-    await upsertRowsTx(tx, tbl, stamped);
-    for (const row of stamped) await enqueueTx(tx, tbl, row.id, now);
+/** Re-stamps the given workouts and queues them for upload (the touch-the-root rule). */
+async function touchRootsTx(tx: SqlExecutor, workoutIds: readonly string[], now: string): Promise<void> {
+  for (const workoutId of workoutIds) {
+    await tx.runAsync('update workouts set updated_at = ? where id = ?', [now, workoutId]);
+    await enqueueTx(tx, 'workouts', workoutId, now);
+  }
+}
 
-    const rootIds = await rootWorkoutIds(tx, tbl, stamped);
-    for (const workoutId of rootIds) {
-      await tx.runAsync('update workouts set updated_at = ? where id = ?', [now, workoutId]);
-      await enqueueTx(tx, 'workouts', workoutId, now);
-    }
-  });
+/**
+ * Deletes SYNCED rows (from a finished workout, or a personal record) on the
+ * device and queues the deletion for the server — B14's counterpart of
+ * `writeLocalRowsTx`, inside an already-open transaction.
+ *
+ * What happens:
+ *   1. the parent workouts of any entries / sets are looked up (before the
+ *      rows are gone);
+ *   2. the rows are deleted — the device's foreign keys take a workout's
+ *      entries and sets, or an entry's sets, with it;
+ *   3. one `delete` outbox line per given row. Only the given rows: the
+ *      server's foreign keys cascade the same way, so queuing the children too
+ *      would be redundant traffic. Any upload lines the children still had
+ *      are retired harmlessly by the push (their rows are gone, so nothing is
+ *      sent — see push.ts);
+ *   4. the parent workouts that still exist are re-stamped and queued (the
+ *      touch-the-root rule), so other devices re-download them and drop what
+ *      was removed (see pull.ts).
+ *
+ * The caller must tell the listeners afterwards (`notifyLocalWrite`).
+ */
+export async function deleteLocalRowsTx(
+  tx: SqlExecutor,
+  tbl: SyncedTable,
+  ids: readonly string[],
+  now: string,
+): Promise<void> {
+  if (ids.length === 0) return;
+  const roots = tbl === 'workout_exercises' || tbl === 'sets' ? await workoutIdsOf(tx, tbl, ids) : [];
+  await tx.runAsync(`delete from ${tbl} where id in (${placeholders(ids.length)})`, ids);
+  for (const id of ids) await enqueueTx(tx, tbl, id, now, 'delete');
+  await touchRootsTx(tx, roots, now);
+}
 
-  listeners.get(db)?.forEach((listener) => listener(tbl));
+/**
+ * Tells the `onLocalWrite` listeners (the sync engine) that the user changed
+ * these tables. Call it only after the transaction that saved the change has
+ * committed.
+ */
+export function notifyLocalWrite(db: SqlDriver, tables: readonly SyncedTable[]): void {
+  for (const tbl of tables) listeners.get(db)?.forEach((listener) => listener(tbl));
 }
 
 /** The three tables that make up one workout: the workout, its exercise slots, their sets. */
@@ -404,7 +469,7 @@ export async function writeLocalTree(
     }
   });
 
-  for (const tbl of tables) listeners.get(db)?.forEach((listener) => listener(tbl));
+  notifyLocalWrite(db, tables);
 }
 
 /**
@@ -468,8 +533,9 @@ export async function writeDraftRows<T extends WorkoutTreeTable>(
  * entry removes its sets (the device's foreign keys cascade). Purely local:
  * a draft was never uploaded, so there is nothing to tell the server.
  *
- * Throws for rows of a finished workout — deleting synced data needs B14's
- * delete-sync, without which the server copy would come back on the next pull.
+ * Throws for rows of a finished workout — synced data is deleted through
+ * `deleteLocalRowsTx`, which also tells the server; without that, the server
+ * copy would come back on the next pull.
  */
 export async function deleteDraftRowsTx(
   tx: SqlExecutor,
@@ -477,24 +543,20 @@ export async function deleteDraftRowsTx(
   ids: readonly string[],
 ): Promise<void> {
   if (ids.length === 0) return;
-  let workoutIds: string[];
-  if (tbl === 'workouts') workoutIds = [...ids];
-  else if (tbl === 'workout_exercises') {
-    const found = await tx.getAllAsync<{ workout_id: string }>(
-      `select distinct workout_id from workout_exercises where id in (${placeholders(ids.length)})`,
-      ids,
-    );
-    workoutIds = found.map((r) => r.workout_id);
-  } else {
-    const found = await tx.getAllAsync<{ workout_id: string }>(
-      `select distinct e.workout_id from sets s join workout_exercises e on e.id = s.workout_exercise_id ` +
-        `where s.id in (${placeholders(ids.length)})`,
-      ids,
-    );
-    workoutIds = found.map((r) => r.workout_id);
-  }
+  const workoutIds = tbl === 'workouts' ? [...ids] : await workoutIdsOf(tx, tbl, ids);
   await assertDraftWorkoutsTx(tx, workoutIds);
   await tx.runAsync(`delete from ${tbl} where id in (${placeholders(ids.length)})`, ids);
+}
+
+/** The workouts holding the given entries or sets, as stored right now on the device. */
+async function workoutIdsOf(tx: SqlExecutor, tbl: 'workout_exercises' | 'sets', ids: readonly string[]): Promise<string[]> {
+  const sql =
+    tbl === 'workout_exercises'
+      ? `select distinct workout_id from workout_exercises where id in (${placeholders(ids.length)})`
+      : `select distinct e.workout_id from sets s join workout_exercises e on e.id = s.workout_exercise_id ` +
+        `where s.id in (${placeholders(ids.length)})`;
+  const found = await tx.getAllAsync<{ workout_id: string }>(sql, ids);
+  return found.map((r) => r.workout_id);
 }
 
 /**

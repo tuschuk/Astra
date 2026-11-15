@@ -21,7 +21,7 @@ function recordingClient(responses: { data?: unknown[]; error?: { message: strin
       const calls: Call[] = [['from', table]];
       requests.push(calls);
       const builder: Record<string, unknown> = {};
-      for (const method of ['select', 'eq', 'or', 'order', 'limit', 'in', 'range', 'upsert']) {
+      for (const method of ['select', 'eq', 'gt', 'or', 'order', 'limit', 'in', 'range', 'upsert', 'delete']) {
         builder[method] = (...args: unknown[]) => {
           calls.push([method, ...args]);
           return builder;
@@ -46,6 +46,41 @@ describe('afterCursorFilter', () => {
 });
 
 describe('createSupabaseTransport', () => {
+  it('B14: deletes by id, and skips the request for an empty list', async () => {
+    const { client, requests } = recordingClient();
+    const transport = createSupabaseTransport(client);
+    await transport.deleteRows('workouts', ['w1', 'w2']);
+    await transport.deleteRows('sets', []);
+    expect(requests).toEqual([
+      [
+        ['from', 'workouts'],
+        ['delete'],
+        ['in', 'id', ['w1', 'w2']],
+      ],
+    ]);
+  });
+
+  it('B14: throws when the server refuses a delete', async () => {
+    const { client } = recordingClient([{ error: { message: 'permission denied' } }]);
+    await expect(createSupabaseTransport(client).deleteRows('workouts', ['w1'])).rejects.toThrow(
+      'Delete from workouts failed: permission denied',
+    );
+  });
+
+  it('B14: reads the user’s tombstones after an id, in id order', async () => {
+    const tombstone = { id: 7, tbl: 'workouts', row_id: 'w1', deleted_at: '2026-11-15T00:00:00+00:00' };
+    const { client, requests } = recordingClient([{ data: [tombstone] }]);
+    expect(await createSupabaseTransport(client).pullTombstones('u1', 3, 500)).toEqual([tombstone]);
+    expect(requests[0]).toEqual([
+      ['from', 'sync_tombstones'],
+      ['select', 'id,tbl,row_id,deleted_at'],
+      ['eq', 'user_id', 'u1'],
+      ['gt', 'id', 3],
+      ['order', 'id', { ascending: true }],
+      ['limit', 500],
+    ]);
+  });
+
   it('uploads as an upsert on id', async () => {
     const { client, requests } = recordingClient();
     await createSupabaseTransport(client).upsert('workouts', [{ id: 'w1' } as never]);

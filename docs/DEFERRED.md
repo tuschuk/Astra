@@ -166,9 +166,9 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     `maxLength` makes that near-unreachable. Surface it on the card if it is ever seen.
   - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.
 - B13 exercise-history-and-prs follow-ups (`exercise-history-and-prs`):
-  - **B14 must rework the keep-best trigger** (`private.keep_best_personal_record`) before it
-    can lower a record on edit/delete, and add a forced-recompute mode to `improvedRecords`. Also
-    decide ties there: the trigger currently lets an equal value replace `source_set_id`.
+  - ~~B14 must rework the keep-best trigger~~ — resolved by B14 without touching the trigger:
+    demotions are uploaded as delete-then-insert, `recomputeRecords` is the forced recompute,
+    and ties stay last-write-wins (see `edit-delete-workouts.md`).
   - **Device check (Tristen):** the last-time panel's PR line and History link at phone width;
     the history screen; the "PR · …" badge on the saved workout after a finish.
   - **e1RM copy:** shown as "e1RM" (an estimate by name) with no on-screen source. Decide whether
@@ -177,4 +177,28 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - Small duplication to extract when a third user appears: distinct exercise ids of a workout,
     `back()`, and the set-row JSX shared by the saved-workout and history screens.
   - History screen has no paging (newest 50) and no tap-through to a session's workout.
+  - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.
+- B14 edit-delete-workouts follow-ups (`edit-delete-workouts`):
+  - **Device check (Tristen):** saved workout → Edit → remove a set / add one / change the title
+    → Done shows it; Delete on the saved workout and on the edit screen (confirm dialog, lands on
+    the Workout tab); delete the workout holding a PR → the next best set wears the badge; with
+    two devices (or the dashboard), the deletion and the demoted `personal_records` row reach
+    Supabase and the other device drops the workout. Layout of the Edit / Delete row and the
+    edit screen's header at phone width is unverified.
+  - **Inline editing of a logged set's numbers** — today a mistyped set is removed and logged
+    again (`EntryCard` has no value editor; the store's `updateSet` is ready for one).
+  - **Resurrection window** (plan deviation 1): a tombstone written between the engine's
+    pre-push tombstone read and its push can still let a pending edit re-insert a deleted
+    workout. A server guard (e.g. a `BEFORE INSERT` trigger on `workouts` that quietly drops an
+    id already in `sync_tombstones`) would close it; deferred until it is seen.
+  - **A pending exercise-slot edit re-creates a slot another device removed** (edits-win,
+    as planned) — the slot comes back empty on the server. Revisit if seen.
+  - **Multi-device demotion race** (plan, accepted): device B's offline improvement of a book
+    can be overwritten by device A's delete+insert demotion; self-heals on B's next finish of
+    that exercise.
+  - **Tombstone retention:** `sync_tombstones` grows forever (rows are tiny). Add a cleanup job
+    only when its size is measured to matter.
+  - Small duplication to extract later: the "exercise ids of these slots / sets" lookups in
+    `editWorkout.ts` mirror `workoutIdsOf` in `dao.ts`; the 500-id chunk constant exists in both
+    `sync/outbox.ts` and `sync/pull.ts`.
   - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.

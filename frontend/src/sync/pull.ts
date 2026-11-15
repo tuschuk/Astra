@@ -14,10 +14,21 @@
  * rule in db/dao.ts), a changed workout means "re-download this whole
  * workout", and one bookmark finds every change.
  *
+ * Deletions (B14) arrive two ways, because a download cannot see a row that
+ * no longer exists:
+ *   - inside a workout: a removed set or exercise re-stamps its workout, so
+ *     the whole workout is re-downloaded and anything the server's copy no
+ *     longer holds is removed here (`reconcileTrees`);
+ *   - a whole workout, or a personal record: the server keeps a "tombstone"
+ *     note for each, and a last pass reads them after its own bookmark and
+ *     deletes the local copies (`applyTombstone`).
+ *
  * Three safety rules:
- *   - A row with an unsent local change is never overwritten. The user's
- *     offline edit wins on the device until it is uploaded; after that the
- *     server's copy (now including the edit) flows back normally.
+ *   - A row with an unsent local change is never overwritten — or removed.
+ *     The user's offline edit wins on the device until it is uploaded; after
+ *     that the server's copy (now including the edit) flows back normally.
+ *     (One deliberate exception: a workout deleted on another device; see
+ *     `applyTombstone`.)
  *   - Each pull starts PULL_OVERLAP_MS before the bookmark. The server stamps
  *     a row when its transaction starts, so a slow save can appear slightly
  *     "behind" a bookmark that already moved past; re-reading the margin
@@ -25,11 +36,11 @@
  *   - Entry and set downloads ask for at most CHILD_CHUNK_SIZE ids per request,
  *     so a large page never builds a request URL the server rejects.
  */
-import type { SqlDriver, SqlExecutor } from '@/db/driver';
+import { placeholders, type SqlDriver, type SqlExecutor } from '@/db/driver';
 import { upsertRowsTx, type RowByTable, type SyncedTable } from '@/db/dao';
 
-import { rowsWithPendingChanges } from './outbox';
-import type { PullCursor, SyncTransport } from './transport';
+import { dropLinesTx, rowsWithPendingChanges } from './outbox';
+import type { PullCursor, SyncTransport, TombstoneRow } from './transport';
 
 /** Rows per downloaded page. */
 export const PULL_PAGE_SIZE = 500;
@@ -62,9 +73,7 @@ export async function readCursor(db: SqlDriver, key: CursorKey): Promise<PullCur
  */
 export function rewind(cursor: PullCursor | null): PullCursor | null {
   if (!cursor) return null;
-  // Postgres sends microseconds (…:00.123456+00:00); not every JavaScript
-  // engine parses more than three fraction digits, so trim to milliseconds.
-  const time = Date.parse(cursor.updated_at.replace(/(\.\d{3})\d+/, '$1'));
+  const time = toMs(cursor.updated_at);
   if (Number.isNaN(time)) return null;
   return { updated_at: new Date(time - PULL_OVERLAP_MS).toISOString(), id: MIN_ID };
 }
@@ -121,6 +130,10 @@ export interface PullResult {
   workout_exercises: number;
   sets: number;
   personal_records: number;
+  /** Local slots and sets removed because the server's copy of their workout no longer has them (B14). */
+  removed: number;
+  /** Tombstones that deleted something on the device (B14). */
+  tombstones: number;
 }
 
 /**
@@ -185,10 +198,200 @@ async function pullWorkoutTrees(
       result.workouts += await applyRows(tx, 'workouts', workouts);
       result.workout_exercises += await applyRows(tx, 'workout_exercises', entries);
       result.sets += await applyRows(tx, 'sets', sets);
+      result.removed += await reconcileTrees(
+        tx,
+        workouts.map((w) => w.id),
+        entries,
+        sets,
+      );
       await writeCursor(tx, CURSOR_KEYS.workouts, next);
     });
     if (workouts.length < PULL_PAGE_SIZE) return;
     after = next;
+  }
+}
+
+/**
+ * Runs a query that selects an `id` column filtered by one `in (?)` list, for any number of
+ * `values`: `sql` must contain the literal text `(?)` exactly once, which is replaced by the
+ * right number of placeholders for each piece of at most ID_CHUNK values (so a long list never
+ * exceeds SQLite's limit on bound values). Returns every id found, across all pieces.
+ */
+async function idsWhereIn(tx: SqlExecutor, sql: string, values: readonly string[]): Promise<string[]> {
+  const out: string[] = [];
+  for (const part of chunk(values, ID_CHUNK)) {
+    const rows = await tx.getAllAsync<{ id: string }>(sql.replace('(?)', `(${placeholders(part.length)})`), part);
+    out.push(...rows.map((r) => r.id));
+  }
+  return out;
+}
+
+/**
+ * Deletes rows of `tbl` by id on the device only (no outbox line — the server already deleted
+ * them), in bound-value-safe pieces.
+ */
+async function deleteIds(tx: SqlExecutor, tbl: SyncedTable, ids: readonly string[]): Promise<void> {
+  for (const part of chunk(ids, ID_CHUNK)) {
+    await tx.runAsync(`delete from ${tbl} where id in (${placeholders(part.length)})`, part);
+  }
+}
+
+/** Most ids bound into one local statement here. */
+const ID_CHUNK = 500;
+
+/**
+ * Makes the device's copy of each just-downloaded workout hold exactly what the server's does
+ * (B14): any local exercise slot or set of those workouts that the server's complete lists no
+ * longer contain was removed on another device, so it is removed here too.
+ *
+ * Why this is enough to carry in-workout deletions: removing a set or an exercise re-stamps its
+ * workout (the touch-the-root rule), so every other device re-downloads that whole workout and
+ * lands here. No per-set tombstones are needed.
+ *
+ * The guard: a row with unsent local changes is never removed — a set logged or edited offline
+ * against that workout must survive until it is uploaded. (A set's slot being removed still
+ * takes the set with it, through the device's foreign keys: there is nothing left to upload it
+ * into.)
+ *
+ * Personal records citing a removed set are dropped too, with any unsent lines of theirs — the
+ * server already cascaded them away, and uploading one would be refused for its missing set,
+ * forever, jamming the queue. Returns how many local rows were removed.
+ */
+async function reconcileTrees(
+  tx: SqlExecutor,
+  workoutIds: readonly string[],
+  serverEntries: readonly RowByTable['workout_exercises'][],
+  serverSets: readonly RowByTable['sets'][],
+): Promise<number> {
+  if (workoutIds.length === 0) return 0;
+  const keepEntries = new Set(serverEntries.map((e) => e.id));
+  const keepSets = new Set(serverSets.map((s) => s.id));
+
+  const localEntries = await idsWhereIn(tx, 'select id from workout_exercises where workout_id in (?)', workoutIds);
+  const extraEntries = localEntries.filter((id) => !keepEntries.has(id));
+  const pendingEntries = await rowsWithPendingChanges(tx, 'workout_exercises', extraEntries);
+  const goneEntries = extraEntries.filter((id) => !pendingEntries.has(id));
+
+  const localSets = await idsWhereIn(
+    tx,
+    'select s.id as id from sets s join workout_exercises e on e.id = s.workout_exercise_id where e.workout_id in (?)',
+    workoutIds,
+  );
+  // Sets inside a removed slot go with it (foreign-key cascade), whatever their lines say.
+  const cascadedSets = goneEntries.length
+    ? await idsWhereIn(tx, 'select id from sets where workout_exercise_id in (?)', goneEntries)
+    : [];
+  const cascaded = new Set(cascadedSets);
+  const extraSets = localSets.filter((id) => !keepSets.has(id) && !cascaded.has(id));
+  const pendingSets = await rowsWithPendingChanges(tx, 'sets', extraSets);
+  const goneSets = extraSets.filter((id) => !pendingSets.has(id));
+
+  await dropRecordsCitingSets(tx, [...goneSets, ...cascadedSets]);
+  await deleteIds(tx, 'sets', goneSets);
+  await deleteIds(tx, 'workout_exercises', goneEntries);
+  await dropLinesTx(tx, 'sets', cascadedSets);
+  return goneEntries.length + goneSets.length + cascadedSets.length;
+}
+
+/**
+ * Deletes the local personal records whose proof is one of `setIds`, and any unsent lines of
+ * theirs (see `reconcileTrees` for why even unsent ones go). The book stays empty until the
+ * server's promoted record downloads or the lifter's next finish of that exercise refills it.
+ */
+async function dropRecordsCitingSets(tx: SqlExecutor, setIds: readonly string[]): Promise<void> {
+  if (setIds.length === 0) return;
+  const records = await idsWhereIn(tx, 'select id from personal_records where source_set_id in (?)', setIds);
+  await dropLinesTx(tx, 'personal_records', records);
+  await deleteIds(tx, 'personal_records', records);
+}
+
+/** `sync_state` key of the tombstone bookmark: the id of the last tombstone applied. */
+export const TOMBSTONE_CURSOR_KEY = 'pull_cursor:tombstones';
+
+/**
+ * A server or device timestamp as milliseconds since 1970 (NaN if unreadable). Postgres sends
+ * microseconds (…:00.123456+00:00); not every JavaScript engine parses more than three fraction
+ * digits, so they are trimmed to milliseconds first. Comparing as numbers also makes a device
+ * stamp ("…Z") and a server stamp ("…+00:00") comparable, which their text is not.
+ */
+function toMs(timestamp: string): number {
+  return Date.parse(timestamp.replace(/(\.\d{3})\d+/, '$1'));
+}
+
+/**
+ * Applies one tombstone — "this row was deleted on the server" — inside a transaction.
+ * Returns true if something on the device was deleted.
+ *
+ * A deleted WORKOUT: the local copy goes, with its slots and sets (foreign-key cascade), the
+ * personal records citing those sets, and every unsent outbox line about any of them. Deletion
+ * wins over an unsent local edit of that workout, deliberately: the edit's upload would
+ * re-create a workout row on the server whose sets are gone for good — an empty husk that
+ * could never be fixed. Losing an edit to a workout someone deleted is the lesser harm.
+ *
+ * A deleted PERSONAL RECORD: the local copy goes UNLESS
+ *   - it has unsent changes (this device's upload will settle the server), or
+ *   - it was saved at or after the deletion. Record ids are fixed per book, so lowering a
+ *     record deletes the row and re-creates it under the same id; the re-created copy (already
+ *     downloaded by the records pass, which runs before this one) must not be deleted by the
+ *     tombstone of its own re-creation.
+ */
+async function applyTombstone(tx: SqlExecutor, tombstone: TombstoneRow): Promise<boolean> {
+  if (tombstone.tbl === 'workouts') {
+    const present = await tx.getFirstAsync<{ id: string }>('select id from workouts where id = ?', [tombstone.row_id]);
+    if (!present) return false;
+    const entryIds = await idsWhereIn(tx, 'select id from workout_exercises where workout_id in (?)', [tombstone.row_id]);
+    const setIds = entryIds.length
+      ? await idsWhereIn(tx, 'select id from sets where workout_exercise_id in (?)', entryIds)
+      : [];
+    await dropRecordsCitingSets(tx, setIds);
+    await dropLinesTx(tx, 'sets', setIds);
+    await dropLinesTx(tx, 'workout_exercises', entryIds);
+    await dropLinesTx(tx, 'workouts', [tombstone.row_id]);
+    await tx.runAsync('delete from workouts where id = ?', [tombstone.row_id]);
+    return true;
+  }
+  const record = await tx.getFirstAsync<{ updated_at: string }>('select updated_at from personal_records where id = ?', [
+    tombstone.row_id,
+  ]);
+  if (!record) return false;
+  if ((await rowsWithPendingChanges(tx, 'personal_records', [tombstone.row_id])).size > 0) return false;
+  if (toMs(record.updated_at) >= toMs(tombstone.deleted_at)) return false;
+  await tx.runAsync('delete from personal_records where id = ?', [tombstone.row_id]);
+  return true;
+}
+
+/**
+ * Downloads the user's tombstones after the stored bookmark, a page at a time, and applies
+ * them; each page and the bookmark are saved in one transaction. Runs LAST in a pull, after the
+ * records pass, for the reason in `applyTombstone`.
+ *
+ * The sync engine ALSO runs it on its own right before each upload (see engine.ts): a workout
+ * another device deleted must be removed here — with its waiting outbox lines — before this
+ * device's upload could send an unsent edit of it and re-create it on the server.
+ */
+export async function pullTombstonePass(
+  db: SqlDriver,
+  transport: SyncTransport,
+  userId: string,
+  result: Pick<PullResult, 'tombstones'> = { tombstones: 0 },
+): Promise<void> {
+  const stored = await db.getFirstAsync<{ value: string }>('select value from sync_state where key = ?', [
+    TOMBSTONE_CURSOR_KEY,
+  ]);
+  let afterId = stored ? Number(JSON.parse(stored.value)) : 0;
+  for (;;) {
+    const page = await transport.pullTombstones(userId, afterId, PULL_PAGE_SIZE);
+    if (page.length === 0) return;
+    const last = page[page.length - 1].id;
+    await db.withTransactionAsync(async (tx) => {
+      for (const tombstone of page) if (await applyTombstone(tx, tombstone)) result.tombstones += 1;
+      await tx.runAsync(
+        'insert into sync_state (key, value) values (?, ?) on conflict (key) do update set value = excluded.value',
+        [TOMBSTONE_CURSOR_KEY, JSON.stringify(last)],
+      );
+    });
+    if (page.length < PULL_PAGE_SIZE) return;
+    afterId = last;
   }
 }
 
@@ -199,7 +402,15 @@ async function pullWorkoutTrees(
  * already saved stay saved and their bookmarks stay moved.
  */
 export async function pullChanges(db: SqlDriver, transport: SyncTransport, userId: string): Promise<PullResult> {
-  const result: PullResult = { exercises: 0, workouts: 0, workout_exercises: 0, sets: 0, personal_records: 0 };
+  const result: PullResult = {
+    exercises: 0,
+    workouts: 0,
+    workout_exercises: 0,
+    sets: 0,
+    personal_records: 0,
+    removed: 0,
+    tombstones: 0,
+  };
   await pullStandalone(db, 'exercises', (after) => transport.pullExercises(after, PULL_PAGE_SIZE), result);
   await pullWorkoutTrees(db, transport, userId, result);
   await pullStandalone(
@@ -208,5 +419,6 @@ export async function pullChanges(db: SqlDriver, transport: SyncTransport, userI
     (after) => transport.pullPersonalRecords(userId, after, PULL_PAGE_SIZE),
     result,
   );
+  await pullTombstonePass(db, transport, userId, result);
   return result;
 }

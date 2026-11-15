@@ -8,8 +8,8 @@
  *     …_exercises_slug.sql). Column names match the server's exactly, so
  *     syncing a row is a straight copy, not a translation.
  *   - personal_records — the lifter's current PRs per exercise (version 4, B13).
- *   - outbox — the list of local changes not yet sent to the server (see
- *     `sync/outbox.ts`).
+ *   - outbox — the list of local changes (uploads and, from version 5,
+ *     deletions) not yet sent to the server (see `sync/outbox.ts`).
  *   - sync_state — small bookkeeping values, such as how far the last
  *     download got.
  *
@@ -135,8 +135,18 @@ create table personal_records (
 create index personal_records_user_exercise_idx on personal_records (user_id, exercise_id);
 `;
 
+/**
+ * Version 5 (B14): each outbox line says WHAT to tell the server about its row — `upsert`
+ * ("send this row as it is now") or `delete` ("this row is gone; delete it on the server").
+ * Every line queued before B14 was an upload, which is exactly what the default makes it.
+ * See `sync/outbox.ts` for why the two kinds are tracked separately.
+ */
+const V5 = `
+alter table outbox add column op text not null default 'upsert';
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4];
+export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

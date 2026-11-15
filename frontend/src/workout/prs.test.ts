@@ -17,7 +17,14 @@ import { createPreparedDb, steadyOptions } from '@/test-utils/loggerTestKit';
 import { OTHER_USER_ID, USER_ID } from '@/test-utils/workoutFixtures';
 
 import { startActiveWorkout, type SetInput } from './activeWorkout';
-import { currentPrs, improvedRecords, personalRecordId, PR_RECORD_NAMESPACE } from './prs';
+import {
+  currentPrs,
+  improvedRecords,
+  personalRecordId,
+  PR_RECORD_NAMESPACE,
+  recomputeRecords,
+  saveRecomputedRecordsTx,
+} from './prs';
 
 const BENCH = libraryExerciseId('bench_press');
 const SQUAT = libraryExerciseId('squat');
@@ -285,5 +292,69 @@ describe('records through sync', () => {
 
     await pullChanges(fresh, server, USER_ID);
     expect((await books(fresh, BENCH)).find((b) => b[0] === 'true1rm')?.[1]).toBe(140);
+  });
+});
+
+describe('recomputeRecords (B14) — the forced recompute after history changed', () => {
+  const NOW = '2026-11-20T09:00:00.000Z';
+
+  it('finds nothing to change when the stored books already match the history', async () => {
+    const db = await createPreparedDb();
+    await finishWorkout(db, 10, [[SQUAT, [kg(5, 100), kg(1, 140)]]]);
+    expect(await recomputeRecords(db, USER_ID, [SQUAT], NOW)).toEqual({ upserts: [], demotions: [], removals: [] });
+  });
+
+  it('sorts each change by how it must reach the server: new or raised, lowered, or gone', async () => {
+    const db = await createPreparedDb();
+    const sets = await finishWorkout(db, 10, [[SQUAT, [kg(5, 100), kg(3, 110), kg(5, 90)]]]);
+    const [five100, three110, five90] = sets[SQUAT];
+    // History changes underneath the stored books (as an edit or delete would leave it):
+    await db.runAsync('update sets set weight_kg = 80 where id = ?', [five100]); // 5RM holder lighter
+    await db.runAsync('delete from sets where id = ?', [three110]); // the only triple gone
+    await db.runAsync("update sets set reps = 2 where id = ?", [five90]); // a new 2-rep book
+
+    const changes = await recomputeRecords(db, USER_ID, [SQUAT], NOW);
+    const label = (r: PersonalRecordRow) => (r.kind === 'repMax' ? `${r.reps}RM` : r.kind);
+    expect(changes.upserts.map(label)).toEqual(['2RM']);
+    expect(changes.demotions.map((r) => [label(r), r.value_kg, r.source_set_id])).toEqual(
+      expect.arrayContaining([['5RM', 80, five100]]),
+    );
+    expect(changes.removals).toContain(personalRecordId(USER_ID, SQUAT, 'repMax', 3));
+    // A demoted book keeps its identity and when it was first set.
+    const demoted = changes.demotions.find((r) => label(r) === '5RM')!;
+    expect(demoted.id).toBe(personalRecordId(USER_ID, SQUAT, 'repMax', 5));
+    expect(demoted.created_at).not.toBe(NOW);
+  });
+
+  it('an equal value now held by a different set is a plain upsert, not a demotion', async () => {
+    const db = await createPreparedDb();
+    const sets = await finishWorkout(db, 10, [[SQUAT, [kg(5, 100), kg(5, 100)]]]);
+    const [first, second] = sets[SQUAT];
+    expect((await books(db, SQUAT)).find((b) => b[0] === '5RM')?.[2]).toBe(first); // ties keep the earlier set
+    await db.runAsync('update sets set weight_kg = 60 where id = ?', [first]);
+    const changes = await recomputeRecords(db, USER_ID, [SQUAT], NOW);
+    expect(changes.demotions).toEqual([]);
+    expect(changes.upserts.find((r) => r.kind === 'repMax' && r.reps === 5)?.source_set_id).toBe(second);
+  });
+
+  it('saveRecomputedRecordsTx queues a demotion as delete then upsert, and a removal as a delete', async () => {
+    const db = await createPreparedDb();
+    const sets = await finishWorkout(db, 10, [[SQUAT, [kg(5, 100), kg(3, 110)]]]);
+    await finishWorkout(db, 11, [[SQUAT, [kg(5, 90)]]]);
+    await db.runAsync('delete from outbox');
+    await db.runAsync('delete from sets where id in (?, ?)', sets[SQUAT]);
+
+    await db.withTransactionAsync(async (tx) =>
+      saveRecomputedRecordsTx(tx, await recomputeRecords(tx, USER_ID, [SQUAT], NOW), NOW),
+    );
+    const fiveRm = personalRecordId(USER_ID, SQUAT, 'repMax', 5);
+    const threeRm = personalRecordId(USER_ID, SQUAT, 'repMax', 3);
+    const lines = await db.getAllAsync<{ row_id: string; op: string }>(
+      "select row_id, op from outbox where tbl = 'personal_records' order by id",
+    );
+    expect(lines.filter((l) => l.row_id === fiveRm).map((l) => l.op)).toEqual(['delete', 'upsert']);
+    expect(lines.filter((l) => l.row_id === threeRm).map((l) => l.op)).toEqual(['delete']);
+    expect((await books(db, SQUAT)).find((b) => b[0] === '5RM')?.[1]).toBe(90);
+    expect((await books(db, SQUAT)).map((b) => b[0])).not.toContain('3RM');
   });
 });

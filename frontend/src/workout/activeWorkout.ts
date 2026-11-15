@@ -24,6 +24,12 @@
  * training-math module) before it is saved, so a set the server would refuse can never reach
  * the upload queue and block it.
  *
+ * How changes are saved is a swappable `WritePolicy` (B14). The default draft policy is all of
+ * the above. The edit policy (`editWorkout.ts`) runs the same operations on an already-FINISHED
+ * workout: every change is queued for upload and its personal records recomputed in the same
+ * transaction — so editing a past workout reuses every check and rule here instead of copying
+ * them.
+ *
  * No React here: `subscribe` + `getSnapshot` are exactly what React's `useSyncExternalStore`
  * needs, so a screen can watch the store without this file knowing about screens.
  */
@@ -45,9 +51,11 @@ import {
   TABLE_COLUMNS,
   writeDraftRowsTx,
   writeLocalTree,
+  type RowByTable,
   type SetRow,
   type WorkoutExerciseRow,
   type WorkoutRow,
+  type WorkoutTreeTable,
 } from '@/db/dao';
 import { placeholders, type SqlDriver, type SqlExecutor } from '@/db/driver';
 import { newUuid } from '@/lib/ids';
@@ -235,7 +243,11 @@ async function selectRows<T extends 'workouts' | 'workout_exercises' | 'sets'>(
  * null if the workout isn't there or belongs to someone else (the device file can still hold a
  * previous account's rows).
  */
-async function readTree(db: SqlExecutor, userId: string, workoutId: string): Promise<ActiveWorkoutSnapshot | null> {
+export async function readWorkoutTree(
+  db: SqlExecutor,
+  userId: string,
+  workoutId: string,
+): Promise<ActiveWorkoutSnapshot | null> {
   const [workout] = await selectRows(db, 'workouts', 'id = ? and user_id = ?', [workoutId, userId]);
   if (!workout) return null;
   const entries = await selectRows(db, 'workout_exercises', 'workout_id = ? order by position, id', [workoutId]);
@@ -406,9 +418,9 @@ export async function startActiveWorkout(
     }
     await writeDraftRowsTx(tx, 'workouts', [workout], now);
   });
-  const snapshot = await readTree(db, userId, workout.id);
+  const snapshot = await readWorkoutTree(db, userId, workout.id);
   if (!snapshot) throw new Error('The new workout could not be read back from the device');
-  return createStore(db, userId, snapshot, clock, mintId);
+  return createWorkoutStore(db, userId, snapshot, { clock, mintId });
 }
 
 /**
@@ -426,19 +438,90 @@ export async function loadActiveWorkout(
 ): Promise<ActiveWorkoutStore | null> {
   const id = await findActiveWorkoutId(db, userId);
   if (!id) return null;
-  const snapshot = await readTree(db, userId, id);
+  const snapshot = await readWorkoutTree(db, userId, id);
   if (!snapshot) return null;
-  return createStore(db, userId, snapshot, options.clock ?? systemClock, options.mintId ?? newUuid);
+  return createWorkoutStore(db, userId, snapshot, options);
 }
 
-/** Builds the store object around a snapshot already read from SQLite. */
-function createStore(
+/**
+ * How a store saves its changes — the seam B14 added so a finished workout can be edited
+ * through the very same operations (and checks, and renumbering) the logger uses, instead of a
+ * second copy of them. Every operation runs as ONE `transaction`, inside which it calls
+ * `writeRowsTx` / `deleteRowsTx` for its rows; `finish` and `discard` end the workout.
+ *
+ * Two policies exist:
+ *   - the draft policy (`draftPolicy`, the default): the logger's in-progress workout, saved on
+ *     the phone and NOT queued for upload until it is finished;
+ *   - the edit policy (`editPolicy` in editWorkout.ts): an already-finished workout, where
+ *     every change is queued for upload and the personal records are recomputed in the same
+ *     transaction.
+ */
+export interface WritePolicy {
+  /** Runs one operation's saves as a single all-or-nothing transaction. */
+  transaction(work: (tx: SqlExecutor) => Promise<void>): Promise<void>;
+  /** Saves (inserts or updates) rows of the workout, inside `transaction`. */
+  writeRowsTx<T extends WorkoutTreeTable>(tx: SqlExecutor, tbl: T, rows: readonly RowByTable[T][], now: string): Promise<void>;
+  /** Removes exercise slots or sets of the workout, inside `transaction`. */
+  deleteRowsTx(tx: SqlExecutor, tbl: 'workout_exercises' | 'sets', ids: readonly string[], now: string): Promise<void>;
+  /** Ends the workout for good (the logger's Finish). */
+  finish(snapshot: ActiveWorkoutSnapshot, now: string): Promise<void>;
+  /** Deletes the workout. */
+  discard(workoutId: string): Promise<void>;
+}
+
+/**
+ * The logger's policy: an in-progress workout. Changes go through the DAO's draft path (saved,
+ * not queued); Finish stamps the end time and queues the whole workout plus the records it set
+ * in ONE transaction; Discard deletes it from the phone (it was never uploaded).
+ */
+export function draftPolicy(db: SqlDriver, userId: string): WritePolicy {
+  return {
+    transaction: (work) => db.withTransactionAsync(work),
+    writeRowsTx: (tx, tbl, rows, now) => writeDraftRowsTx(tx, tbl, rows, now),
+    deleteRowsTx: (tx, tbl, ids) => deleteDraftRowsTx(tx, tbl, ids),
+    async finish(snapshot, now) {
+      // The server requires ended_at >= started_at; a device clock that jumped backwards must
+      // not turn into an upload the server refuses forever, so the end is never before the start.
+      const endedAt = Date.parse(now) < Date.parse(snapshot.workout.started_at) ? snapshot.workout.started_at : now;
+      const workout: WorkoutRow = { ...snapshot.workout, ended_at: endedAt };
+      // PR detection on finish (LOG-4): which record books this workout (or older history)
+      // improved. Read here, inside the store's one-at-a-time queue, then saved in the SAME
+      // transaction as the workout — a killed app can never sync the workout without its PRs.
+      const personalRecords = await improvedRecords(db, userId, snapshot.entries, now);
+      await writeLocalTree(
+        db,
+        {
+          workouts: [workout],
+          workout_exercises: snapshot.entries.map(({ sets: _nested, ...entry }) => entry),
+          sets: snapshot.entries.flatMap((e) => e.sets),
+          personal_records: personalRecords,
+        },
+        { now },
+      );
+    },
+    async discard(workoutId) {
+      // Deleting the workout removes its entries and sets with it (the foreign keys cascade).
+      await db.withTransactionAsync((tx) => deleteDraftRowsTx(tx, 'workouts', [workoutId]));
+    },
+  };
+}
+
+/**
+ * Builds the store object around a snapshot already read from SQLite.
+ *
+ * `policy` decides how the operations' changes are saved (see `WritePolicy`). Left out, it is
+ * the draft policy — the in-progress workout the logger edits. B14's edit screen passes the
+ * edit policy instead (`editWorkout.ts`).
+ */
+export function createWorkoutStore(
   db: SqlDriver,
   userId: string,
   initial: ActiveWorkoutSnapshot,
-  clock: () => string,
-  mintId: () => string,
+  options: ActiveWorkoutOptions = {},
+  policy: WritePolicy = draftPolicy(db, userId),
 ): ActiveWorkoutStore {
+  const clock = options.clock ?? systemClock;
+  const mintId = options.mintId ?? newUuid;
   const workoutId = initial.workout.id;
   let snapshot = initial;
   let status: ActiveWorkoutStatus = 'active';
@@ -454,7 +537,7 @@ function createStore(
 
   /** Re-reads the workout from SQLite and publishes it as the new snapshot. */
   async function refresh(): Promise<void> {
-    const next = await readTree(db, userId, workoutId);
+    const next = await readWorkoutTree(db, userId, workoutId);
     if (!next) throw new Error('The active workout is no longer on the device');
     snapshot = next;
     notify();
@@ -509,7 +592,7 @@ function createStore(
     const changed = ordered
       .map(({ sets: _nested, ...entry }, position) => ({ ...entry, position }))
       .filter((entry, i) => entry.position !== ordered[i].position);
-    await writeDraftRowsTx(tx, 'workout_exercises', changed, now);
+    await policy.writeRowsTx(tx, 'workout_exercises', changed, now);
   }
 
   /** The same gap-free re-numbering for one exercise's sets. */
@@ -517,14 +600,14 @@ function createStore(
     const changed = ordered
       .map((set, position) => ({ ...set, position }))
       .filter((set, i) => set.position !== ordered[i].position);
-    await writeDraftRowsTx(tx, 'sets', changed, now);
+    await policy.writeRowsTx(tx, 'sets', changed, now);
   }
 
   /** Saves a new set at the end of `entry`. */
   async function appendSet(entry: ActiveEntry, columns: ReturnType<typeof setColumns>): Promise<SetRow> {
     const now = clock();
     const set: SetRow = { id: mintId(), workout_exercise_id: entry.id, ...columns, created_at: now, updated_at: now };
-    await db.withTransactionAsync((tx) => writeDraftRowsTx(tx, 'sets', [set], now));
+    await policy.transaction((tx) => policy.writeRowsTx(tx, 'sets', [set], now));
     return set;
   }
 
@@ -536,8 +619,8 @@ function createStore(
     const doomed = new Set(setIds.map((id) => setById(id).set.id));
     const affected = snapshot.entries.filter((e) => e.sets.some((s) => doomed.has(s.id)));
     const now = clock();
-    await db.withTransactionAsync(async (tx) => {
-      await deleteDraftRowsTx(tx, 'sets', [...doomed]);
+    await policy.transaction(async (tx) => {
+      await policy.deleteRowsTx(tx, 'sets', [...doomed], now);
       for (const entry of affected) {
         await renumberSetsTx(
           tx,
@@ -562,7 +645,7 @@ function createStore(
     const changed = snapshot.entries.flatMap(({ sets: _nested, ...entry }, i) =>
       entry.superset_group === groups[i] ? [] : [{ ...entry, superset_group: groups[i] }],
     );
-    await db.withTransactionAsync((tx) => writeDraftRowsTx(tx, 'workout_exercises', changed, now));
+    await policy.transaction((tx) => policy.writeRowsTx(tx, 'workout_exercises', changed, now));
   }
 
   /**
@@ -575,14 +658,14 @@ function createStore(
     const { set } = setById(setId);
     const now = clock();
     const updated: SetRow = { ...set, ...setColumns(inputFor(set), set.position), updated_at: now };
-    await db.withTransactionAsync((tx) => writeDraftRowsTx(tx, 'sets', [updated], now));
+    await policy.transaction((tx) => policy.writeRowsTx(tx, 'sets', [updated], now));
     return set.id;
   }
 
   /** Saves a change to the workout row itself (its title or note), in one transaction. */
   async function saveWorkoutRow(change: Partial<Pick<WorkoutRow, 'title' | 'notes'>>): Promise<void> {
     const now = clock();
-    await db.withTransactionAsync((tx) => writeDraftRowsTx(tx, 'workouts', [{ ...snapshot.workout, ...change }], now));
+    await policy.transaction((tx) => policy.writeRowsTx(tx, 'workouts', [{ ...snapshot.workout, ...change }], now));
   }
 
   /** The saved copy of a set (used after `refresh`), so callers get exactly what SQLite holds. */
@@ -615,7 +698,7 @@ function createStore(
           created_at: now,
           updated_at: now,
         };
-        await db.withTransactionAsync(async (tx) => {
+        await policy.transaction(async (tx) => {
           // The phone has no foreign key to exercises, but the server does: an unknown id (or
           // someone else's custom exercise) would be refused at upload and block the queue.
           const exercise = await tx.getFirstAsync<{ id: string }>(
@@ -623,7 +706,7 @@ function createStore(
             [exerciseId, userId],
           );
           if (!exercise) throw new Error(`Exercise ${exerciseId} is not in this user's library`);
-          await writeDraftRowsTx(tx, 'workout_exercises', [entry], now);
+          await policy.writeRowsTx(tx, 'workout_exercises', [entry], now);
         });
         return entry.id;
       }, { pick: entryById }),
@@ -633,8 +716,8 @@ function createStore(
         const entry = entryById(entryId);
         const rest = snapshot.entries.filter((e) => e.id !== entry.id);
         const now = clock();
-        await db.withTransactionAsync(async (tx) => {
-          await deleteDraftRowsTx(tx, 'workout_exercises', [entry.id]);
+        await policy.transaction(async (tx) => {
+          await policy.deleteRowsTx(tx, 'workout_exercises', [entry.id], now);
           await renumberEntriesTx(tx, rest, now);
         });
       }),
@@ -649,7 +732,7 @@ function createStore(
         const order = snapshot.entries.filter((e) => e.id !== entry.id);
         order.splice(newPosition, 0, entry);
         const now = clock();
-        await db.withTransactionAsync((tx) => renumberEntriesTx(tx, order, now));
+        await policy.transaction((tx) => renumberEntriesTx(tx, order, now));
       }),
 
     logSet: (entryId, input) =>
@@ -668,7 +751,7 @@ function createStore(
           const { set } = setById(setId);
           return { ...set, ...setColumns(input, set.position) };
         });
-        await db.withTransactionAsync((tx) => writeDraftRowsTx(tx, 'sets', updated, now));
+        await policy.transaction((tx) => policy.writeRowsTx(tx, 'sets', updated, now));
       }),
 
     removeSet: (setId) => mutate(() => deleteSets([setId])),
@@ -719,8 +802,8 @@ function createStore(
         const cleaned = cleanText(notes);
         assertValidEntryNotes(cleaned);
         const now = clock();
-        await db.withTransactionAsync((tx) =>
-          writeDraftRowsTx(tx, 'workout_exercises', [{ ...entry, notes: cleaned }], now),
+        await policy.transaction((tx) =>
+          policy.writeRowsTx(tx, 'workout_exercises', [{ ...entry, notes: cleaned }], now),
         );
       }),
 
@@ -749,33 +832,16 @@ function createStore(
 
     finish: () =>
       mutate(async () => {
-        const now = clock();
-        // The server requires ended_at >= started_at; a device clock that jumped backwards must
-        // not turn into an upload the server refuses forever, so the end is never before the start.
-        const endedAt = Date.parse(now) < Date.parse(snapshot.workout.started_at) ? snapshot.workout.started_at : now;
-        const workout: WorkoutRow = { ...snapshot.workout, ended_at: endedAt };
-        // PR detection on finish (LOG-4): which record books this workout (or older history)
-        // improved. Read here, inside the store's one-at-a-time queue, then saved in the SAME
-        // transaction as the workout — a killed app can never sync the workout without its PRs.
-        const personalRecords = await improvedRecords(db, userId, snapshot.entries, now);
-        await writeLocalTree(
-          db,
-          {
-            workouts: [workout],
-            workout_exercises: snapshot.entries.map(({ sets: _nested, ...entry }) => entry),
-            sets: snapshot.entries.flatMap((e) => e.sets),
-            personal_records: personalRecords,
-          },
-          { now },
-        );
+        // The policy saves it (the draft policy: end time, records, upload queue — all in one
+        // transaction). Read inside the store's one-at-a-time queue, so nothing slips in between.
+        await policy.finish(snapshot, clock());
         status = 'finished';
       }, { pick: () => snapshot.workout }),
 
     discard: () =>
       mutate(
         async () => {
-          // Deleting the workout removes its entries and sets with it (the foreign keys cascade).
-          await db.withTransactionAsync((tx) => deleteDraftRowsTx(tx, 'workouts', [workoutId]));
+          await policy.discard(workoutId);
           status = 'discarded';
         },
         { reread: false },

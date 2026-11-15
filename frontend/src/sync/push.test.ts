@@ -6,7 +6,7 @@
 import { describe, expect, it } from '@jest/globals';
 
 import { prepareDatabase } from '@/db/database';
-import { writeLocal, type SetRow } from '@/db/dao';
+import { deleteLocalRowsTx, writeLocal, type SetRow } from '@/db/dao';
 import { FakeServer } from '@/test-utils/fakeTransport';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { ENTRIES, makeSet, SETS, USER_ID, WORKOUT } from '@/test-utils/workoutFixtures';
@@ -186,5 +186,65 @@ describe('pushOutbox', () => {
     const server = new FakeServer();
     await pushOutbox(db, server);
     expect(server.upsertCalls).toEqual([]);
+  });
+});
+
+describe('pushOutbox — the delete phase (B14)', () => {
+  /** Wraps the fake server so every request lands in one ordered log. */
+  function recorded(server: FakeServer) {
+    const log: string[] = [];
+    const transport = Object.create(server) as FakeServer;
+    transport.upsert = async (tbl, rows) => {
+      log.push(`upsert ${tbl}`);
+      return server.upsert(tbl, rows);
+    };
+    transport.deleteRows = async (tbl, ids) => {
+      log.push(`delete ${tbl}`);
+      return server.deleteRows(tbl, ids);
+    };
+    return { transport, log };
+  }
+
+  it('sends every delete before any upload and clears only the delete lines', async () => {
+    const db = await prepareDatabase(createNodeSqliteDriver());
+    const server = new FakeServer();
+    await writeLocal(db, 'workouts', [WORKOUT]);
+    await writeLocal(db, 'workout_exercises', ENTRIES);
+    await writeLocal(db, 'sets', SETS);
+    await pushOutbox(db, server);
+
+    // Remove one set (a synced delete), then edit another.
+    await db.withTransactionAsync((tx) => deleteLocalRowsTx(tx, 'sets', [SETS[4].id], '2026-11-15T00:00:00.000Z'));
+    await writeLocal(db, 'sets', [{ ...SETS[3], reps: 8 }]);
+    const { transport, log } = recorded(server);
+    const result = await pushOutbox(db, transport);
+
+    expect(log[0]).toBe('delete sets');
+    expect(log.filter((l) => l.startsWith('delete'))).toEqual(['delete sets']);
+    expect(result.deleted.sets).toBe(1);
+    expect(server.tables.sets.has(SETS[4].id)).toBe(false);
+    expect(server.tables.sets.get(SETS[3].id)?.reps).toBe(8);
+    expect(await outboxSize(db)).toBe(0);
+  });
+
+  it('a failed delete stops the push before any upload, and keeps everything queued', async () => {
+    const db = await prepareDatabase(createNodeSqliteDriver());
+    const server = new FakeServer();
+    await writeLocal(db, 'workouts', [WORKOUT]);
+    await writeLocal(db, 'workout_exercises', ENTRIES);
+    await pushOutbox(db, server);
+    await db.withTransactionAsync((tx) =>
+      deleteLocalRowsTx(tx, 'workout_exercises', [ENTRIES[1].id], '2026-11-15T00:00:00.000Z'),
+    );
+    server.failUpsertsOn('workout_exercises'); // the fake refuses deletes from that table too
+    const uploadsBefore = server.upsertCalls.length;
+    await expect(pushOutbox(db, server)).rejects.toThrow(/refused/);
+    expect(server.upsertCalls.length).toBe(uploadsBefore);
+    expect(await outboxSize(db)).toBeGreaterThan(0);
+
+    server.healUpserts();
+    await pushOutbox(db, server);
+    expect(server.tables.workout_exercises.has(ENTRIES[1].id)).toBe(false);
+    expect(await outboxSize(db)).toBe(0);
   });
 });
