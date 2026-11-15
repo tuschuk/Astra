@@ -4,6 +4,8 @@
  * `formatDropSet` — in the viewer's unit (LOG-13's feed clause), supersets are grouped, and a
  * long workout is cut short with "+ n more". And (B22) photo posts: the picture fetched as the
  * viewer, the owner told when their post is private, a plain panel when it can't be shown.
+ * And (B26) the owner-only "who can see this" chip on every post kind: the chooser, the
+ * optimistic change, one change at a time, the revert on refusal.
  * And (B23) the vote footer: no downvote control on an upvote-only flair (read from the row),
  * optimistic score moves, the revert on refusal, and the comments button.
  */
@@ -12,11 +14,12 @@ import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 
 import { toFeedPost, type FeedPost, type RawFeedPost } from '@/social/feed';
+import { POST_VISIBILITY_REFUSAL_MESSAGES } from '@/social/postPrivacy';
 import { VOTE_REFUSAL_MESSAGES } from '@/social/votes';
 import { feedSet, profile, rawImagePost, rawPost } from '@/test-utils/feedFixtures';
 import { formatDropSet, formatSet, workoutDetailsLabel } from '@/workout/format';
 
-import { CARD_EXERCISE_LIMIT, commentButtonLabel, ONLY_YOU_LINE, PostCard, UNNAMED_EXERCISE } from './PostCard';
+import { CARD_EXERCISE_LIMIT, commentButtonLabel, PostCard, UNNAMED_EXERCISE } from './PostCard';
 
 const NOW = new Date('2026-11-15T18:00:00');
 const author = profile('u1', 'wod_queen', 'Wendy');
@@ -229,7 +232,7 @@ describe('PostCard — photo posts (B22)', () => {
     expect(screen.getByLabelText('Flair: New PR')).toBeTruthy();
     const photo = screen.getByLabelText('Post photo');
     expect(photo.props.source).toEqual(source('u1/pr1.jpg'));
-    expect(screen.queryByText(ONLY_YOU_LINE)).toBeNull();
+    expect(screen.queryByLabelText(/^Who can see this post/)).toBeNull();
     expect(screen.queryByText(/exercise/)).toBeNull();
   });
 
@@ -237,7 +240,8 @@ describe('PostCard — photo posts (B22)', () => {
     const post = shapedPhoto(rawImagePost({ id: 'pic', author, createdAt: '2026-11-15T07:00:00Z', kind: 'progress-pic' }));
     await render(<PostCard post={post} now={NOW} viewerId="u1" photoSource={source} />);
     expect(screen.getByLabelText('Flair: Physique Check')).toBeTruthy();
-    expect(screen.getByText(ONLY_YOU_LINE)).toBeTruthy();
+    expect(screen.getByLabelText('Who can see this post: Only you')).toBeTruthy();
+    expect(screen.getByText('Only you')).toBeTruthy();
   });
 
   it('with no way to fetch (no session), or when the photo fails to load, shows a plain panel instead', async () => {
@@ -257,5 +261,67 @@ describe('PostCard — photo posts (B22)', () => {
     await render(<PostCard post={shaped(rawPost({ id: 'w', author, createdAt: '2026-11-15T07:00:00Z' }))} now={NOW} />);
     expect(screen.getByText('Bench Press')).toBeTruthy();
     expect(screen.queryByTestId('post-photo')).toBeNull();
+  });
+});
+
+describe('PostCard — who can see it (B26)', () => {
+  const workoutPost = () => shaped(rawPost({ id: 'w1', author, createdAt: '2026-11-15T07:00:00Z' }));
+  const pic = () => shapedPhoto(rawImagePost({ id: 'pic', author, createdAt: '2026-11-15T07:00:00Z', kind: 'progress-pic' }));
+  const prPhoto = () => shapedPhoto(rawImagePost({ id: 'pr', author, createdAt: '2026-11-15T07:00:00Z', kind: 'pr' }));
+
+  it('every kind of own post carries the chip; another lifter’s never does', async () => {
+    for (const [post, label] of [
+      [workoutPost(), 'Public'],
+      [pic(), 'Only you'],
+      [prPhoto(), 'Public'],
+    ] as const) {
+      const onChange = jest.fn(async () => ({ ok: true as const }));
+      const ownView = await render(<PostCard post={post} now={NOW} viewerId="u1" onChangeVisibility={onChange} />);
+      expect(screen.getByLabelText(`Who can see this post: ${label}`)).toBeTruthy();
+      await ownView.unmount();
+      const otherView = await render(<PostCard post={post} now={NOW} viewerId="someone-else" onChangeVisibility={onChange} />);
+      expect(screen.queryByLabelText(/^Who can see this post/)).toBeNull();
+      await otherView.unmount();
+    }
+  });
+
+  it('without a handler the owner sees the audience but can’t change it', async () => {
+    await render(<PostCard post={workoutPost()} now={NOW} viewerId="u1" />);
+    expect(screen.getByLabelText('Who can see this post: Public')).toBeDisabled();
+  });
+
+  it('choosing “Only you” sends the change for this post, moves the chip at once, and closes the chooser', async () => {
+    let finish: (r: { ok: true }) => void = () => {};
+    const onChange = jest.fn((_post: FeedPost, _next: string) => new Promise<{ ok: true }>((r) => (finish = r)));
+    const post = workoutPost();
+    await render(<PostCard post={post} now={NOW} viewerId="u1" onChangeVisibility={onChange} />);
+    await fireEvent.press(screen.getByLabelText('Who can see this post: Public'));
+    expect(screen.getByText('Anyone on Astra can see this post')).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Only you: Only you can see this post'));
+    // Optimistic: the chip already says so while the change is on its way, and the options are held.
+    expect(screen.getByLabelText('Who can see this post: Only you')).toBeTruthy();
+    expect(screen.getByLabelText('Followers: Your followers can see this post')).toBeDisabled();
+    await fireEvent.press(screen.getByLabelText('Followers: Your followers can see this post'));
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(post, 'private');
+    await act(async () => finish({ ok: true }));
+    expect(screen.queryByText('Only you can see this post')).toBeNull(); // chooser closed
+    expect(screen.getByLabelText('Who can see this post: Only you')).toBeTruthy();
+  });
+
+  it('a refusal moves the chip back and says why', async () => {
+    const onChange = jest.fn(async () => ({ ok: false as const, reason: 'failed' as const }));
+    await render(<PostCard post={pic()} now={NOW} viewerId="u1" onChangeVisibility={onChange} />);
+    await fireEvent.press(screen.getByLabelText('Who can see this post: Only you'));
+    await fireEvent.press(screen.getByLabelText('Followers: Your followers can see this post'));
+    expect(await screen.findByText(POST_VISIBILITY_REFUSAL_MESSAGES.failed)).toBeTruthy();
+    expect(screen.getByLabelText('Who can see this post: Only you')).toBeTruthy();
+  });
+
+  it('a refreshed feed’s visibility replaces what the chip showed', async () => {
+    const post = workoutPost();
+    await render(<PostCard post={post} now={NOW} viewerId="u1" />);
+    await screen.rerender(<PostCard post={{ ...post, visibility: 'followers' }} now={NOW} viewerId="u1" />);
+    expect(screen.getByLabelText('Who can see this post: Followers')).toBeTruthy();
   });
 });

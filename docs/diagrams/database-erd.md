@@ -17,7 +17,9 @@ its storage policies), `20261115114409_votes_comments.sql` and
 `post_scores` view, the upvote-only triggers), `20261115122437_post_hot_scores.sql` (B24, applied
 live — the `post_hot_scores` ranking view), `20261115130809_profile_reads_and_avatars.sql` (B25,
 applied live — `follow_counts`, the widened `personal_records` read rule, the public `avatars`
-bucket, the own-folder `avatar_url` CHECK),
+bucket, the own-folder `avatar_url` CHECK), `20261115141242_post_privacy.sql` (B26, applied live —
+`user_settings.progress_pic_visibility`, the progress-pic-private CHECK dropped, the post→workout
+visibility lockstep trigger),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -75,7 +77,8 @@ erDiagram
   user_settings {
     uuid user_id PK, FK
     text unit "kg or lb; default lb"
-    workout_visibility default_workout_visibility "default public"
+    workout_visibility default_workout_visibility "default public; no reader yet"
+    workout_visibility progress_pic_visibility "who sees NEW progress pics; default private (B26)"
     timestamptz updated_at
   }
 
@@ -117,7 +120,7 @@ erDiagram
     text notes "max 2000"
     timestamptz started_at
     timestamptz ended_at "null while in progress; never before started_at"
-    workout_visibility visibility "public, followers or private"
+    workout_visibility visibility "public, followers or private; follows its post's on change (B26)"
     timestamptz created_at
     timestamptz updated_at
   }
@@ -199,7 +202,7 @@ erDiagram
     text kind "workout (default), progress-pic or pr (B22)"
     uuid workout_id FK, UK "workout posts only (null for photo posts); one post per workout"
     text image_path "photo posts only: <user_id>/<post_id>.<ext> in post-images (B22)"
-    workout_visibility visibility "public, followers or private; default public; progress-pic always private"
+    workout_visibility visibility "public, followers or private; default public; owner may change it (B26)"
     timestamptz created_at "feed order, newest first"
     timestamptz updated_at
   }
@@ -245,6 +248,36 @@ erDiagram
     float8 hot_score "Reddit hot: sign(net)*log10(max(abs(net),1)) + (epoch-1134028003)/45000"
   }
 ```
+
+## Post privacy (B26)
+
+Migration `20261115141242_post_privacy.sql` gives lifters the visibility *choice*; enforcement is
+unchanged (the posts read rule and the `post-images` read rule both go through
+`private.workout_visible`, on every request).
+
+- **Any post's visibility can be changed by its author** — an ordinary update through the
+  existing owner update policy (`update posts set visibility = … where id = … and user_id = me`,
+  online from the post's card). Nobody else's update matches a row.
+- **`posts_progress_pic_private` is dropped.** A progress pic is born with
+  `user_settings.progress_pic_visibility` (default `private`; set in Settings → Privacy, mirrored
+  on the phone because posting works offline) and can be changed later like any post. Its photo
+  follows the post row's visibility through the bucket's read rule.
+- **Lockstep trigger** `sync_workout_visibility` — `AFTER UPDATE OF visibility ON posts FOR EACH
+  ROW WHEN (new.workout_id is not null and new.visibility is distinct from old.visibility)`,
+  function `private.sync_workout_visibility_with_post()` (**invoker rights**, `search_path = ''`):
+  sets the post's workout to the same visibility in the same transaction, so a post made private
+  can't leave its session readable on the owner's profile History. It needs no extra power: the
+  updater wrote the post, and the post's policies already require they own the workout. The
+  workout's `updated_at` moves, so the owner's other devices download the change. The reverse
+  direction (workout → post) has no trigger, because nothing changes a workout's visibility but
+  this trigger. A retried upload of an unchanged post re-sends the same visibility, so it never
+  fires.
+- **Live-probed at build time** (three synthetic users, then deleted): when B made its public
+  workout post private, its workout went private too, and follower A and stranger C then read
+  neither the post nor the workout. When B set a progress pic to `followers`, A read the row and
+  the storage object and C read neither. Switched back, the pic was dark for both and the workout
+  was readable by both. A's update of B's post changed 0 rows. B could set its own
+  `progress_pic_visibility`; A's update of B's settings row had no effect.
 
 ## Votes, comments and the net score (B23)
 
@@ -302,8 +335,8 @@ honest:
 - `posts_image_in_own_folder` — `image_path` must start with the author's own `user_id/`. Without
   it a lifter could cite someone else's private photo in their own public post and the bucket's
   read rule would open it.
-- `posts_progress_pic_private` — a progress pic is always `private` (CLAUDE.md privacy rule) until
-  B26 gives lifters the choice and relaxes this by migration.
+- ~~`posts_progress_pic_private`~~ — a progress pic was always `private` until B26, which dropped
+  this CHECK when lifters got the choice (see Post privacy).
 - `posts_image_path_idx` (partial, `image_path is not null`) serves the bucket's read rule.
 
 The insert/update policies now read `workout_id is null or private.owns_workout(workout_id)`.
@@ -321,8 +354,9 @@ over-limit or wrong-format upload itself, whatever the phone does. Its policies 
 | select | your own folder, **or** any object a post you may see cites (`exists posts where image_path = name and private.workout_visible(user_id, visibility)`) |
 | delete | only your own folder (nothing deletes photos yet) |
 
-So a progress pic is readable by its owner only (its post is private by CHECK); a PR photo by
-anyone who may see the post; and a photo whose post hasn't landed yet by its owner only. The app
+So a photo is readable by exactly whoever may see its post — since B26 that is the owner's
+choice for progress pics too (private by default); and a photo whose post hasn't landed yet by
+its owner only. The app
 reads photos through `/storage/v1/object/authenticated/post-images/<path>` with the viewer's token
 — there are no public URLs. Live-probed as two users at build time: B's progress pic and its object
 invisible to A, B's PR photo and object visible to A, A refused uploading into B's folder, citing
@@ -507,7 +541,8 @@ does not own, so another user's public workout can never be analysed over its ow
 
 - `workout_visibility`: `public` (any signed-in user), `followers` (people who follow the owner),
   `private` (owner only). Used by `workouts.visibility`, `posts.visibility` (B20) and as the
-  per-user default in `user_settings`.
+  per-user defaults in `user_settings` (`default_workout_visibility`; `progress_pic_visibility`,
+  B26).
 - `pr_kind`: `true1rm`, `repMax`, `e1rm`. These are exactly the app's `PrKind` names in
   `@training-math`. Used by `personal_records.kind`.
 
@@ -533,6 +568,8 @@ does not own, so another user's public workout can never be analysed over its ow
   cascade) inserts a `sync_tombstones` line (see Tombstones above).
 - **Downvotes on upvote-only posts are refused** (B23): `votes_upvote_only` on `votes` and
   `posts_flair_guard` on `posts` — see the votes section.
+- **A workout follows its post's visibility** (B26): `sync_workout_visibility` on `posts` — see
+  Post privacy.
 
 ## Who can see and change what (row-level security)
 
@@ -601,7 +638,8 @@ name, position, upvotes_only)`, download-only, and `posts (id, user_id, flair_id
 unique, visibility, created_at, updated_at)`, the lifter's own posts, upload-only; version 9 (B22)
 rebuilt `posts` with `kind`, a nullable `workout_id` (still unique) and `image_path` — the photo
 waiting to upload is a file in the app's documents folder, `post-images/<post_id>.<ext>`, not a
-column; versions are append-only,
+column; version 10 (B26) added `user_settings.progress_pic_visibility` (default `private`);
+versions are append-only,
 upgraded on launch). There is no device copy of `sync_tombstones` — tombstones are applied as
 they download, and `sync_state` keeps the last applied id (`pull_cursor:tombstones`). It has the same column names, but
 uses text for uuids and timestamps and 0/1 for booleans, and it does not repeat the server's
@@ -634,8 +672,10 @@ and `sync_state`, the download bookmarks. What this means for the server:
 - **Deletes (B14) are `DELETE … WHERE id IN (…)`** as the signed-in user, sent before any upload
   in each sync, children's tables first. Deleting an id the server no longer has is a no-op, so
   retries are safe.
-- **`user_settings` (B15) syncs outside the id-keyed machinery.** The phone's kg/lb toggle sends
-  `UPDATE user_settings SET unit = … WHERE user_id = …` — never an insert or upsert, since RLS
+- **`user_settings` (B15) syncs outside the id-keyed machinery.** The phone's kg/lb toggle and
+  (B26) its progress-pic privacy choice send `UPDATE user_settings SET unit = …,
+  progress_pic_visibility = … WHERE user_id = …` (both fields from the phone's whole row; a change
+  to one is merged into the stored row first, so it never undoes the other) — never an insert or upsert, since RLS
   grants the owner select and update only and the signup trigger already made the row; no
   `updated_at` (the `moddatetime` trigger stamps it). An update that matches no row (a previous
   account's leftover outbox line, hidden by RLS) changes nothing and counts as sent. Every pull
@@ -651,6 +691,9 @@ and `sync_state`, the download bookmarks. What this means for the server:
   other refusal keeps the line for the next sync. Deleting a workout on the phone — or applying
   its tombstone from another device — also deletes the phone's post of it and that post's unsent
   lines (the device has no cascade), so a post of a gone workout can never jam the queue.
+  Changing a post's visibility (B26) is not an upload: it is an online update from the card, after
+  which the phone rewrites its own post and workout copies (no outbox lines) so a later whole-row
+  upload of that workout carries the new value.
 - **Photo posts (B22) upload their photo first.** In the posts phase the phone sends
   `POST /storage/v1/object/post-images/<image_path>` (streamed from the waiting file, `x-upsert:
   true`, the user's token) and only then upserts the post row, so the object exists — owner-only

@@ -114,7 +114,7 @@ describe('migrate', () => {
     expect(await db.getFirstAsync('select count(*) as n from workouts')).toEqual({ n: 1 });
     expect(await db.getFirstAsync('select count(*) as n from outbox')).toEqual({ n: 1 });
     const columns = await db.getAllAsync<{ name: string }>('pragma table_info(user_settings)');
-    expect(columns.map((c) => c.name)).toEqual(['user_id', 'unit', 'updated_at']);
+    expect(columns.map((c) => c.name)).toEqual(['user_id', 'unit', 'updated_at', 'progress_pic_visibility']);
   });
 
   it('B18: upgrades a version-6 phone to version 7 (workout_analyses), keeping its workouts and outbox', async () => {
@@ -166,8 +166,7 @@ describe('migrate', () => {
 
     await migrate(db);
 
-    expect(SCHEMA_VERSION).toBe(9);
-    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 9 });
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: SCHEMA_VERSION });
     expect(await db.getAllAsync('select * from posts')).toEqual([
       {
         id: 'p1',
@@ -193,6 +192,26 @@ describe('migrate', () => {
         "insert into posts (id, user_id, flair_id, workout_id, visibility, created_at, updated_at) values ('p4', 'u', 'wod', 'w', 'public', 't', 't')",
       ),
     ).rejects.toThrow(/UNIQUE/);
+  });
+
+  it('B26: upgrades a version-9 phone to version 10, keeping its unit and making new progress pics private', async () => {
+    const db = createNodeSqliteDriver();
+    for (const migration of MIGRATIONS.slice(0, 9)) await db.execAsync(migration);
+    await db.execAsync('pragma user_version = 9');
+    await db.runAsync("insert into user_settings (user_id, unit, updated_at) values ('u', 'kg', 't')");
+    await db.runAsync("insert into outbox (tbl, row_id, queued_at) values ('user_settings', 'u', 't')");
+
+    await migrate(db);
+
+    expect(SCHEMA_VERSION).toBe(10);
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 10 });
+    expect(await db.getFirstAsync('select * from user_settings')).toEqual({
+      user_id: 'u',
+      unit: 'kg',
+      updated_at: 't',
+      progress_pic_visibility: 'private',
+    });
+    expect(await db.getFirstAsync('select count(*) as n from outbox')).toEqual({ n: 1 });
   });
 
   it('upgrades a version-1 phone through every later version (sets.score), keeping the sets already there', async () => {

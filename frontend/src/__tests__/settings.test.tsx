@@ -7,6 +7,10 @@
  *   - flipping it in the middle of logging: each set stores exactly what its own unit implies;
  *   - Sign out signs out of this device.
  *
+ * And B26's Privacy section: progress pics private by default; choosing Followers is saved on the
+ * phone and queued (keeping the unit) and takes effect for the very next progress pic; the stored
+ * choice is shown on open; a failed save reverts; body data is stated as owner-only.
+ *
  * Settings is rendered next to the screen that shows the weights, so the test sees one tree
  * re-render, the way a mounted screen under Settings would. The router is a stub; the database
  * comes through a mocked `openAppDatabase`.
@@ -17,17 +21,21 @@ import { fireEvent, screen, waitFor } from '@testing-library/react-native';
 import { lbToKg } from '@training-math';
 
 import type { SqlDriver } from '@/db/driver';
+import { replaceFlairsTx } from '@/db/flairs';
 import { readUserSettingsRow } from '@/db/userSettings';
 import { libraryExerciseId } from '@/library/uuidv5';
+import { setProgressPicVisibility } from '@/settings/privacySettings';
 import { unitStore } from '@/settings/unitStore';
+import { createImagePost } from '@/social/createPost';
 import { pendingRows } from '@/sync/outbox';
+import { FakeServer } from '@/test-utils/fakeTransport';
 import { createPreparedDb, renderSignedIn, SIGNED_IN_USER_ID, steadyOptions } from '@/test-utils/loggerTestKit';
 import { clearSessionWorkout } from '@/workout/activeWorkoutSession';
 import { startActiveWorkout } from '@/workout/activeWorkout';
 
 import WorkoutScreen from '@/app/(tabs)/workout';
 import ActiveWorkoutScreen from '@/app/active-workout';
-import SettingsScreen from '@/app/settings';
+import SettingsScreen, { BODY_DATA_LINE } from '@/app/settings';
 import SavedWorkoutScreen from '@/app/workout/[id]';
 
 const mockOpenDatabase = jest.fn<() => Promise<SqlDriver>>();
@@ -72,7 +80,7 @@ async function toggleReady(): Promise<void> {
 }
 
 describe('Settings screen (B15)', () => {
-  it('shows pounds selected by default, the signed-in email, and no Notifications/Privacy yet', async () => {
+  it('shows pounds selected by default, the signed-in email, and no Notifications yet', async () => {
     await renderSignedIn(<SettingsScreen />);
     expect(screen.getByText('Units')).toBeTruthy();
     expect(screen.getByLabelText('Pounds').props.accessibilityState.selected).toBe(true);
@@ -80,7 +88,6 @@ describe('Settings screen (B15)', () => {
     expect(await screen.findByText('Signed in as')).toBeTruthy();
     expect(screen.getByText('lifter@example.com')).toBeTruthy();
     expect(screen.queryByText(/Notifications/)).toBeNull();
-    expect(screen.queryByText(/Privacy/)).toBeNull();
   });
 
   it('step DoD: switching units converts every displayed weight without changing a stored kg value', async () => {
@@ -168,5 +175,65 @@ describe('Settings screen (B15)', () => {
     await renderSignedIn(<SettingsScreen />);
     await fireEvent.press(screen.getByLabelText('Back'));
     expect(mockRouter.replace).toHaveBeenCalledWith('/you');
+  });
+});
+
+describe('Settings — Privacy (B26)', () => {
+  const ONLY_ME = 'New progress pics: only you';
+  const FOLLOWERS = 'New progress pics: your followers';
+
+  /** Waits until the privacy chips can be used (the setting has been read). */
+  async function privacyReady(): Promise<void> {
+    await waitFor(() => expect(screen.getByLabelText(ONLY_ME).props.accessibilityState.disabled).toBe(false));
+  }
+
+  it('shows the section with progress pics private by default, and the body-data statement', async () => {
+    await renderSignedIn(<SettingsScreen />);
+    expect(screen.getByText('Privacy')).toBeTruthy();
+    await privacyReady();
+    expect(screen.getByLabelText(ONLY_ME).props.accessibilityState.selected).toBe(true);
+    expect(screen.getByText(BODY_DATA_LINE)).toBeTruthy();
+    expect(screen.getByText(/change one from the post itself/)).toBeTruthy();
+  });
+
+  it('choosing Followers saves it on the phone and queues one upload, keeping the unit; a new progress pic is then born followers-only', async () => {
+    await renderSignedIn(<SettingsScreen />);
+    await toggleReady();
+    await fireEvent.press(screen.getByLabelText('Kilograms'));
+    await privacyReady();
+    await fireEvent.press(screen.getByLabelText(FOLLOWERS));
+    await waitFor(async () => expect((await readUserSettingsRow(db, SIGNED_IN_USER_ID))?.progress_pic_visibility).toBe('followers'));
+    expect(screen.getByLabelText(FOLLOWERS).props.accessibilityState.selected).toBe(true);
+    expect((await readUserSettingsRow(db, SIGNED_IN_USER_ID))?.unit).toBe('kg');
+    expect((await pendingRows(db, 'user_settings')).map((p) => p.rowId)).toEqual([SIGNED_IN_USER_ID]);
+
+    // Takes effect immediately: the very next progress pic uses it, no sync needed.
+    await db.withTransactionAsync((tx) => replaceFlairsTx(tx, new FakeServer().flairs));
+    const post = await createImagePost(
+      db,
+      SIGNED_IN_USER_ID,
+      'progress-pic',
+      { uri: 'file:///x.jpg', byteSize: 1000, mimeType: 'image/jpeg' },
+      { saveImage: async () => 'file:///saved.jpg' },
+    );
+    expect(post.visibility).toBe('followers');
+  });
+
+  it('shows the phone’s stored choice when opened', async () => {
+    await setProgressPicVisibility(db, SIGNED_IN_USER_ID, 'public');
+    await renderSignedIn(<SettingsScreen />);
+    await privacyReady();
+    expect(screen.getByLabelText('New progress pics: anyone on Astra').props.accessibilityState.selected).toBe(true);
+  });
+
+  it('a failed save moves the chip back and says so', async () => {
+    await renderSignedIn(<SettingsScreen />);
+    await privacyReady();
+    await db.execAsync('drop table outbox'); // make the save's transaction fail
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    await fireEvent.press(screen.getByLabelText(FOLLOWERS));
+    expect(await screen.findByText('Your privacy setting couldn’t be saved. Try again.')).toBeTruthy();
+    expect(screen.getByLabelText(ONLY_ME).props.accessibilityState.selected).toBe(true);
+    warn.mockRestore();
   });
 });

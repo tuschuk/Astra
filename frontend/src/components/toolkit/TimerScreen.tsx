@@ -45,7 +45,7 @@ import {
 import { timerStore, type TimerStoreState } from '@/toolkit/timerStore';
 import { colors, spacing, type } from '@/theme';
 
-import { ChoiceChips, type ChoiceOption } from './ChoiceChips';
+import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
 import { NumberField } from './WeightField';
 
 /** The mode switcher's chips, in order. */

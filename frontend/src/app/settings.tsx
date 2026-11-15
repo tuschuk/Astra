@@ -1,33 +1,60 @@
 /**
  * Settings (YOU-4) — reached from the gear button on the You tab.
  *
- * What it shows, in two sections:
+ * What it shows, in three sections:
  *   - Units: a kg | lb choice. Tapping one switches every weight in the app to that unit at
  *     once — the logger, saved workouts, editing and exercise history all re-draw. The choice is
  *     saved on the phone straight away (so it works with no signal and survives the app being
  *     closed) and uploaded to the lifter's account, so their other devices follow. Logged
  *     weights are never changed: they are always stored in kg and only shown in the chosen unit.
+ *   - Privacy (B26):
+ *       - Progress pics — who NEW progress pics are shown to: Only you (the default), Followers,
+ *         or Public. Saved and uploaded exactly like the unit (works offline). Posts already made
+ *         keep their own setting; a line says they're changed on the post itself.
+ *       - Body data — a plain statement, not a control: body data is only ever visible to the
+ *         lifter (the server enforces it). Nothing in the app shows body data to anyone yet, so
+ *         there is nothing to choose; the choice arrives with the first feature that reads it.
  *   - Account: which email is signed in, and the Sign out button. Signing out needs no
  *     navigation here — the root guard sends the user to sign-in once the session is gone.
  *
- * Notifications and privacy settings arrive with their own features (B47, B26); they are not
- * shown until they work.
+ * Notification settings arrive with their own feature (B47); they are not shown until they work.
  */
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import type { WeightUnit } from '@training-math';
 
 import { useAuth } from '@/auth/AuthProvider';
 import { Screen } from '@/components/Screen';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
+import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
 import { FormError } from '@/components/ui/FormError';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
+import type { WorkoutVisibility } from '@/db/dao';
 import { useAppDatabase } from '@/db/useAppDatabase';
 import { useDisplayUnit } from '@/settings/displayUnit';
+import { readProgressPicVisibility, setProgressPicVisibility } from '@/settings/privacySettings';
 import { unitStore } from '@/settings/unitStore';
+import { VISIBILITY_ORDER, VISIBILITY_WORDS } from '@/social/postPrivacy';
 import { colors, layout, radii, spacing } from '@/theme';
+
+/** What a screen reader says for each progress-pic choice. */
+const PROGRESS_PIC_SPOKEN: Record<WorkoutVisibility, string> = {
+  private: 'New progress pics: only you',
+  followers: 'New progress pics: your followers',
+  public: 'New progress pics: anyone on Astra',
+};
+
+/** The three progress-pic chips, most private first. */
+const PROGRESS_PIC_OPTIONS: ChoiceOption<WorkoutVisibility>[] = VISIBILITY_ORDER.map((value) => ({
+  value,
+  label: VISIBILITY_WORDS[value].label,
+  spoken: PROGRESS_PIC_SPOKEN[value],
+}));
+
+/** The Body data row's statement (B26). */
+export const BODY_DATA_LINE = 'Only you. Body data never leaves your account.';
 
 /** The two units, in the order the toggle shows them, with what a screen reader says. */
 const UNIT_OPTIONS: readonly { unit: WeightUnit; label: string; spoken: string }[] = [
@@ -44,6 +71,47 @@ export default function SettingsScreen() {
   const [unitError, setUnitError] = useState<string | null>(null);
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signingOut, setSigningOut] = useState(false);
+  // Null until read from the phone; the chips wait (disabled) rather than guess.
+  const [picVisibility, setPicVisibility] = useState<WorkoutVisibility | null>(null);
+  const [privacyError, setPrivacyError] = useState<string | null>(null);
+
+  // Read the progress-pic choice each time the screen comes into view, so a change downloaded
+  // from another device since the last visit is what's shown.
+  useFocusEffect(
+    useCallback(() => {
+      if (!db || !userId) return;
+      let live = true;
+      readProgressPicVisibility(db, userId)
+        .then((value) => {
+          if (live) setPicVisibility(value);
+        })
+        .catch((error: unknown) => {
+          console.warn('Settings: could not read the privacy setting', error);
+          if (live) setPrivacyError('Your privacy setting couldn’t be read. Try again.');
+        });
+      return () => {
+        live = false;
+      };
+    }, [db, userId]),
+  );
+
+  /**
+   * Saves who sees new progress pics (offline-safe: phone + upload queue in one go). The chip
+   * moves at once and moves back, with a message, if the phone couldn't save it.
+   */
+  async function chooseProgressPicVisibility(next: WorkoutVisibility): Promise<void> {
+    if (!db || !userId || picVisibility === null || next === picVisibility) return;
+    const before = picVisibility;
+    setPicVisibility(next);
+    setPrivacyError(null);
+    try {
+      await setProgressPicVisibility(db, userId, next);
+    } catch (error: unknown) {
+      console.warn('Settings: could not save the privacy setting', error);
+      setPicVisibility(before);
+      setPrivacyError('Your privacy setting couldn’t be saved. Try again.');
+    }
+  }
 
   /** Saves the chosen unit; the store re-draws every weight. Shows an error if saving fails. */
   async function chooseUnit(next: WeightUnit): Promise<void> {
@@ -104,6 +172,28 @@ export default function SettingsScreen() {
         <FormError message={unitError} />
       </Card>
 
+      <SectionLabel style={styles.sectionLabel}>Privacy</SectionLabel>
+      <Card style={styles.card}>
+        <Body>Who can see new progress pics</Body>
+        <ChoiceChips
+          options={PROGRESS_PIC_OPTIONS}
+          selected={picVisibility ?? 'private'}
+          onSelect={(value) => void chooseProgressPicVisibility(value)}
+          disabled={!db || !userId || picVisibility === null}
+          fill
+        />
+        <Body variant="small" style={styles.muted}>
+          Posts you’ve already shared keep their own setting — change one from the post itself.
+        </Body>
+        <FormError message={privacyError} />
+      </Card>
+      <Card style={[styles.card, styles.cardGap]}>
+        <Body>Body data</Body>
+        <Body variant="small" style={styles.muted}>
+          {BODY_DATA_LINE}
+        </Body>
+      </Card>
+
       <SectionLabel style={styles.sectionLabel}>Account</SectionLabel>
       <Card style={styles.card}>
         <SectionLabel size="small">Signed in as</SectionLabel>
@@ -132,6 +222,9 @@ const styles = StyleSheet.create({
   },
   card: {
     gap: spacing.sm,
+  },
+  cardGap: {
+    marginTop: spacing.md,
   },
   segments: {
     flexDirection: 'row',

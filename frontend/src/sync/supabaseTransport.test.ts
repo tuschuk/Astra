@@ -86,14 +86,14 @@ describe('createSupabaseTransport', () => {
   });
 
   it('B15: reads the user’s one settings row, and null when there is none', async () => {
-    const row = { user_id: 'u1', unit: 'kg', updated_at: '2026-11-15T00:00:00+00:00' };
+    const row = { user_id: 'u1', unit: 'kg', progress_pic_visibility: 'followers', updated_at: '2026-11-15T00:00:00+00:00' };
     const { client, requests } = recordingClient([{ data: row }, { data: null }]);
     const transport = createSupabaseTransport(client);
     expect(await transport.pullUserSettings('u1')).toEqual(row);
     expect(await transport.pullUserSettings('u1')).toBeNull();
     expect(requests[0]).toEqual([
       ['from', 'user_settings'],
-      ['select', 'user_id,unit,updated_at'],
+      ['select', 'user_id,unit,progress_pic_visibility,updated_at'],
       ['eq', 'user_id', 'u1'],
       ['maybeSingle'],
     ]);
@@ -106,19 +106,24 @@ describe('createSupabaseTransport', () => {
     );
   });
 
-  it('B15: saves the unit with an update by user id — never an upsert, never updated_at', async () => {
+  it('B26: reads a damaged or missing progress-pic visibility as private (fails closed)', async () => {
+    const { client } = recordingClient([{ data: { user_id: 'u1', unit: 'lb', progress_pic_visibility: 'everyone', updated_at: 't' } }]);
+    expect((await createSupabaseTransport(client).pullUserSettings('u1'))?.progress_pic_visibility).toBe('private');
+  });
+
+  it('B15/B26: saves the unit and progress-pic choice with an update by user id — never an upsert, never updated_at', async () => {
     const { client, requests } = recordingClient();
-    await createSupabaseTransport(client).pushUserSettings('u1', 'kg');
+    await createSupabaseTransport(client).pushUserSettings('u1', { unit: 'kg', progress_pic_visibility: 'followers' });
     expect(requests[0]).toEqual([
       ['from', 'user_settings'],
-      ['update', { unit: 'kg' }],
+      ['update', { unit: 'kg', progress_pic_visibility: 'followers' }],
       ['eq', 'user_id', 'u1'],
     ]);
   });
 
   it('B15: throws when the server refuses the settings update', async () => {
     const { client } = recordingClient([{ error: { message: 'permission denied' } }]);
-    await expect(createSupabaseTransport(client).pushUserSettings('u1', 'lb')).rejects.toThrow(
+    await expect(createSupabaseTransport(client).pushUserSettings('u1', { unit: 'lb', progress_pic_visibility: 'private' })).rejects.toThrow(
       'Upload of settings failed: permission denied',
     );
   });

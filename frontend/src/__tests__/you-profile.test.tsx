@@ -13,7 +13,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
-import { act, fireEvent, screen, within } from '@testing-library/react-native';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react-native';
 
 import type { SqlDriver } from '@/db/driver';
 import { libraryExerciseId } from '@/library/uuidv5';
@@ -138,6 +138,19 @@ describe('You — own profile (B25)', () => {
     await renderSignedIn(<YouScreen />);
     expect(await screen.findByText('My heavy day')).toBeTruthy();
     expect(screen.queryByText('Not mine')).toBeNull();
+  });
+
+  it('B26: my post’s visibility can be changed from my Posts tab, and the server row follows', async () => {
+    const me = profile(ME, 'me_lifts', 'Sam');
+    mockSocial = createFakeSocialClient({
+      profiles: [me],
+      posts: [rawPost({ id: 'mine', author: me, createdAt: '2026-11-15T08:00:00.000Z', title: 'My heavy day' })],
+    });
+    await renderSignedIn(<YouScreen />);
+    await fireEvent.press(await screen.findByLabelText('Who can see this post: Public'));
+    await fireEvent.press(screen.getByLabelText('Followers: Your followers can see this post'));
+    await waitFor(() => expect((mockSocial.tables.posts[0] as { visibility: string }).visibility).toBe('followers'));
+    expect(screen.getByLabelText('Who can see this post: Followers')).toBeTruthy();
   });
 
   it('lists PRs per exercise exactly as B13 stored them (step DoD)', async () => {

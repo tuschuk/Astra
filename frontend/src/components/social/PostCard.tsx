@@ -13,8 +13,10 @@
  *     the workout's notes. A long workout stops after four exercises with "+ n more exercises";
  *   - for a photo post: the photo, fetched from the server as the viewer (`photoSource`) so the
  *     server's rules decide whether this viewer may see it; a plain panel while it loads or if it
- *     can't be shown. On the lifter's OWN progress pic, a line says "Only you can see this post",
- *     so a progress pic's privacy is never a surprise.
+ *     can't be shown;
+ *   - (B26) on the viewer's OWN posts only — every kind: workout, progress pic, PR photo — a small
+ *     chip saying who can see it ("Only you", "Followers", "Public"), so a post's privacy is
+ *     never a surprise. Other people's cards don't show it.
  *
  *   - (B23) a footer: an upvote arrow, the post's net score (ups minus downs), a downvote arrow,
  *     and a comments button ("3 comments", or "Comment" when there are none). The arrow matching
@@ -23,7 +25,10 @@
  *
  * What the viewer can do: read it; vote — tap an arrow to vote, tap the lit one again to take
  * the vote back, tap the other to switch. The score moves at once and moves back, with a short
- * message, if the server refuses; and open the post's comments. Tapping through to the whole
+ * message, if the server refuses; open the post's comments; and (B26, own posts) tap the
+ * visibility chip to choose Only you / Followers / Public — the chip moves at once and back, with
+ * a message, if the server refuses. The server's row-level security is what makes the choice
+ * real: a post made private disappears for everyone else through the API, not just on screen. Tapping through to the whole
  * workout arrives with a later step (another lifter's workout has no copy on this phone and no
  * screen yet). Without the vote / comment handlers (tests, or no session) the footer only shows.
  */
@@ -33,11 +38,19 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { Avatar } from '@/components/social/Avatar';
 import { Card } from '@/components/ui/Card';
+import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
 import { Body, SectionLabel } from '@/components/ui/Text';
+import type { WorkoutVisibility } from '@/db/dao';
 import { useDisplayUnit } from '@/settings/displayUnit';
 import type { FeedEntry, FeedPost, FeedWorkout } from '@/social/feed';
 import { personLabels } from '@/social/names';
 import type { PostImageSource } from '@/social/postImages';
+import {
+  POST_VISIBILITY_REFUSAL_MESSAGES,
+  VISIBILITY_ORDER,
+  VISIBILITY_WORDS,
+  type PostVisibilityResult,
+} from '@/social/postPrivacy';
 import { nextVote, VOTE_REFUSAL_MESSAGES, voteDelta, type VoteResult, type VoteValue } from '@/social/votes';
 import { colors, radii, spacing } from '@/theme';
 import {
@@ -56,9 +69,6 @@ export const CARD_EXERCISE_LIMIT = 4;
 
 /** What a card calls an exercise whose name the viewer can't see (someone's custom one, or a deleted one). */
 export const UNNAMED_EXERCISE = 'Custom exercise';
-
-/** The line under the lifter's own private post (B22). */
-export const ONLY_YOU_LINE = 'Only you can see this post';
 
 /** How an `<Image>` fetches a photo as the viewer (built by `postImageSource`). */
 type PhotoSource = PostImageSource;
@@ -83,14 +93,28 @@ interface PostCardProps {
   onOpenComments?: (postId: string) => void;
   /** Opens the author's profile (B25) when their name or photo is tapped. Left out, the header only shows. */
   onOpenProfile?: (userId: string) => void;
+  /**
+   * Changes who can see this post (B26; `setPostVisibility` in the app). Only ever offered on the
+   * viewer's OWN posts. Left out, the owner still sees who can see the post, but can't change it.
+   */
+  onChangeVisibility?: (post: FeedPost, next: WorkoutVisibility) => Promise<PostVisibilityResult>;
 }
 
-export function PostCard({ post, now, viewerId, photoSource, onVote, onOpenComments, onOpenProfile }: PostCardProps) {
+export function PostCard({
+  post,
+  now,
+  viewerId,
+  photoSource,
+  onVote,
+  onOpenComments,
+  onOpenProfile,
+  onChangeVisibility,
+}: PostCardProps) {
   const { author, flair } = post;
   const who = personLabels(author);
-  // The owner's own progress pic (private by rule until B26) says so; other cards are unchanged.
-  const ownPrivate =
-    post.kind === 'progress-pic' && post.visibility === 'private' && viewerId != null && viewerId === author.id;
+  // Only the author sees (and can change) who the post is shown to; other viewers' cards are
+  // exactly as they were before B26.
+  const own = viewerId != null && viewerId === author.id;
 
   return (
     <Card style={styles.card}>
@@ -121,16 +145,104 @@ export function PostCard({ post, now, viewerId, photoSource, onVote, onOpenComme
         <PostPhoto source={photoSource?.(post.imagePath) ?? null} />
       )}
 
-      {ownPrivate ? (
-        <Body variant="small" style={styles.privacy}>
-          {ONLY_YOU_LINE}
-        </Body>
-      ) : null}
+      {own ? <VisibilityControl post={post} onChangeVisibility={onChangeVisibility} /> : null}
 
       <PostFooter post={post} onVote={onVote} onOpenComments={onOpenComments} />
     </Card>
   );
 }
+
+/** The chooser's three chips, with what a screen reader says for each. */
+const VISIBILITY_OPTIONS: ChoiceOption<WorkoutVisibility>[] = VISIBILITY_ORDER.map((value) => ({
+  value,
+  label: VISIBILITY_WORDS[value].label,
+  spoken: `${VISIBILITY_WORDS[value].label}: ${VISIBILITY_WORDS[value].meaning}`,
+}));
+
+/**
+ * The owner's "who can see this" control (B26): a small chip naming the post's audience ("Only
+ * you", "Followers", "Public"). Tapping it opens a chooser — the three options and the sentence
+ * for the chosen one. Choosing moves the chip at once ("optimistic"), sends the change, and — if
+ * the server refuses — moves it back with a short message. The options are disabled while a
+ * change is on its way, so a double tap sends one change. A fresh feed load (a new
+ * `post.visibility`) resets the chip to the server's value — the server is always the truth.
+ */
+function VisibilityControl({ post, onChangeVisibility }: Pick<PostCardProps, 'post' | 'onChangeVisibility'>) {
+  const [shown, setShown] = useState<WorkoutVisibility>(post.visibility);
+  const [open, setOpen] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  // A ref as well as state: two taps before the next draw must still send only one change.
+  const inFlight = useRef(false);
+
+  // The "adjust state when a prop changes" pattern (as in the footer): a refreshed feed wins.
+  const [server, setServer] = useState(post.visibility);
+  if (server !== post.visibility) {
+    setServer(post.visibility);
+    setShown(post.visibility);
+  }
+
+  /** One option chosen: show it now, send it, undo it if refused. */
+  async function choose(next: WorkoutVisibility): Promise<void> {
+    if (!onChangeVisibility || inFlight.current || next === shown) return;
+    const before = shown;
+    setShown(next);
+    setMessage(null);
+    inFlight.current = true;
+    setSending(true);
+    const result = await onChangeVisibility(post, next);
+    inFlight.current = false;
+    setSending(false);
+    if (result.ok) {
+      setOpen(false);
+    } else {
+      setShown(before);
+      setMessage(POST_VISIBILITY_REFUSAL_MESSAGES[result.reason]);
+    }
+  }
+
+  const words = VISIBILITY_WORDS[shown];
+  return (
+    <View style={styles.visibility}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Who can see this post: ${words.label}`}
+        accessibilityHint={onChangeVisibility ? 'Changes who can see this post' : undefined}
+        accessibilityState={{ expanded: open, disabled: !onChangeVisibility }}
+        disabled={!onChangeVisibility}
+        onPress={() => {
+          setOpen((o) => !o);
+          setMessage(null); // an old refusal doesn't outlive the chooser it belonged to
+        }}
+        hitSlop={8}
+        style={styles.visibilityChip}
+      >
+        <Ionicons name={VISIBILITY_ICONS[shown]} size={14} color={colors.muted} />
+        <Body variant="small">{words.label}</Body>
+      </Pressable>
+      {open ? (
+        <View style={styles.visibilityChooser}>
+          <ChoiceChips options={VISIBILITY_OPTIONS} selected={shown} onSelect={(v) => void choose(v)} disabled={sending} fill />
+          <Body variant="small" style={styles.muted}>
+            {words.meaning}
+          </Body>
+        </View>
+      ) : null}
+      {message ? (
+        <Body variant="small" style={styles.muted}>
+          {message}
+        </Body>
+      ) : null}
+    </View>
+  );
+}
+
+/** The small icon beside each audience's name on the chip. */
+const VISIBILITY_ICONS: Record<WorkoutVisibility, 'lock-closed-outline' | 'people-outline' | 'globe-outline'> = {
+  private: 'lock-closed-outline',
+  followers: 'people-outline',
+  public: 'globe-outline',
+};
 
 /** What the comments button says: "Comment" with none yet, else "1 comment" / "n comments". */
 export function commentButtonLabel(count: number): string {
@@ -388,8 +500,26 @@ const styles = StyleSheet.create({
   photoMissing: {
     color: colors.muted,
   },
-  privacy: {
+  visibility: {
     marginTop: spacing.sm,
+    gap: spacing.xs,
+    alignItems: 'flex-start',
+  },
+  visibilityChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  visibilityChooser: {
+    alignSelf: 'stretch',
+    gap: spacing.xs,
+  },
+  muted: {
     color: colors.muted,
   },
   footerWrap: {

@@ -19,7 +19,6 @@ import { profile, rawImagePost, rawPost } from '@/test-utils/feedFixtures';
 import { createPreparedDb, renderSignedIn, SIGNED_IN_USER_ID } from '@/test-utils/loggerTestKit';
 import { HOT_SOURCE, type FeedPost } from '@/social/feed';
 import { feedPrefsKey, resetFeedPrefsCache, serializeFeedPrefs } from '@/social/feedPrefs';
-import { ONLY_YOU_LINE } from '@/components/social/PostCard';
 
 import HomeScreen from '@/app/(tabs)/index';
 
@@ -253,8 +252,35 @@ describe('Home feed', () => {
     });
     await renderSignedIn(<HomeScreen />);
     expect(await screen.findByLabelText('Flair: Physique Check')).toBeTruthy();
-    expect(screen.getByText(ONLY_YOU_LINE)).toBeTruthy();
+    expect(screen.getByLabelText('Who can see this post: Only you')).toBeTruthy();
     expect(screen.getByText('Bench Press')).toBeTruthy();
+  });
+
+  it('B26: the lifter makes their own post private from Home — the server row changes, the card stays', async () => {
+    mockSocial = createFakeSocialClient({
+      posts: [rawPost({ id: 'lift', author: me, createdAt: '2026-11-15T08:00:00.000Z' })],
+    });
+    await renderSignedIn(<HomeScreen />);
+    await fireEvent.press(await screen.findByLabelText('Who can see this post: Public'));
+    await fireEvent.press(screen.getByLabelText('Only you: Only you can see this post'));
+    await waitFor(() => expect((mockSocial.tables.posts[0] as { visibility: string }).visibility).toBe('private'));
+    expect(mockSocial.requests.some((r) => r.some(([m, arg]) => m === 'update' && JSON.stringify(arg) === '{"visibility":"private"}'))).toBe(true);
+    // Still on the owner's own feed, now saying who can see it — and the feed's own list knows,
+    // so a card rebuilt after scrolling away says the same.
+    expect(screen.getByLabelText('Who can see this post: Only you')).toBeTruthy();
+    await waitFor(() => expect(listedPosts()[0].visibility).toBe('private'));
+    expect(screen.getByText('Bench Press')).toBeTruthy();
+  });
+
+  it('B26: another lifter’s card has no visibility control', async () => {
+    mockSocial = createFakeSocialClient({
+      profiles: [me, friend],
+      follows: [{ follower_id: ME, followee_id: 'friend' }],
+      posts: [rawPost({ id: 'theirs', author: friend, createdAt: '2026-11-15T08:00:00.000Z' })],
+    });
+    await renderSignedIn(<HomeScreen />);
+    expect(await screen.findByText('Bench Press')).toBeTruthy();
+    expect(screen.queryByLabelText(/^Who can see this post/)).toBeNull();
   });
 });
 

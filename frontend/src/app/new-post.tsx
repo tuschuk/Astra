@@ -4,8 +4,9 @@
  *
  * What it shows:
  *   - two choices of post type: **Progress pic** and **PR photo**;
- *   - a line saying who will see it — progress pics are private ("only you can see this post for
- *     now"; the choice to share them arrives with a later step), PR photos post publicly;
+ *   - a line saying who will see it — a progress pic goes to whoever the lifter chose in
+ *     Settings → Privacy (only them unless they changed it, B26), a PR photo posts publicly.
+ *     Either can be changed afterwards from the post's own card;
  *   - **Choose photo**, which opens the phone's photo library, then a preview of the pick;
  *   - **Post** and **Cancel**.
  *
@@ -32,12 +33,14 @@ import { Screen } from '@/components/Screen';
 import { Button } from '@/components/ui/Button';
 import { FormError } from '@/components/ui/FormError';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
-import type { FlairRow, ImagePostKind } from '@/db/dao';
+import type { FlairRow, ImagePostKind, WorkoutVisibility } from '@/db/dao';
 import { readFlairs } from '@/db/flairs';
 import { useAppDatabase } from '@/db/useAppDatabase';
+import { readProgressPicVisibility } from '@/settings/privacySettings';
 import { createImagePost, IMAGE_POST_DEFAULTS, PostRefusedError, type PickedImage } from '@/social/createPost';
 import { checkPostImage, mimeTypeForPath } from '@/social/mediaLimits';
 import { fileSizeOf } from '@/social/postImages';
+import { VISIBILITY_WORDS } from '@/social/postPrivacy';
 import { colors, radii, spacing } from '@/theme';
 
 /** The two post types, in the order the chips show them, with their labels. */
@@ -46,11 +49,16 @@ const TYPES: { kind: ImagePostKind; label: string }[] = [
   { kind: 'pr', label: 'PR photo' },
 ];
 
-/** Who will see the post, per type — said before posting so the privacy state is never a surprise. */
-export const PRIVACY_LINES: Record<ImagePostKind, string> = {
-  'progress-pic': 'Progress pics are private — only you can see this post for now.',
-  pr: 'PR photos post publicly.',
-};
+/**
+ * Who will see the post — said before posting so the privacy state is never a surprise.
+ * A PR photo posts publicly. A progress pic follows the lifter's choice in Settings → Privacy
+ * (B26), `picVisibility`: "Only you can see this post." / "Your followers can see this post." /
+ * "Anyone on Astra can see this post.", plus where that choice is changed.
+ */
+export function privacyLine(kind: ImagePostKind, picVisibility: WorkoutVisibility): string {
+  if (kind === 'pr') return 'PR photos post publicly.';
+  return `${VISIBILITY_WORDS[picVisibility].meaning}. Choose who sees new progress pics in Settings.`;
+}
 
 /**
  * Turns the photo library's pick into what the size check needs. The picker usually reports the
@@ -77,6 +85,9 @@ export default function NewPostScreen() {
   const [refusal, setRefusal] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Who new progress pics go to (B26) — 'private' until the phone's setting has been read, the
+  // same value the post itself would fall back to.
+  const [picVisibility, setPicVisibility] = useState<WorkoutVisibility>('private');
 
   useFocusEffect(
     useCallback(() => {
@@ -90,10 +101,19 @@ export default function NewPostScreen() {
           console.warn('Share a photo: could not read the flair list', caught);
           if (!cancelled) setFlairs([]);
         });
+      if (userId) {
+        readProgressPicVisibility(db, userId)
+          .then((value) => {
+            if (!cancelled) setPicVisibility(value);
+          })
+          .catch((caught: unknown) => {
+            console.warn('Share a photo: could not read the privacy setting', caught);
+          });
+      }
       return () => {
         cancelled = true;
       };
-    }, [db]),
+    }, [db, userId]),
   );
 
   const flair = flairs?.find((f) => f.id === IMAGE_POST_DEFAULTS[kind].flairId) ?? null;
@@ -165,7 +185,7 @@ export default function NewPostScreen() {
         ))}
       </View>
       <Body variant="small" style={styles.privacy}>
-        {PRIVACY_LINES[kind]}
+        {privacyLine(kind, picVisibility)}
         {flair ? ` Flair: ${flair.name}.` : ''}
       </Body>
 

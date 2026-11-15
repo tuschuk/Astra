@@ -28,7 +28,7 @@ import {
   type RowByTable,
   type WorkoutAnalysisRow,
 } from '@/db/dao';
-import { parseUnit } from '@/db/userSettings';
+import { parseUnit, parseVisibility } from '@/db/userSettings';
 import type { SupabaseConfig } from '@/lib/supabase';
 import { throwIfError } from '@/lib/throwIfError';
 import { postImageUploadUrl, uploadFile } from '@/social/postImages';
@@ -141,19 +141,29 @@ export function createSupabaseTransport(
     async pullUserSettings(userId) {
       const { data, error } = await client
         .from('user_settings')
-        .select('user_id,unit,updated_at')
+        .select('user_id,unit,progress_pic_visibility,updated_at')
         .eq('user_id', userId)
         .maybeSingle();
       throwIfError(error, 'Download of settings failed');
       if (!data) return null;
-      const row = data as { user_id: string; unit: unknown; updated_at: string };
-      return { user_id: row.user_id, unit: parseUnit(row.unit), updated_at: row.updated_at };
+      const row = data as { user_id: string; unit: unknown; progress_pic_visibility: unknown; updated_at: string };
+      return {
+        user_id: row.user_id,
+        unit: parseUnit(row.unit),
+        progress_pic_visibility: parseVisibility(row.progress_pic_visibility),
+        updated_at: row.updated_at,
+      };
     },
 
-    async pushUserSettings(userId, unit) {
+    async pushUserSettings(userId, fields) {
       // An update, never an upsert: the row exists from signup and the phone may not insert.
-      // No updated_at — the server's moddatetime trigger stamps it.
-      const { error } = await client.from('user_settings').update({ unit }).eq('user_id', userId);
+      // No updated_at — the server's moddatetime trigger stamps it. Both settable fields go up
+      // together: the phone's row is always whole (changes are merged into it first), so this
+      // never undoes a setting the lifter didn't touch.
+      const { error } = await client
+        .from('user_settings')
+        .update({ unit: fields.unit, progress_pic_visibility: fields.progress_pic_visibility })
+        .eq('user_id', userId);
       throwIfError(error, 'Upload of settings failed');
     },
 

@@ -430,3 +430,24 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - When both the header and the open tab fail offline, the profile shows two Retry buttons (the
     header's reloads both); merge into one if it reads oddly on device.
   - `mmdc` not permitted for the headless builder; neither diagram was render-checked.
+- B26 post-privacy follow-ups (`post-privacy`):
+  - **Body-data visibility control** moved out of B26 (plan scope readings / G5): Settings states
+    "Only you. Body data never leaves your account." The user-set choice lands with the first step
+    that reads body data (B38+ grades, B46 trends). Gate 2 should reword NFR-5's BUILD_LIST note.
+  - **Default workout visibility / per-workout visibility control** — not in B26's scope;
+    `user_settings.default_workout_visibility` stays unmirrored (new workouts are born public). The
+    step that adds a workout-level control must also add the workout→post lockstep trigger (only
+    post→workout exists today).
+  - **Multi-device stale workout edit** (accepted, plan "Risks" 2): device B holding an old copy
+    of a workout and editing it offline before its next download can push the old visibility
+    back up, moving the workout (not the post) back. It's the B14 last-write-wins class and fixes
+    itself on the next post change. Revisit if a per-workout control lands.
+  - **Gate 2 / device check:** toggle a post private on the phone, confirm it disappears for a
+    second account (and its photo for a progress pic); set Settings → Privacy → Followers offline,
+    reconnect, post a progress pic and confirm a follower sees it.
+  - Review judgement calls left as-is: the visibility icons (`PostCard`) and Settings' spoken
+    labels are their own small tables beside `VISIBILITY_WORDS` (merge if a fourth visibility ever
+    appears); `postPrivacy.ts` holds both the audience wording and the update (split if the wording
+    grows); `'private'` as the fallback appears in `DEFAULT_USER_SETTINGS`, `parseVisibility` and two
+    screens' initial state.
+  - `mmdc` needs approval for the headless builder; neither diagram was render-checked.

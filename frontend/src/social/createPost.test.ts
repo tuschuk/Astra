@@ -1,19 +1,21 @@
 /**
  * Tests for making a post on the phone, on real SQLite: a workout post (B21) — one row and one
  * outbox line in one transaction, the workout's visibility copied — and a photo post (B22) — the
- * photo checked and copied first, progress pics born private — with every refusal saving nothing.
+ * photo checked and copied first, progress pics born private unless (B26) the lifter's Settings
+ * choice says otherwise — with every refusal saving nothing.
  */
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { prepareDatabase } from '@/db/database';
 import { onLocalWrite, writeLocal, type FlairRow } from '@/db/dao';
 import { replaceFlairsTx } from '@/db/flairs';
+import { setProgressPicVisibility } from '@/settings/privacySettings';
 import { outboxSize, pendingRows } from '@/sync/outbox';
 import { FakePostImageFiles } from '@/test-utils/fakePostImageFiles';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { OTHER_USER_ID, USER_ID, WORKOUT } from '@/test-utils/workoutFixtures';
 
-import { createImagePost, createWorkoutPost, hasPostForWorkout, PostRefusedError } from './createPost';
+import { createImagePost, createWorkoutPost, hasPostForWorkout, imagePostVisibility, PostRefusedError } from './createPost';
 import { MAX_POST_IMAGE_BYTES } from './mediaLimits';
 import { localPostImageUri } from './postImages';
 
@@ -155,6 +157,21 @@ describe('createImagePost (B22)', () => {
     expect(await pendingRows(db, 'posts')).toEqual([{ rowId: POST_ID, mark: expect.any(Number) }]);
     // The picked photo was copied into the waiting folder, under the post's id.
     expect([...files.files.entries()]).toEqual([[localPostImageUri(post.image_path!), JPEG.uri]]);
+  });
+
+  it('B26: a progress pic is born with the lifter’s Settings choice, read on the phone (works offline)', async () => {
+    const db = await phone();
+    const files = new FakePostImageFiles();
+    await setProgressPicVisibility(db, USER_ID, 'followers');
+    const pic = await createImagePost(db, USER_ID, 'progress-pic', JPEG, { newId: () => POST_ID, saveImage: files.save });
+    expect(pic.visibility).toBe('followers');
+    // Another lifter's choice on the same phone doesn't leak into this one's posts.
+    await setProgressPicVisibility(db, OTHER_USER_ID, 'public');
+    expect(await imagePostVisibility(db, USER_ID, 'progress-pic')).toBe('followers');
+    // A PR photo stays public whatever the progress-pic choice is.
+    await setProgressPicVisibility(db, USER_ID, 'private');
+    expect(await imagePostVisibility(db, USER_ID, 'pr')).toBe('public');
+    expect(await imagePostVisibility(db, USER_ID, 'progress-pic')).toBe('private');
   });
 
   it('a PR photo is public and wears New PR; a PNG keeps its format', async () => {
