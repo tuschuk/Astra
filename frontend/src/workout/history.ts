@@ -5,7 +5,7 @@
  *   - `listPastWorkouts`: which workouts have I finished? (the Workout tab's list)
  *   - `readWorkout`: what exactly was in this one? (the saved-workout screen)
  *   - `lastSessionSets`: what did I do on this exercise last time? (the "last time" line, LOG-5)
- * plus `exerciseName`, the name to show for an exercise in the active workout.
+ * plus `exerciseInfo`, the name (and equipment) to show for an exercise in the active workout.
  *
  * Two rules every query here follows:
  *   - **Only the signed-in user's rows.** The database file can still hold a previous account's
@@ -161,14 +161,23 @@ export async function lastSessionSets(
   return { workoutId: workout.id, startedAt: workout.started_at, sets: rows.map((r) => fromSqlRow('sets', r)) };
 }
 
+/** What the logger needs to know about an exercise beyond its id. */
+export interface ExerciseInfo {
+  name: string;
+  /** The library's equipment kind ('Barbell', 'Bodyweight', …), or null for a custom one without it. */
+  equipment: string | null;
+}
+
 /**
- * The name of an exercise the user can see (a library exercise or their own), or null if it
- * isn't on the phone. The active workout stores only exercise ids, so its cards look names up.
+ * The name and equipment of an exercise the user can see (a library exercise or their own), or
+ * null if it isn't on the phone. The active workout stores only exercise ids, so its cards look
+ * these up: the name to show, and the equipment so a bodyweight movement's weight box can ask
+ * for *added* weight (LOG-15).
  */
-export async function exerciseName(db: SqlExecutor, userId: string, exerciseId: string): Promise<string | null> {
-  const row = await db.getFirstAsync<{ name: string }>(
-    'select name from exercises where id = ? and (owner_id is null or owner_id = ?)',
+export async function exerciseInfo(db: SqlExecutor, userId: string, exerciseId: string): Promise<ExerciseInfo | null> {
+  const row = await db.getFirstAsync<{ name: string; equipment: string | null }>(
+    'select name, equipment from exercises where id = ? and (owner_id is null or owner_id = ?)',
     [exerciseId, userId],
   );
-  return row?.name ?? null;
+  return row ? { name: row.name, equipment: row.equipment ?? null } : null;
 }

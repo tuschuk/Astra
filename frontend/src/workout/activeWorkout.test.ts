@@ -25,7 +25,7 @@ import { FakeServer } from '@/test-utils/fakeTransport';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { OTHER_USER_ID, USER_ID } from '@/test-utils/workoutFixtures';
 
-import { loadActiveWorkout, startActiveWorkout, type ActiveWorkoutOptions } from './activeWorkout';
+import { loadActiveWorkout, setInputFromRow, startActiveWorkout, type ActiveWorkoutOptions } from './activeWorkout';
 
 const BENCH = libraryExerciseId('bench_press');
 const SQUAT = libraryExerciseId('squat');
@@ -168,7 +168,8 @@ describe('finish hands the workout to sync', () => {
     const squat = await store.addExercise(SQUAT);
     await store.logSet(bench.id, { reps: 5, weight: { value: 100, unit: 'kg' } });
     await store.repeatLastSet(bench.id);
-    await store.logSet(squat.id, { reps: 5, weight: { value: 315, unit: 'lb' }, rpe: 7.5 });
+    const squatWarmup = await store.logSet(squat.id, { reps: 5, weight: { value: 60, unit: 'kg' }, isWarmup: true });
+    const squatWork = await store.logSet(squat.id, { reps: 5, weight: { value: 315, unit: 'lb' }, rpe: 7.5 });
 
     expect(await outboxSize(db)).toBe(0);
 
@@ -178,7 +179,7 @@ describe('finish hands the workout to sync', () => {
     expect(store.getSnapshot().workout.ended_at).toBe(finished.ended_at);
     expect((await pendingRows(db, 'workouts')).map((p) => p.rowId)).toEqual([finished.id]);
     expect(await pendingRows(db, 'workout_exercises')).toHaveLength(2);
-    expect(await pendingRows(db, 'sets')).toHaveLength(3);
+    expect(await pendingRows(db, 'sets')).toHaveLength(4);
 
     // The real upload code, against a stand-in server that enforces parents-before-children.
     const server = new FakeServer();
@@ -186,16 +187,17 @@ describe('finish hands the workout to sync', () => {
     expect(await outboxSize(db)).toBe(0);
     expect([...server.tables.workouts.keys()]).toEqual([finished.id]);
     expect(server.tables.workout_exercises.size).toBe(2);
-    expect(server.tables.sets.size).toBe(3);
-    const uploadedSquat = [...server.tables.sets.values()].find((s) => s.workout_exercise_id === squat.id);
-    expect(uploadedSquat).toMatchObject({ reps: 5, weight_kg: 142.88, rpe: 7.5, is_warmup: false });
+    expect(server.tables.sets.size).toBe(4);
+    // B10: the warm-up flag and the RPE reach the server intact (LOG-14, LOG-10 "saves and syncs").
+    expect(server.tables.sets.get(squatWork.id)).toMatchObject({ reps: 5, weight_kg: 142.88, rpe: 7.5, is_warmup: false });
+    expect(server.tables.sets.get(squatWarmup.id)).toMatchObject({ reps: 5, weight_kg: 60, rpe: null, is_warmup: true });
     expect(server.tables.workouts.get(finished.id)?.ended_at).toBe(finished.ended_at);
 
     // A second push has nothing to send and changes nothing.
     const calls = server.upsertCalls.length;
     await pushOutbox(db, server);
     expect(server.upsertCalls.length).toBe(calls);
-    expect(server.tables.sets.size).toBe(3);
+    expect(server.tables.sets.size).toBe(4);
   });
 
   it('tells the sync engine (local-write listeners) once the finish commits', async () => {
@@ -404,6 +406,53 @@ describe('operations', () => {
     expect(copy.id).not.toBe(first.id);
     expect(copy.position).toBe(1);
     expect(store.getSnapshot().entries[0].sets).toHaveLength(2);
+  });
+
+  it('flips a logged set to warm-up and back via setInputFromRow, changing nothing else (B10)', async () => {
+    const db = await freshDb();
+    const store = await startActiveWorkout(db, USER_ID, options());
+    const bench = await store.addExercise(BENCH);
+    // Pounds, so the stored kg has two decimals that a sloppy round trip could disturb.
+    const logged = await store.logSet(bench.id, {
+      reps: 8,
+      weight: { value: 137.5, unit: 'lb' },
+      rpe: 6.5,
+      dropSetPosition: 1,
+      durationSeconds: 30,
+    });
+    const strip = ({ is_warmup: _w, updated_at: _u, ...values }: SetRow) => values;
+
+    const warm = await store.updateSet(logged.id, { ...setInputFromRow(logged), isWarmup: true });
+    expect(warm.is_warmup).toBe(true);
+    expect(strip(warm)).toEqual(strip(logged));
+
+    const back = await store.updateSet(warm.id, { ...setInputFromRow(warm), isWarmup: false });
+    expect(back.is_warmup).toBe(false);
+    expect(strip(back)).toEqual(strip(logged));
+  });
+
+  it('setInputFromRow keeps a weightless (bodyweight) set weightless', () => {
+    const row: SetRow = {
+      id: 'x',
+      workout_exercise_id: 'e',
+      position: 0,
+      reps: 8,
+      weight_kg: null,
+      rpe: null,
+      is_warmup: false,
+      drop_set_position: null,
+      duration_seconds: null,
+      created_at: '',
+      updated_at: '',
+    };
+    expect(setInputFromRow(row)).toEqual({
+      reps: 8,
+      weight: null,
+      rpe: null,
+      isWarmup: false,
+      dropSetPosition: null,
+      durationSeconds: null,
+    });
   });
 
   it('refuses to repeat when the exercise has no sets yet', async () => {

@@ -1,12 +1,18 @@
 /**
  * EntryCard — one exercise in the workout being logged.
  *
- * What it shows: the exercise's name, a "Last time" line with the sets from the previous
- * session of this exercise (LOG-5; absent if it has never been logged), and every set logged
- * so far in this workout ("Set 2 · 8 × 185 lb").
+ * What it shows: the exercise's name, a "Last time" line with the work sets from the previous
+ * session of this exercise (LOG-5; warm-ups left out, absent if it has never been logged), and
+ * every set logged so far in this workout ("Set 2 · W · 8 × 135 lb", "Set 3 · 5 × 225 lb @ RPE 8").
  *
  * What the lifter can do:
- *   - type reps and/or weight (in their unit) and tap **Log set** (LOG-2);
+ *   - type reps and/or weight (in their unit), optionally an RPE, and tap **Log set** (LOG-2,
+ *     LOG-10). Reps alone is a complete set — that is how a pull-up is logged (LOG-15). For a
+ *     bodyweight exercise the weight box asks for "+ lb": any weight typed is the *added* load
+ *     (a weighted pull-up), which is what the PR books compare;
+ *   - press **Warm-up** so the sets they log next are warm-ups (LOG-14 — never a PR, never
+ *     volume). It stays pressed until they press it again, because warm-ups come in runs;
+ *   - tap the **W** beside any logged set to mark it as a warm-up or a work set after the fact;
  *   - tap **Repeat** to log an exact copy of the last set — one tap, nothing to type or confirm
  *     (NFR-2). It is shown but disabled until the first set exists, so it is easy to discover;
  *   - remove any set, remove the whole exercise, or move it up / down in the workout.
@@ -28,9 +34,11 @@ import { Button } from '@/components/ui/Button';
 import { FormError } from '@/components/ui/FormError';
 import { Body, SectionLabel } from '@/components/ui/Text';
 import type { SqlExecutor } from '@/db/driver';
-import type { ActiveEntry, ActiveWorkoutStore } from '@/workout/activeWorkout';
+import type { SetRow } from '@/db/dao';
+import type { Equipment } from '@/library/exercises';
+import { setInputFromRow, type ActiveEntry, type ActiveWorkoutStore } from '@/workout/activeWorkout';
 import { formatLastTime, formatSet, parseNumberInput, setErrorMessage } from '@/workout/format';
-import { exerciseName, lastSessionSets, type LastSession } from '@/workout/history';
+import { exerciseInfo, lastSessionSets, type ExerciseInfo, type LastSession } from '@/workout/history';
 import { colors, layout, radii, spacing, type } from '@/theme';
 
 interface EntryCardProps {
@@ -50,23 +58,26 @@ interface EntryCardProps {
 
 /** What the card looks up once, when it first appears. */
 interface EntryHistory {
-  name: string | null;
+  info: ExerciseInfo | null;
   lastTime: LastSession | null;
 }
 
+/** The library's equipment kind for movements done with the lifter's own body (see library/exercises.ts). */
+const BODYWEIGHT_EQUIPMENT: Equipment = 'Bodyweight';
+
 /**
- * Looks up the exercise's name and its previous session once, when the card appears. The
- * previous session is finished history, so it cannot change during this workout — there is
+ * Looks up the exercise's name, equipment and previous session once, when the card appears.
+ * The previous session is finished history, so it cannot change during this workout — there is
  * nothing to refresh later.
  */
 function useEntryHistory(db: SqlExecutor, userId: string, exerciseId: string | null, workoutId: string): EntryHistory {
-  const [history, setHistory] = useState<EntryHistory>({ name: null, lastTime: null });
+  const [history, setHistory] = useState<EntryHistory>({ info: null, lastTime: null });
   useEffect(() => {
     if (!exerciseId) return;
     let cancelled = false;
-    Promise.all([exerciseName(db, userId, exerciseId), lastSessionSets(db, userId, exerciseId, workoutId)])
-      .then(([name, lastTime]) => {
-        if (!cancelled) setHistory({ name, lastTime });
+    Promise.all([exerciseInfo(db, userId, exerciseId), lastSessionSets(db, userId, exerciseId, workoutId)])
+      .then(([info, lastTime]) => {
+        if (!cancelled) setHistory({ info, lastTime });
       })
       .catch((error: unknown) => console.warn('Could not read this exercise’s history', error));
     return () => {
@@ -77,10 +88,14 @@ function useEntryHistory(db: SqlExecutor, userId: string, exerciseId: string | n
 }
 
 export function EntryCard({ store, entry, entryCount, db, userId, unit }: EntryCardProps) {
-  const { name, lastTime } = useEntryHistory(db, userId, entry.exercise_id, entry.workout_id);
-  const label = name ?? 'Exercise';
+  const { info, lastTime } = useEntryHistory(db, userId, entry.exercise_id, entry.workout_id);
+  const label = info?.name ?? 'Exercise';
+  const bodyweight = info?.equipment === BODYWEIGHT_EQUIPMENT;
   const [reps, setReps] = useState('');
   const [weight, setWeight] = useState('');
+  const [rpe, setRpe] = useState('');
+  // Whether the next set logged is a warm-up. Not reset after logging: warm-ups come in runs.
+  const [warmup, setWarmup] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // While a store call runs, the card's buttons are disabled and further taps are ignored, so
   // a double-tap on "move down" can't move the exercise twice (or Repeat log two copies). The
@@ -104,12 +119,16 @@ export function EntryCard({ store, entry, entryCount, db, userId, unit }: EntryC
     }
   }
 
-  /** Reads the two boxes and logs the set (the typed values stay, ready for the next set). */
+  /**
+   * Reads the reps, weight and RPE boxes and the Warm-up chip, and logs the set (the typed
+   * values stay, ready for the next set). The store checks the ranges (whole reps, RPE 1–10).
+   */
   function logSet(): void {
     const parsedReps = parseNumberInput(reps);
     const parsedWeight = parseNumberInput(weight);
-    if (!parsedReps.ok || !parsedWeight.ok) {
-      setError('Enter reps and weight as plain numbers.');
+    const parsedRpe = parseNumberInput(rpe);
+    if (!parsedReps.ok || !parsedWeight.ok || !parsedRpe.ok) {
+      setError('Enter reps, weight and RPE as plain numbers.');
       return;
     }
     const weightValue = parsedWeight.value;
@@ -117,12 +136,22 @@ export function EntryCard({ store, entry, entryCount, db, userId, unit }: EntryC
       store.logSet(entry.id, {
         reps: parsedReps.value,
         weight: weightValue == null ? null : { value: weightValue, unit },
+        rpe: parsedRpe.value,
+        isWarmup: warmup,
       }),
     );
   }
 
+  /** Flips one logged set between warm-up and work set, keeping everything else it says. */
+  function toggleWarmup(set: SetRow): void {
+    void run(() => store.updateSet(set.id, { ...setInputFromRow(set), isWarmup: !set.is_warmup }));
+  }
+
+  // An RPE alone is not a set — something must have been lifted.
   const canLog = reps.trim() !== '' || weight.trim() !== '';
   const hasSets = entry.sets.length > 0;
+  const lastTimeText = lastTime ? formatLastTime(lastTime.sets, unit) : '';
+  const weightLabel = bodyweight ? `Added weight in ${unit} for ${label}` : `Weight in ${unit} for ${label}`;
 
   return (
     <Card style={styles.card}>
@@ -150,9 +179,9 @@ export function EntryCard({ store, entry, entryCount, db, userId, unit }: EntryC
         </View>
       </View>
 
-      {lastTime && lastTime.sets.length > 0 ? (
+      {lastTimeText !== '' ? (
         <Body variant="small" style={styles.lastTime}>
-          Last time: {formatLastTime(lastTime.sets, unit)}
+          Last time: {lastTimeText}
         </Body>
       ) : null}
 
@@ -162,6 +191,12 @@ export function EntryCard({ store, entry, entryCount, db, userId, unit }: EntryC
             Set {set.position + 1}
           </SectionLabel>
           <Body style={styles.setText}>{formatSet(set, unit)}</Body>
+          <WarmupBadge
+            label={`Warm-up: set ${set.position + 1} of ${label}`}
+            checked={set.is_warmup}
+            disabled={pending}
+            onPress={() => toggleWarmup(set)}
+          />
           <IconButton
             icon="close"
             label={`Remove set ${set.position + 1} of ${label}`}
@@ -185,11 +220,32 @@ export function EntryCard({ store, entry, entryCount, db, userId, unit }: EntryC
           style={styles.input}
           value={weight}
           onChangeText={setWeight}
-          placeholder={unit}
+          placeholder={bodyweight ? `+ ${unit}` : unit}
           placeholderTextColor={colors.muted}
           keyboardType="decimal-pad"
-          accessibilityLabel={`Weight in ${unit} for ${label}`}
+          accessibilityLabel={weightLabel}
         />
+        <TextInput
+          style={styles.input}
+          value={rpe}
+          onChangeText={setRpe}
+          placeholder="RPE"
+          placeholderTextColor={colors.muted}
+          keyboardType="decimal-pad"
+          accessibilityLabel={`RPE for ${label}`}
+        />
+      </View>
+
+      <View style={styles.actionRow}>
+        <Pressable
+          accessibilityRole="switch"
+          accessibilityLabel={`Warm-up sets for ${label}`}
+          accessibilityState={{ checked: warmup }}
+          onPress={() => setWarmup((on) => !on)}
+          style={({ pressed }) => [styles.chip, warmup && styles.chipOn, pressed && styles.iconPressed]}
+        >
+          <Body style={[styles.chipText, warmup && styles.chipTextOn]}>Warm-up</Body>
+        </Pressable>
         <Button label="Log set" onPress={logSet} disabled={pending || !canLog} style={styles.logButton} />
       </View>
 
@@ -204,6 +260,40 @@ export function EntryCard({ store, entry, entryCount, db, userId, unit }: EntryC
 
       <FormError message={error} style={styles.error} />
     </Card>
+  );
+}
+
+/**
+ * The "W" beside a logged set: filled when the set is a warm-up, outlined when it is a work set.
+ * Tapping it flips the set between the two (LOG-14), so a lifter who realizes at set 3 that
+ * sets 1–2 were warm-ups can fix them with one tap each. Screen readers hear `label` and
+ * whether it is on.
+ */
+function WarmupBadge({
+  label,
+  checked,
+  onPress,
+  disabled,
+}: {
+  label: string;
+  checked: boolean;
+  onPress: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityLabel={label}
+      accessibilityState={{ checked, disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      hitSlop={spacing.xs}
+      style={({ pressed }) => [styles.iconButton, pressed && styles.iconPressed, disabled && styles.iconDisabled]}
+    >
+      <View style={[styles.badge, checked && styles.chipOn]}>
+        <Body style={[styles.badgeText, checked && styles.chipTextOn]}>W</Body>
+      </View>
+    </Pressable>
   );
 }
 
@@ -282,6 +372,42 @@ const styles = StyleSheet.create({
     borderColor: colors.borderStrong,
     borderRadius: radii.lg,
     paddingHorizontal: spacing.md,
+  },
+  actionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  chip: {
+    minHeight: layout.minTouchTarget,
+    paddingHorizontal: spacing.md,
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: radii.lg,
+  },
+  chipOn: {
+    backgroundColor: colors.accentDim,
+    borderColor: colors.accent,
+  },
+  chipText: {
+    color: colors.muted,
+  },
+  chipTextOn: {
+    color: colors.text,
+  },
+  badge: {
+    width: 26,
+    height: 26,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: radii.md,
+  },
+  badgeText: {
+    ...type.labelSmall,
   },
   logButton: {
     paddingHorizontal: spacing.lg,

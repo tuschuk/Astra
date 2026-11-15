@@ -1,7 +1,8 @@
 /**
  * Tests for EntryCard, wired to a real active-workout store on real SQLite, so what the card
  * shows is what the database holds. The headline is NFR-2: a single press of Repeat logs a set
- * identical to the previous one.
+ * identical to the previous one. B10 adds the set types: warm-up toggles (LOG-14), reps-only
+ * bodyweight sets (LOG-15) and an optional RPE (LOG-10).
  */
 import { describe, expect, it } from '@jest/globals';
 import React from 'react';
@@ -112,7 +113,7 @@ describe('EntryCard', () => {
     const { store } = await setup();
     await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), 'abc');
     await fireEvent.press(screen.getByLabelText('Log set'));
-    expect(await screen.findByText('Enter reps and weight as plain numbers.')).toBeTruthy();
+    expect(await screen.findByText('Enter reps, weight and RPE as plain numbers.')).toBeTruthy();
 
     await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), '8.5');
     await fireEvent.press(screen.getByLabelText('Log set'));
@@ -181,6 +182,124 @@ describe('EntryCard', () => {
     await screen.findByLabelText('Move Bench Press up');
     expect(calls).toBe(1);
     expect(store.getSnapshot().entries.map((e) => e.exercise_id)).toEqual([SQUAT, BENCH, DEADLIFT]);
+  });
+
+  it('logs warm-ups while the Warm-up chip is pressed, and work sets once it is released (LOG-14)', async () => {
+    const { store } = await setup();
+    const chip = screen.getByLabelText('Warm-up sets for Bench Press');
+    expect(chip.props.accessibilityState).toMatchObject({ checked: false });
+    await fireEvent.press(chip);
+    expect(screen.getByLabelText('Warm-up sets for Bench Press').props.accessibilityState).toMatchObject({
+      checked: true,
+    });
+
+    await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), '8');
+    await fireEvent.changeText(screen.getByLabelText('Weight in lb for Bench Press'), '135');
+    await fireEvent.press(screen.getByLabelText('Log set'));
+    expect(await screen.findByText('W · 8 × 135 lb')).toBeTruthy();
+    // The chip stays pressed: warm-ups come in runs.
+    await fireEvent.press(screen.getByLabelText('Repeat last set'));
+    await screen.findByText('Set 2');
+
+    await fireEvent.press(screen.getByLabelText('Warm-up sets for Bench Press'));
+    await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), '5');
+    await fireEvent.changeText(screen.getByLabelText('Weight in lb for Bench Press'), '225');
+    await fireEvent.press(screen.getByLabelText('Log set'));
+    expect(await screen.findByText('5 × 225 lb')).toBeTruthy();
+    expect(store.getSnapshot().entries[0].sets.map((s) => s.is_warmup)).toEqual([true, true, false]);
+  });
+
+  it('flips a logged set between warm-up and work with its W, keeping its values', async () => {
+    const { store } = await setup();
+    await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), '10');
+    await fireEvent.changeText(screen.getByLabelText('Weight in lb for Bench Press'), '95');
+    await fireEvent.press(screen.getByLabelText('Log set'));
+    await screen.findByText('10 × 95 lb');
+    const before = store.getSnapshot().entries[0].sets[0];
+    const badge = screen.getByLabelText('Warm-up: set 1 of Bench Press');
+    expect(badge.props.accessibilityState).toMatchObject({ checked: false });
+
+    await fireEvent.press(badge);
+    expect(await screen.findByText('W · 10 × 95 lb')).toBeTruthy();
+    const after = store.getSnapshot().entries[0].sets[0];
+    expect(after).toMatchObject({ id: before.id, reps: 10, weight_kg: before.weight_kg, is_warmup: true });
+    expect(screen.getByLabelText('Warm-up: set 1 of Bench Press').props.accessibilityState).toMatchObject({
+      checked: true,
+    });
+
+    await fireEvent.press(screen.getByLabelText('Warm-up: set 1 of Bench Press'));
+    expect(await screen.findByText('10 × 95 lb')).toBeTruthy();
+    expect(store.getSnapshot().entries[0].sets[0].is_warmup).toBe(false);
+  });
+
+  it('saves an optional RPE with the set, and refuses one outside 1–10 (LOG-10)', async () => {
+    const { store } = await setup();
+    await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), '5');
+    await fireEvent.changeText(screen.getByLabelText('Weight in lb for Bench Press'), '225');
+    await fireEvent.changeText(screen.getByLabelText('RPE for Bench Press'), '8,5');
+    await fireEvent.press(screen.getByLabelText('Log set'));
+    expect(await screen.findByText('5 × 225 lb @ RPE 8.5')).toBeTruthy();
+    expect(store.getSnapshot().entries[0].sets[0].rpe).toBe(8.5);
+
+    await fireEvent.changeText(screen.getByLabelText('RPE for Bench Press'), '11');
+    await fireEvent.press(screen.getByLabelText('Log set'));
+    expect(await screen.findByText('RPE goes from 1 to 10.')).toBeTruthy();
+    expect(store.getSnapshot().entries[0].sets).toHaveLength(1);
+  });
+
+  it('does not log an RPE alone', async () => {
+    await setup();
+    await fireEvent.changeText(screen.getByLabelText('RPE for Bench Press'), '8');
+    expect(screen.getByLabelText('Log set').props.accessibilityState).toMatchObject({ disabled: true });
+  });
+
+  it('logs a pull-up with reps only; its weight box asks for added weight (LOG-15)', async () => {
+    const PULLUPS = libraryExerciseId('pullups');
+    const db = await createPreparedDb();
+    const store = await startActiveWorkout(db, USER_ID, steadyOptions());
+    await store.addExercise(PULLUPS);
+    await render(<Cards store={store} db={db} />);
+    const weightBox = await screen.findByLabelText('Added weight in lb for Pullups');
+    expect(weightBox.props.placeholder).toBe('+ lb');
+
+    await fireEvent.changeText(screen.getByLabelText('Reps for Pullups'), '8');
+    expect(screen.getByLabelText('Log set').props.accessibilityState).toMatchObject({ disabled: false });
+    await fireEvent.press(screen.getByLabelText('Log set'));
+    expect(await screen.findByText('8 reps')).toBeTruthy();
+
+    // A weighted pull-up: the added load is what's stored.
+    await fireEvent.changeText(screen.getByLabelText('Reps for Pullups'), '5');
+    await fireEvent.changeText(weightBox, '45');
+    await fireEvent.press(screen.getByLabelText('Log set'));
+    expect(await screen.findByText('5 × 45 lb')).toBeTruthy();
+    expect(store.getSnapshot().entries[0].sets.map((s) => [s.reps, s.weight_kg])).toEqual([
+      [8, null],
+      [5, roundWeightKgForStorage(lbToKg(45))],
+    ]);
+  });
+
+  it('keeps the plain weight placeholder for a barbell lift', async () => {
+    await setup();
+    expect(screen.getByLabelText('Weight in lb for Bench Press').props.placeholder).toBe('lb');
+  });
+
+  it('leaves warm-ups out of "Last time", and hides the line when only warm-ups were done', async () => {
+    const db = await createPreparedDb();
+    const past = await startActiveWorkout(db, USER_ID, steadyOptions('2026-11-10T09:00:00.000Z'));
+    const pastBench = await past.addExercise(BENCH);
+    const pastSquat = await past.addExercise(SQUAT);
+    await past.logSet(pastBench.id, { reps: 10, weight: { value: 95, unit: 'lb' }, isWarmup: true });
+    for (let i = 0; i < 3; i += 1) await past.logSet(pastBench.id, { reps: 5, weight: { value: 225, unit: 'lb' } });
+    await past.logSet(pastSquat.id, { reps: 5, weight: { value: 135, unit: 'lb' }, isWarmup: true });
+    await past.finish();
+
+    const store = await startActiveWorkout(db, USER_ID, steadyOptions('2026-11-14T09:00:00.000Z'));
+    await store.addExercise(BENCH);
+    await store.addExercise(SQUAT);
+    await render(<Cards store={store} db={db} />);
+    expect(await screen.findByText('Last time: 3 × 5 @ 225 lb')).toBeTruthy();
+    await screen.findByText('Squat');
+    expect(screen.getAllByText(/^Last time:/)).toHaveLength(1);
   });
 
   it('shows the previous session’s sets as "Last time", never this workout’s', async () => {

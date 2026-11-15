@@ -61,7 +61,7 @@ flowchart TD
   end
 
   subgraph LoggerUI["Logger screens (signed-in stack, above the tab bar)"]
-    Logger["Active workout (app/active-workout.tsx)<br/>EntryCard per exercise: sets, reps + weight in lb (displayUnit.ts),<br/>Log set, Repeat last set (ONE tap, NFR-2), remove set,<br/>move up / down, remove exercise, 'Last time' line (LOG-5)<br/>one store call per card at a time<br/>empty slot on open: resume from astra.db or go back"]
+    Logger["Active workout (app/active-workout.tsx)<br/>EntryCard per exercise: sets, reps + weight in lb (displayUnit.ts) + optional RPE,<br/>Warm-up chip (next sets are warm-ups), W toggle per logged set (B10),<br/>Bodyweight exercise: weight box = '+ lb' added load, reps alone logs,<br/>Log set, Repeat last set (ONE tap, NFR-2), remove set,<br/>move up / down, remove exercise, 'Last time' line (LOG-5, work sets only)<br/>one store call per card at a time<br/>empty slot on open: resume from astra.db or go back"]
     Picker["Add exercise panel (ExercisePicker, a Modal)<br/>alias-aware searchExercises over the catalog;<br/>slug → libraryExerciseId → store.addExercise"]
     EmptyQ{"Finish with zero sets?"}
     Saved["Saved workout (app/workout/[id].tsx), read-only<br/>date, duration, every exercise + set in lb<br/>(another user's / unfinished id: 'not on this phone')"]
@@ -78,7 +78,7 @@ flowchart TD
   subgraph Reads["History read-model (src/workout/history.ts), read only, every query filtered by user_id"]
     ListQ["listPastWorkouts: finished only, newest first, limit 100, counts"]
     ReadQ["readWorkout: one finished workout, entries joined to exercise names, sets"]
-    LastQ["lastSessionSets: newest finished workout with a logged set of<br/>this exercise, never the current draft; + exerciseName"]
+    LastQ["lastSessionSets: newest finished workout with a logged set of<br/>this exercise, never the current draft; + exerciseInfo (name, equipment)"]
   end
   LocalDB --> ListQ --> Workout
   LocalDB --> ReadQ --> Saved
@@ -136,11 +136,11 @@ flowchart TD
   Library -.->|"not wired yet: Library still reads the bundled catalog, not astra.db"| LocalDB
 
   subgraph Shared["Shared training math (backend/supabase/functions/_shared/training-math)<br/>import name in the app: @training-math"]
-    MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification,<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store and the logger's<br/>display (displayWeight); no server function yet"]
+    MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification,<br/>session volume (volume.ts: warm-ups and weightless sets add 0),<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store and the logger's<br/>display (displayWeight); no server function yet"]
   end
   MathMod -->|"lbToKg, assertValidSetFields,<br/>round weight / RPE for storage"| MutWO
   MathMod -->|"displayWeight (format.ts)"| Logger
-  MathMod -.->|"not wired yet: Tool Kit calculators (B16),<br/>logger PR badges (B13), unit setting (B15)"| Workout
+  MathMod -.->|"not wired yet: Tool Kit calculators (B16),<br/>logger PR badges + volume (B13), unit setting (B15)"| Workout
   MathMod -.->|"not wired yet: post-workout analysis<br/>server function (B18)"| Backend
 
   class Home,Market,Communities scaffold
@@ -164,7 +164,13 @@ flowchart TD
    workout**. The logger opens full-screen: **Add exercise** searches the library; each
    exercise card takes reps and/or weight in pounds (**Log set**), repeats the last set in one
    tap (**Repeat last set**), removes a set, moves the exercise up or down, or removes it, and
-   shows "Last time: 3 × 8 @ 185 lb" from the previous finished session of that exercise.
+   shows "Last time: 3 × 8 @ 185 lb" from the previous finished session of that exercise
+   (work sets only). **Set types (B10):** an optional **RPE** box beside reps and weight; a
+   **Warm-up** chip that, while pressed, makes each logged set a warm-up; and a **W** beside
+   every logged set that flips it between warm-up and work set after the fact. Sets print as
+   "W · 8 × 135 lb" or "5 × 225 lb @ RPE 8" on the logger and the saved workout. A bodyweight
+   exercise (pull-ups, dips) logs with reps alone ("8 reps"); its weight box reads "+ lb" for
+   added load on a weighted set.
    **Finish** saves it and opens the read-only saved workout (finishing with no sets offers only
    "Discard workout" or "Keep lifting"). **Discard** asks, then deletes the draft. Leaving the
    logger or killing the app loses nothing: the Workout tab then offers **Resume workout** /
@@ -195,11 +201,14 @@ flowchart TD
   snapshot (`useSyncExternalStore`). The slot is only a cache: the Workout tab calls
   `resumeSessionWorkout` (→ `loadActiveWorkout`) every time it comes into view, and the logger
   does the same if opened with an empty slot. Every write goes through the store; every read is
-  `workout/history.ts` (`listPastWorkouts`, `readWorkout`, `lastSessionSets`, `exerciseName`),
+  `workout/history.ts` (`listPastWorkouts`, `readWorkout`, `lastSessionSets`, `exerciseInfo`),
   each filtered by the signed-in `user_id`. Weights are shown and typed in the unit from
   `settings/displayUnit.ts` — pinned to `lb` (the `user_settings.unit` default) until B15 wires
   the real setting; text formatting and box parsing are `workout/format.ts`, conversion is
   `@training-math`. The two new routes are declared in the root layout's signed-in guard.
+  Toggling a logged set's warm-up flag calls the store's `updateSet` with
+  `setInputFromRow(set)` (`workout/activeWorkout.ts`) plus the flipped flag — the one write path
+  for a set; `rpe` and `is_warmup` ride the existing `sets` columns through finish and push.
 - **On-device store and sync (B07).**
   `src/sync/useSync.ts` runs in the root layout. On launch it opens `astra.db`
   (`src/db/database.ts`: foreign keys on, WAL, migrations by `PRAGMA user_version`). It then seeds
@@ -253,7 +262,8 @@ flowchart TD
   one "Discard this workout?" alert).
 - **Training math** (`backend/supabase/functions/_shared/training-math/`, imported in the app as
   `@training-math`) is the only place e1RM, RPE and %1RM working weights, plate breakdowns, kg/lb
-  conversion and PR detection are computed. It lives beside the server functions so Supabase can
+  conversion, PR detection and session volume (`volume.ts`, external load only, warm-ups
+  excluded; no screen shows it yet) are computed. It lives beside the server functions so Supabase can
   bundle it; `frontend/metro.config.js`, `tsconfig.json` and `jest.config.js` map the alias.
   Weights go in and come out in kg (the plate loader alone works in the rack's own unit); rounded
   display numbers are never stored. `limits.ts` holds the server's rules on a set and the
