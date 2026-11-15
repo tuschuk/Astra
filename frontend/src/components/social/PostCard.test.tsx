@@ -4,16 +4,19 @@
  * `formatDropSet` — in the viewer's unit (LOG-13's feed clause), supersets are grouped, and a
  * long workout is cut short with "+ n more". And (B22) photo posts: the picture fetched as the
  * viewer, the owner told when their post is private, a plain panel when it can't be shown.
+ * And (B23) the vote footer: no downvote control on an upvote-only flair (read from the row),
+ * optimistic score moves, the revert on refusal, and the comments button.
  */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
-import { act, render, screen } from '@testing-library/react-native';
+import { act, fireEvent, render, screen } from '@testing-library/react-native';
 
 import { toFeedPost, type FeedPost, type RawFeedPost } from '@/social/feed';
+import { VOTE_REFUSAL_MESSAGES } from '@/social/votes';
 import { feedSet, profile, rawImagePost, rawPost } from '@/test-utils/feedFixtures';
 import { formatDropSet, formatSet, workoutDetailsLabel } from '@/workout/format';
 
-import { CARD_EXERCISE_LIMIT, ONLY_YOU_LINE, PostCard, UNNAMED_EXERCISE } from './PostCard';
+import { CARD_EXERCISE_LIMIT, commentButtonLabel, ONLY_YOU_LINE, PostCard, UNNAMED_EXERCISE } from './PostCard';
 
 const NOW = new Date('2026-11-15T18:00:00');
 const author = profile('u1', 'wod_queen', 'Wendy');
@@ -113,6 +116,91 @@ describe('PostCard', () => {
     await render(<PostCard post={post} now={NOW} />);
     expect(screen.getByText('plain')).toBeTruthy();
     expect(screen.getByText(/^@plain · /)).toBeTruthy();
+  });
+});
+
+describe('PostCard — votes and comments (B23)', () => {
+  /** A workout post with the given flair, server score and my vote. */
+  function scored(flair: { id: string; name: string; upvotes_only: boolean }, score: number, myVote: 1 | -1 | null): FeedPost {
+    const raw = { ...rawPost({ id: 'v1', author, createdAt: '2026-11-15T07:00:00Z', flair }), my_vote: myVote ? [{ value: myVote }] : [] };
+    const post = toFeedPost(raw, { post_id: 'v1', score, comment_count: 2 });
+    if (!post) throw new Error('expected a post');
+    return post;
+  }
+  const ordinary = { id: 'wod', name: 'WOD', upvotes_only: false };
+  // A flair name no app code mentions: hiding the downvote can only have come from the row's flag.
+  const upvoteOnly = { id: 'zz-flair', name: 'Zz Flex Friday', upvotes_only: true };
+
+  it('an ordinary post shows both arrows around the server’s score, and the comment count', async () => {
+    await render(<PostCard post={scored(ordinary, 4, null)} now={NOW} />);
+    expect(screen.getByLabelText('Upvote')).toBeTruthy();
+    expect(screen.getByLabelText('Downvote')).toBeTruthy();
+    expect(screen.getByLabelText('Score 4')).toBeTruthy();
+    expect(screen.getByLabelText('2 comments')).toBeTruthy();
+  });
+
+  it('an upvote-only flair has no downvote control at all (SOC-4 DoD)', async () => {
+    await render(<PostCard post={scored(upvoteOnly, 1, null)} now={NOW} />);
+    expect(screen.getByLabelText('Upvote')).toBeTruthy();
+    expect(screen.queryByLabelText('Downvote')).toBeNull();
+  });
+
+  it('the Physique Check fixture (as seeded on the server) has no downvote control either', async () => {
+    const post = shapedPhoto(rawImagePost({ id: 'pc', author, createdAt: '2026-11-15T07:00:00Z', kind: 'progress-pic' }));
+    await render(<PostCard post={post} now={NOW} photoSource={() => null} />);
+    expect(screen.queryByLabelText('Downvote')).toBeNull();
+  });
+
+  it('lights my own vote; tapping moves the score at once and sends the new vote', async () => {
+    const onVote = jest.fn(async (_postId: string, _vote: 1 | -1 | null) => ({ ok: true as const }));
+    await render(<PostCard post={scored(ordinary, 4, 1)} now={NOW} onVote={onVote} />);
+    expect(screen.getByLabelText('Upvote').props.accessibilityState).toMatchObject({ selected: true });
+    // Up → down: the score moves by 2.
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Downvote'));
+    });
+    expect(onVote).toHaveBeenLastCalledWith('v1', -1);
+    expect(screen.getByLabelText('Score 2')).toBeTruthy();
+    expect(screen.getByLabelText('Downvote').props.accessibilityState).toMatchObject({ selected: true });
+    // Tapping the lit arrow takes the vote back.
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Downvote'));
+    });
+    expect(onVote).toHaveBeenLastCalledWith('v1', null);
+    expect(screen.getByLabelText('Score 3')).toBeTruthy();
+  });
+
+  it('a refused vote puts the score and arrows back and says why', async () => {
+    const onVote = jest.fn(async () => ({ ok: false as const, reason: 'upvotes-only' as const }));
+    await render(<PostCard post={scored(ordinary, 4, null)} now={NOW} onVote={onVote} />);
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Downvote'));
+    });
+    expect(screen.getByLabelText('Score 4')).toBeTruthy();
+    expect(screen.getByLabelText('Downvote').props.accessibilityState).toMatchObject({ selected: false });
+    expect(screen.getByText(VOTE_REFUSAL_MESSAGES['upvotes-only'])).toBeTruthy();
+  });
+
+  it('a second tap while a vote is on its way sends nothing', async () => {
+    let finish: (r: { ok: true }) => void = () => {};
+    const onVote = jest.fn(() => new Promise<{ ok: true }>((resolve) => (finish = resolve)));
+    await render(<PostCard post={scored(ordinary, 0, null)} now={NOW} onVote={onVote} />);
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Upvote'));
+      fireEvent.press(screen.getByLabelText('Downvote'));
+    });
+    expect(onVote).toHaveBeenCalledTimes(1);
+    await act(async () => finish({ ok: true }));
+    expect(screen.getByLabelText('Score 1')).toBeTruthy();
+  });
+
+  it('the comments button opens the post’s comments; it reads “Comment” when there are none', async () => {
+    const onOpenComments = jest.fn();
+    await render(<PostCard post={scored(ordinary, 0, null)} now={NOW} onOpenComments={onOpenComments} />);
+    await fireEvent.press(screen.getByLabelText('2 comments'));
+    expect(onOpenComments).toHaveBeenCalledWith('v1');
+    expect(commentButtonLabel(0)).toBe('Comment');
+    expect(commentButtonLabel(1)).toBe('1 comment');
   });
 });
 

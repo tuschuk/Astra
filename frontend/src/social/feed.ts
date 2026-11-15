@@ -1,6 +1,8 @@
 /**
  * Reading the Home feed (SOC-1): the posts of the people the lifter follows (and their own),
  * newest first, a page at a time — shared workouts and (B22) progress-pic and PR photo posts.
+ * Since B23 each post also carries its net score, its comment count and the viewer's own vote
+ * (SOC-4, SOC-5), and its flair says whether it takes upvotes only — the card's whole footer.
  *
  * Why this exists: the feed is the one screen that shows other people's workouts, and those are
  * never copied onto the phone (the device holds only the lifter's own rows). So the feed is read
@@ -18,6 +20,7 @@ import type { ImagePostKind, PostKind, SetRow, WorkoutExerciseRow, WorkoutVisibi
 import { throwIfError } from '@/lib/throwIfError';
 
 import type { PersonName } from './names';
+import type { VoteValue } from './votes';
 
 /** How many posts one page of the feed holds. */
 export const FEED_PAGE_SIZE = 20;
@@ -52,15 +55,32 @@ export interface FeedWorkout {
   entries: FeedEntry[];
 }
 
+/** A post's flair as the card needs it. */
+export interface FeedFlair {
+  id: string;
+  name: string;
+  /**
+   * The flair row's own `upvotes_only` flag (B23): true means the card offers no downvote
+   * (Physique Check today) — and the server refuses one anyway. Data, never a flair name in code.
+   */
+  upvotesOnly: boolean;
+}
+
 /** What every post has, whatever its kind. */
 interface FeedPostBase {
   id: string;
   createdAt: string;
   /** The post's one flair, straight from the `flairs` table — the app never spells flair names itself. */
-  flair: { id: string; name: string };
+  flair: FeedFlair;
   author: PersonName & { id: string };
   /** Who may see it (B22: the card tells the owner when a post is private). */
   visibility: WorkoutVisibility;
+  /** The net score — upvotes minus downvotes — from the server's `post_scores` view (B23). */
+  score: number;
+  /** How many comments the post has, from the same view (B23). */
+  commentCount: number;
+  /** The viewer's own vote on it, or null when they haven't voted (B23). */
+  myVote: VoteValue | null;
 }
 
 /**
@@ -84,14 +104,34 @@ export interface FeedPage {
  * still filters the nested workout — a workout the viewer may not see (its owner made it private
  * after posting) arrives as null — and `toFeedPost` then drops that empty workout card, the job
  * `!inner` used to do on the server. Who may see what is unchanged: it was never the join.
+ *
+ * B23 adds the flair's `upvotes_only` flag, and `my_vote`: the post's votes embedded under that
+ * name, which `loadFeedPage` narrows to the viewer's own row with a filter on the alias
+ * (`my_vote.user_id`) — so the reply never carries anyone else's votes.
  */
 export const FEED_SELECT =
   'id,created_at,kind,image_path,visibility,' +
-  'flair:flairs(id,name),' +
+  'flair:flairs(id,name,upvotes_only),' +
   'author:profiles(id,username,display_name),' +
   'workout:workouts(id,title,notes,started_at,ended_at,' +
   'workout_exercises(id,position,superset_group,exercise:exercises(name),' +
-  'sets(id,position,reps,weight_kg,rpe,is_warmup,drop_set_position,duration_seconds,score)))';
+  'sets(id,position,reps,weight_kg,rpe,is_warmup,drop_set_position,duration_seconds,score))),' +
+  'my_vote:votes(value)';
+
+/**
+ * The columns read from the `post_scores` view, in a second request by post id (B23). The plan's
+ * first choice — embedding the view inside the posts request — is refused by the live server
+ * (PostgREST finds no relationship between the posts table and a view over it), so this is the
+ * plan's recorded fallback.
+ */
+export const SCORES_SELECT = 'post_id,score,comment_count';
+
+/** One row of the `post_scores` view as the server sends it. */
+export interface RawPostScore {
+  post_id: string;
+  score: number;
+  comment_count: number;
+}
 
 /** A post exactly as the server sends it for `FEED_SELECT` (the one place the untyped reply is described). */
 export interface RawFeedPost {
@@ -100,7 +140,8 @@ export interface RawFeedPost {
   kind: PostKind;
   image_path: string | null;
   visibility: WorkoutVisibility;
-  flair: { id: string; name: string } | null;
+  /** `upvotes_only` is optional only so a reply missing it shapes to "takes downvotes", never a crash. */
+  flair: { id: string; name: string; upvotes_only?: boolean } | null;
   author: { id: string; username: string | null; display_name: string | null } | null;
   /** Null for a photo post, or a workout post whose workout the viewer may not see. */
   workout: {
@@ -114,6 +155,8 @@ export interface RawFeedPost {
       sets: (FeedSet & { weight_kg: number | string | null })[];
     })[];
   } | null;
+  /** The viewer's own vote, as a list of at most one row (the alias filter keeps only theirs). */
+  my_vote?: { value: number }[] | null;
 }
 
 /**
@@ -143,7 +186,7 @@ export async function feedAuthorIds(client: SupabaseClient, me: string): Promise
  * has a required flair and every signed-in user may read `flairs` — so this only keeps a card
  * from crashing on a broken reply. It is a fallback label, not a flair: no flair row has it.
  */
-export const MISSING_FLAIR = { id: '', name: 'Post' } as const;
+export const MISSING_FLAIR: FeedFlair = { id: '', name: 'Post', upvotesOnly: false };
 
 /**
  * Turns one server post into the card's shape, or null when there is nothing to show.
@@ -153,18 +196,28 @@ export const MISSING_FLAIR = { id: '', name: 'Post' } as const;
  *   - A photo post (B22): its photo's path; null if the server sent none (can't happen — the
  *     server's shape rule requires one — so it only guards against a broken reply).
  * A missing flair or author is filled in so the card never crashes.
+ * B23: `scores` is the post's `post_scores` row; without one (a broken reply) the score and
+ * comment count read 0. The viewer's vote comes from the `my_vote` embed; anything but +1 / −1
+ * reads as "no vote".
  */
-export function toFeedPost(raw: RawFeedPost): FeedPost | null {
+export function toFeedPost(raw: RawFeedPost, scores?: RawPostScore): FeedPost | null {
+  const mine = raw.my_vote?.[0]?.value;
+  const myVote: VoteValue | null = mine === 1 || mine === -1 ? mine : null;
   const base = {
     id: raw.id,
     createdAt: raw.created_at,
-    flair: raw.flair ?? { ...MISSING_FLAIR },
+    flair: raw.flair
+      ? { id: raw.flair.id, name: raw.flair.name, upvotesOnly: raw.flair.upvotes_only === true }
+      : { ...MISSING_FLAIR },
     author: {
       id: raw.author?.id ?? '',
       username: raw.author?.username ?? null,
       displayName: raw.author?.display_name ?? null,
     },
     visibility: raw.visibility,
+    score: scores?.score ?? 0,
+    commentCount: scores?.comment_count ?? 0,
+    myVote,
   };
   if (raw.kind === 'progress-pic' || raw.kind === 'pr') {
     return raw.image_path ? { ...base, kind: raw.kind, imagePath: raw.image_path } : null;
@@ -206,18 +259,44 @@ export function appendPage(shown: readonly FeedPost[], page: readonly FeedPost[]
 }
 
 /**
- * One page of the feed: the posts of `authorIds`, newest first, starting just before `after`
- * (or at the newest post when `after` is null). The server's security decides which of those
- * posts the lifter may actually see. A full page means there may be more, so it returns a
- * bookmark; a short page is the end.
+ * The scores of these posts, keyed by post id: one request to the `post_scores` view (B23). It
+ * runs as the viewer, so it can only count votes and comments on posts the viewer may see. No
+ * ids, no request.
+ */
+export async function loadPostScores(
+  client: SupabaseClient,
+  postIds: readonly string[],
+): Promise<Map<string, RawPostScore>> {
+  if (postIds.length === 0) return new Map();
+  const { data, error } = await client.from('post_scores').select(SCORES_SELECT).in('post_id', [...postIds]);
+  throwIfError(error, 'Loading the scores failed');
+  const rows = (data ?? []) as unknown as RawPostScore[];
+  // Made sure to be numbers, in case a count ever arrives as text.
+  return new Map(
+    rows.map((r) => [r.post_id, { post_id: r.post_id, score: Number(r.score), comment_count: Number(r.comment_count) }]),
+  );
+}
+
+/**
+ * One page of the feed for the viewer `me`: the posts of `authorIds`, newest first, starting just
+ * before `after` (or at the newest post when `after` is null), each with its score, comment count
+ * and the viewer's own vote (B23). The server's security decides which of those posts the lifter
+ * may actually see. A full page means there may be more, so it returns a bookmark; a short page
+ * is the end. Two requests: the posts, then their scores.
  */
 export async function loadFeedPage(
   client: SupabaseClient,
+  me: string,
   authorIds: readonly string[],
   after: FeedCursor | null,
 ): Promise<FeedPage> {
   if (authorIds.length === 0) return { posts: [], next: null };
-  let query = client.from('posts').select(FEED_SELECT).in('user_id', [...authorIds]);
+  let query = client
+    .from('posts')
+    .select(FEED_SELECT)
+    .in('user_id', [...authorIds])
+    // Narrows the embedded votes to the viewer's own — the alias, not the table's name.
+    .eq('my_vote.user_id', me);
   if (after) query = query.or(beforeCursorFilter(after));
   const { data, error } = await query
     .order('created_at', { ascending: false })
@@ -227,9 +306,10 @@ export async function loadFeedPage(
   // The one cast from the untyped reply, at the seam; everything past here is typed.
   const raw = (data ?? []) as unknown as RawFeedPost[];
   const last = raw[raw.length - 1];
+  const scores = await loadPostScores(client, raw.map((p) => p.id));
   return {
     // Dropped posts still count toward the bookmark below, so paging never re-reads them.
-    posts: raw.map(toFeedPost).filter((p): p is FeedPost => p !== null),
+    posts: raw.map((p) => toFeedPost(p, scores.get(p.id))).filter((p): p is FeedPost => p !== null),
     next: raw.length === FEED_PAGE_SIZE && last ? { created_at: last.created_at, id: last.id } : null,
   };
 }

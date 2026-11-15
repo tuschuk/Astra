@@ -12,7 +12,9 @@ Source migrations: `20261114100000_identity.sql`, `20261114100100_training.sql`,
 `20261115045638_sync_tombstones.sql` (B14, applied live), `20261115080420_workout_analyses.sql`
 (B18, applied live), `20261115093217_posts_flairs.sql` (B20, applied live),
 `20261115105852_post_images.sql` (B22, applied live — posts kinds, the `post-images` bucket and
-its storage policies),
+its storage policies), `20261115114409_votes_comments.sql` and
+`20261115115739_comments_body_not_blank.sql` (B23, both applied live — votes, comments, the
+`post_scores` view, the upvote-only triggers),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -44,6 +46,11 @@ erDiagram
   workouts |o--o| posts : "workout_id shared (cascade); workout posts only; one post per workout"
   flairs ||--o{ posts : "flair_id: exactly one per post"
   posts |o..o| storage_objects : "image_path = object name (photo posts; no FK)"
+  posts ||--o{ votes : "post_id (cascade)"
+  profiles ||--o{ votes : "user_id casts; one per post (cascade)"
+  posts ||--o{ comments : "post_id (cascade)"
+  profiles ||--o{ comments : "user_id writes (cascade)"
+  posts ||..|| post_scores : "view: one row per post (security_invoker)"
 
   auth_users {
     uuid id PK "managed by Supabase Auth"
@@ -177,7 +184,7 @@ erDiagram
     text id PK "stable slug: wod, physique-check, new-pr, form-check"
     text name "what the chip shows, 1-40 chars"
     smallint position UK "display order"
-    boolean upvotes_only "true for Physique Check; read by votes (later step)"
+    boolean upvotes_only "true for Physique Check; the votes trigger refuses downvotes (B23)"
   }
 
   posts {
@@ -197,7 +204,61 @@ erDiagram
     text name "object path; first folder = owner's user id"
     uuid owner "uploader (Supabase-managed)"
   }
+
+  votes {
+    uuid post_id PK, FK "the post voted on"
+    uuid user_id PK, FK "the voter; PK (post_id, user_id) = one vote per user per post"
+    smallint value "+1 or -1 only; -1 refused on upvotes_only flairs (trigger)"
+    timestamptz created_at
+    timestamptz updated_at
+  }
+
+  comments {
+    uuid id PK "server-generated (gen_random_uuid)"
+    uuid post_id FK "the post commented on"
+    uuid user_id FK "the commenter"
+    text body "1-500 chars, at least one non-whitespace character"
+    timestamptz created_at "conversation order, oldest first"
+    timestamptz updated_at
+  }
+
+  post_scores {
+    uuid post_id "= posts.id (VIEW, not a table)"
+    int score "sum of votes.value, 0 when none"
+    int comment_count "count of comments, 0 when none"
+  }
 ```
+
+## Votes, comments and the net score (B23)
+
+Migration `20261115114409_votes_comments.sql` (and its fix `20261115115739_comments_body_not_blank.sql`).
+
+- **One vote per user per post** is the primary key `(post_id, user_id)` on `votes`. Changing your
+  mind rewrites the row (the app upserts on that key), unvoting deletes it. `value` is `+1` or `-1`
+  (CHECK). No device mirror: votes are read and written online only.
+- **The net score** is the view `post_scores` — for every post, `score = sum(votes.value)` and
+  `comment_count = count(comments)`, both 0 when there are none. It is `security_invoker`, so it can
+  only add up rows the *viewer* may read: it gives no new reading power. The feed reads it in a
+  second request by post id (`post_id=in.(…)`) — PostgREST will not embed a view over `posts`
+  inside a `posts` request (PGRST200, probed live).
+- **Upvote-only flairs (Physique Check).** Trigger `votes_upvote_only` (before insert or update on
+  `votes`, function `private.vote_allowed`) raises `This post takes upvotes only` (SQLSTATE
+  `P0001`) for any `value = -1` on a post whose flair has `upvotes_only = true` — read through
+  posts → flairs, never a flair name. It holds on both arms of the app's upsert. Its companion,
+  `posts_flair_guard` (before update of `flair_id` on `posts`, `private.flair_change_allowed`),
+  refuses re-flairing a post that has downvotes *to* an upvote-only flair. Not guarded: flipping
+  `flairs.upvotes_only` itself to true (flairs change only by migration).
+- **Comments** are flat (no threads), oldest first, `comments_post_created_idx (post_id,
+  created_at, id)` matching the screen's order; `comments_user_idx (user_id)` covers the
+  commenter foreign key. The body CHECK is `char_length between 1 and 500 and body ~ '\S'`
+  (mirrored by `COMMENT_MAX_CHARS` / `commentBodyError` in `frontend/src/social/commentLimits.ts`
+  — change together). No editing: there is no update policy, so RLS refuses updates.
+- **Live-probed at build time** (rolled back): up + up + down reads 1; down → up moves it by 2;
+  unvote restores; a second insert is `23505`; a Physique Check downvote refused on insert, both
+  upsert arms and update; 501 characters, spaces-only and newlines-only bodies refused; a stranger
+  can neither see nor comment on a followers-only post's comments, a follower can; a comment or
+  vote on the post of someone you blocked is refused; nobody can update a comment; an author
+  cannot delete other people's comments on their post.
 
 ## Photo posts and the `post-images` bucket (B22)
 
@@ -257,7 +318,7 @@ foreign key, since an offline finish's analysis may reach the server after the p
 - **Flairs are data.** The launch four (WOD, Physique Check, New PR, Form Check) are seeded rows;
   any signed-in user may read them and nobody may write them through the API, so a new flair is a
   migration, not an app release. The app always shows `flairs.name` from the row. `upvotes_only`
-  marks Physique Check, for the votes step to enforce "upvotes only".
+  marks Physique Check; since B23 the votes trigger enforces it and the card hides the downvote.
 - **Feed order** is `created_at desc, id desc`, matched by `posts_user_created_idx (user_id,
   created_at desc, id desc)`. The phone pages by bookmark — "older than (created_at, id)" — never
   by offset. `posts_flair_idx (flair_id)` indexes the flair foreign key (no query filters by
@@ -398,6 +459,8 @@ does not own, so another user's public workout can never be analysed over its ow
 - **`updated_at` is maintained** by a trigger on every table that has the column.
 - **Deletes leave tombstones.** Deleting a `workouts` or `personal_records` row (directly or by
   cascade) inserts a `sync_tombstones` line (see Tombstones above).
+- **Downvotes on upvote-only posts are refused** (B23): `votes_upvote_only` on `votes` and
+  `posts_flair_guard` on `posts` — see the votes section.
 
 ## Who can see and change what (row-level security)
 
@@ -418,11 +481,15 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `flairs` | any signed-in user | nobody — new flairs arrive by migration |
 | `posts` | per the visibility rule below (same helper as workouts) | insert and update only as yourself **and**, for a workout post, only for a workout you own (`private.owns_workout`; photo posts have no workout); delete only your own |
 | `storage.objects` in `post-images` (B22) | your own folder, or cited by a post you may see | insert, update, delete only in your own folder — see the photo posts section |
+| `votes` (B23) | every vote on a post you may see (`private.can_view_post`) — so the tally is the same for everyone | insert and update only as yourself, on a post you may see; delete only your own |
+| `comments` (B23) | every comment on a post you may see | insert only as yourself, on a post you may see; no updates; delete only your own |
+| `post_scores` (view, B23) | `security_invoker`: whatever the posts / votes / comments rules above let you read | — |
 
 **Workout visibility rule** (`private.workout_visible`): you always see your own; a block in either
 direction hides everything; otherwise `public` is open to any signed-in user, `followers` requires
 that you follow the owner, `private` is owner-only. Child tables ask the same question through the
-workout they belong to; `posts` asks it directly with the post's own author and visibility.
+workout they belong to; `posts` asks it directly with the post's own author and visibility;
+`votes` and `comments` ask it through their post (`private.can_view_post(post_id)`, B23).
 Another user's **custom exercise** stays hidden (exercises RLS), so in someone else's shared
 workout its name embeds as null and the feed card says "Custom exercise". These checks run as `security definer` helpers in the `private` schema so
 they can see rows the caller's own RLS would hide.
@@ -430,7 +497,8 @@ they can see rows the caller's own RLS would hide.
 ## Deletion behaviour
 
 - Deleting an auth user cascades through `profiles` to settings, body data, follows, blocks, owned
-  exercises, workouts, their entries and sets, posts, and the user's tombstones.
+  exercises, workouts, their entries and sets, posts, votes, comments, and the user's tombstones.
+  Deleting a post cascades to its votes and comments (B23).
 - Deleting a workout cascades to its `workout_exercises` and their `sets` (and the records citing
   them), to its `workout_analyses` row and to its post (B20), and leaves tombstones for the workout and each record
   (an analysis gets none: other devices drop it with the workout's tombstone). The app deletes a finished

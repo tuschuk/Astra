@@ -338,6 +338,35 @@ fake client cannot prove PostgREST's inference.
    small, but the kind of code where a wrong `search_path` or a missed `update` case quietly
    voids the DoD; the Gate 2 probes exercise insert *and* update paths on purpose.
 
+## Deviations during the build (builder, Nov 15, 2026)
+
+- **D1: `post_scores` is a second request, not an embed (risk 1 fired).** Live PostgREST refused
+  `posts?select=…,scores:post_scores(…)` with `PGRST200` ("Could not find a relationship between
+  'posts' and 'post_scores'"). The builder used the plan's own listed fallback: `loadFeedPage` reads
+  the posts page, then `post_scores?select=post_id,score,comment_count&post_id=in.(page ids)`
+  (`loadPostScores`). `toFeedPost(raw, scores?)` takes the row. The view and its
+  `security_invoker` are unchanged. The `my_vote` alias embed and filter resolved live (200).
+- **D2: a second migration tightens the blank-comment CHECK.** Review found that `btrim(body) <> ''`
+  strips only spaces, so a body of line breaks or tabs passed. G11's intent was "a blank bubble is
+  not a comment". `20261115115739_comments_body_not_blank.sql` swaps the clause for
+  `body ~ '\S'`, applied live and probed: newlines-only, spaces-only and 501 characters are refused;
+  a padded body and 500 emoji are accepted. `commentBodyError` already trimmed all whitespace.
+- **D3: the composer has no `maxLength`.** RN's `maxLength` counts UTF-16 units, while the server
+  and `commentBodyError` count characters (code points). With it, a comment heavy on emoji would be
+  cut short before 500. The counter (from 450) and the one refusal line guide instead, which also
+  makes the plan's "type past the cap → Send disabled + refusal sentence" state reachable on a device.
+- **D4: `comments_user_idx (user_id)` was added.** It covers the commenter foreign key, which a
+  profile-delete cascade scans. `votes.user_id` was left unindexed per the plan; the performance
+  advisor lists it as INFO (same as the existing `personal_records.exercise_id`). Recorded in DEFERRED.
+- **D5: small helpers not named in the plan.** `nextVote` (what an arrow tap means) and
+  `commentButtonLabel` are pure, tested, and keep the card free of arithmetic. `PostFooter` blocks
+  a second tap with a ref, and on a refusal it steps back by the same delta rather than restoring a
+  snapshot, so a refresh that lands while a vote is in flight isn't overwritten (review finding).
+  It picks up a refreshed feed's numbers by comparing props during render (React's "adjust state
+  when a prop changes" pattern), because lint (`react-hooks/set-state-in-effect`) refuses a
+  syncing effect. For the same reason the comments screen loads inside its effect's promise
+  callbacks, with a Retry counter.
+
 ## Grilling decisions (settled)
 
 Run via `mattpocock-skills:grilling` in the planner session at full severity; checkable claims

@@ -9,7 +9,10 @@
  * posts are there; after Share a photo, yours is, once it has uploaded).
  *
  * What the user can do: read the feed, pull to refresh, open Share a photo (B22) to post a
- * progress pic or PR photo, and open Find lifters to search for people and follow them.
+ * progress pic or PR photo, and open Find lifters to search for people and follow them. On each
+ * card (B23): upvote or downvote (no downvote on upvote-only posts such as Physique Check), and
+ * open the post's comments. Votes go straight to the server; the card shows the change at once
+ * and takes it back if refused.
  *
  * When there is nothing to show:
  *   - following nobody and no posts of your own → an invitation to find lifters, plus the
@@ -34,6 +37,7 @@ import { Body, Heading, SectionLabel } from '@/components/ui/Text';
 import { getSupabase, readSupabaseConfig, type SupabaseConfig } from '@/lib/supabase';
 import { appendPage, feedAuthorIds, loadFeedPage, type FeedCursor, type FeedPost } from '@/social/feed';
 import { postImageSource } from '@/social/postImages';
+import { castVote, clearVote, type VoteResult, type VoteValue } from '@/social/votes';
 import { colors, spacing } from '@/theme';
 
 /** What Home is showing: the first load, a failed load, or the feed itself. */
@@ -78,7 +82,7 @@ export default function HomeScreen() {
     const mine = ++generation.current;
     try {
       const ids = await feedAuthorIds(client, me);
-      const page = await loadFeedPage(client, ids, null);
+      const page = await loadFeedPage(client, me, ids, null);
       if (mine !== generation.current) return;
       authors.current = ids;
       setMoreFailed(false);
@@ -112,13 +116,13 @@ export default function HomeScreen() {
    * started is dropped — success or failure — so it can't touch the fresh feed.
    */
   async function loadMore(): Promise<void> {
-    if (state.status !== 'ready' || state.next == null || pageInFlight.current) return;
+    if (!me || state.status !== 'ready' || state.next == null || pageInFlight.current) return;
     const mine = generation.current;
     pageInFlight.current = true;
     setLoadingMore(true);
     setMoreFailed(false);
     try {
-      const page = await loadFeedPage(client, authors.current, state.next);
+      const page = await loadFeedPage(client, me, authors.current, state.next);
       if (mine === generation.current) {
         setState((prev) =>
           prev.status === 'ready' ? { ...prev, posts: appendPage(prev.posts, page.posts), next: page.next } : prev,
@@ -132,6 +136,21 @@ export default function HomeScreen() {
       setLoadingMore(false);
     }
   }
+
+  /** A card's vote (B23): +1 / −1 is cast, null takes the viewer's vote back. */
+  const vote = useCallback(
+    (postId: string, value: VoteValue | null): Promise<VoteResult> => {
+      if (!me) return Promise.resolve({ ok: false, reason: 'failed' });
+      return value === null ? clearVote(client, me, postId) : castVote(client, me, postId, value);
+    },
+    [client, me],
+  );
+
+  /** A card's comments button (B23): the post's comments screen. */
+  const openComments = useCallback(
+    (postId: string) => router.push({ pathname: '/post-comments/[id]', params: { id: postId } }),
+    [router],
+  );
 
   const header = (
     <View style={styles.header}>
@@ -203,7 +222,9 @@ export default function HomeScreen() {
         testID="home-feed"
         data={state.posts}
         keyExtractor={(post) => post.id}
-        renderItem={({ item }) => <PostCard post={item} viewerId={me} photoSource={photoSource} />}
+        renderItem={({ item }) => (
+          <PostCard post={item} viewerId={me} photoSource={photoSource} onVote={vote} onOpenComments={openComments} />
+        )}
         ListHeaderComponent={header}
         ListEmptyComponent={empty}
         ListFooterComponent={footer}

@@ -361,3 +361,32 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     migration and `mediaLimits.ts` (commented to change together, the `limits.ts` precedent); the
     storage policies repeat the own-folder expression; `saveImage`'s returned path is unused.
   - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.
+- B23 votes-and-comments follow-ups (`votes-and-comments`):
+  - **Device check (Tristen):** on Home, tap up / down / the lit arrow again on a WOD post — score
+    moves ±1 / ±2 and survives a pull-to-refresh; a Physique Check post shows no down arrow. Open
+    "Comment" → write one → it appears; from a second account following you, see it and reply;
+    airplane mode → the comments screen says it needs a connection.
+  - **Comment paging** (G9/G12): one load reads 200, oldest first, and says "More comments exist"
+    past that. Keyset paging on `(created_at, id)` — the index already matches — when a post gets
+    there.
+  - **Deleting your own comment** has RLS (`users delete their own comments`) but no UI yet.
+  - **Founder removal and block/mute filtering** of comments and votes: B27, as the plan recorded.
+    Today a comment by someone who blocked you still shows, and a post's author cannot remove
+    other people's comments.
+  - **`post_scores` aggregates every vote and comment** before the `post_id in (…)` filter (the
+    grouped subqueries may not be pushed down). Fine at launch scale; when the feed is slow,
+    rewrite the view as lateral per-post sums or a counter column maintained by trigger. B24's hot
+    view should be measured with this in mind.
+  - **`votes.user_id` FK has no covering index** (advisor INFO, like `personal_records.exercise_id`).
+    Add one if account deletion ever gets slow.
+  - **Flipping `flairs.upvotes_only` to true** on a flair whose posts already have downvotes isn't
+    guarded (only re-flairing a post is). Flairs change only by migration; a migration that flips
+    one must clear or convert those downvotes itself.
+  - **Comments screen on a post that became invisible** shows "No comments yet" and a send that fails
+    with the connection line; a clearer "this post is no longer available" needs a post read first.
+  - Review judgement calls left as-is: the author-shaping in `toPostComment` / `toFeedPost` is
+    similar but separate (one line each); the 500-char cap is mirrored by hand (the `mediaLimits`
+    precedent); `UPVOTES_ONLY_CODE` is the generic `P0001`, safe while the trigger is the only
+    `raise` on `votes` — give it a custom errcode if a second one appears; the fake social client
+    branches per table.
+  - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.

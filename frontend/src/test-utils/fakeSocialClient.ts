@@ -8,11 +8,20 @@
  * *runs* the subset of the query builder the social code uses: `select`, `eq`, `neq`, `in`,
  * `not(column, 'in', '(…)')`,
  * `or` (PostgREST's filter-string syntax, including `and(...)` and double-quoted values),
- * `order`, `limit`, `insert` and `delete`. Every request is also recorded for assertions.
+ * `order`, `limit`, `insert`, `upsert` (on a conflict key), `delete`, and `.select(…).single()`
+ * after a write. Every request is also recorded for assertions.
  *
- * What it does NOT do: row-level security or embedding. Posts are seeded already shaped the way
- * the server's embed returns them (author, flair and workout nested in), and the follow insert
- * imitates the one RLS refusal the app handles (a block in either direction). Server-side
+ * B23 adds `votes` and `comments` tables and the server pieces the app leans on for them:
+ *   - `post_scores` is computed on every read from the votes and comments tables, like the view;
+ *   - a posts read nests each post's votes under `my_vote`, and a filter on the alias
+ *     (`eq('my_vote.user_id', me)`) narrows that list, as PostgREST does;
+ *   - the upvote-only trigger: a −1 vote on a post whose flair has `upvotes_only` is refused with
+ *     the trigger's code, P0001;
+ *   - a comment insert gets a server id and time and comes back with its author nested in.
+ *
+ * What it does NOT do: row-level security or general embedding. Posts are seeded already shaped
+ * the way the server's embed returns them (author, flair and workout nested in), and the follow
+ * insert imitates the one RLS refusal the app handles (a block in either direction). Server-side
  * visibility itself is proven live at Gate 2, not here.
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -30,7 +39,14 @@ export interface FakeSocialTables {
   blocks: Row[];
   /** Feed-shaped posts (see feedFixtures `rawPost`): typed loosely so any fixture shape fits. */
   posts: object[];
+  /** Vote rows: `{ post_id, user_id, value }` (B23). */
+  votes: Row[];
+  /** Comment rows: `{ id, post_id, user_id, body, created_at }` (B23). */
+  comments: Row[];
 }
+
+/** What a request can name: the tables, plus the computed `post_scores` view. */
+type FakeSource = keyof FakeSocialTables | 'post_scores';
 
 /** Splits a PostgREST filter list at top-level commas (not inside parentheses or quotes). */
 function splitTopLevel(text: string): string[] {
@@ -124,19 +140,58 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     follows: [...(seed.follows ?? [])],
     blocks: [...(seed.blocks ?? [])],
     posts: [...(seed.posts ?? [])],
+    votes: [...(seed.votes ?? [])],
+    comments: [...(seed.comments ?? [])],
   };
   const requests: FakeCall[][] = [];
   let offline = options.offline ?? false;
+  let commentCounter = 0;
+
+  /** The `post_scores` view, computed now: every post's net score and comment count. */
+  function postScores(): Row[] {
+    return (tables.posts as Row[]).map((p) => ({
+      post_id: p.id,
+      score: tables.votes.filter((v) => v.post_id === p.id).reduce((sum, v) => sum + Number(v.value), 0),
+      comment_count: tables.comments.filter((c) => c.post_id === p.id).length,
+    }));
+  }
+
+  /** The upvote-only trigger: refuses a downvote on a post whose flair takes upvotes only. */
+  function voteRefusal(vote: Row): { message: string; code: string } | null {
+    const post = (tables.posts as Row[]).find((p) => p.id === vote.post_id);
+    const flair = post?.flair as { upvotes_only?: boolean } | null | undefined;
+    return vote.value === -1 && flair?.upvotes_only === true ? { code: 'P0001', message: 'This post takes upvotes only' } : null;
+  }
+
+  /** A comment row as `COMMENT_SELECT` returns it: the author nested in from profiles. */
+  function withAuthor(comment: Row): Row {
+    const author = tables.profiles.find((p) => p.id === comment.user_id) ?? null;
+    return { ...comment, author };
+  }
 
   /** Runs one finished request against the tables. */
-  function execute(table: keyof FakeSocialTables, calls: FakeCall[]): { data: unknown; error: { message: string; code?: string } | null } {
+  function execute(table: FakeSource, calls: FakeCall[]): { data: unknown; error: { message: string; code?: string } | null } {
     if (offline) return { data: null, error: { message: 'Network request failed' } };
     const filters: Predicate[] = [];
+    // Filters on an embedded list by its alias ("my_vote.user_id"): [alias, column, value].
+    const embedFilters: [string, string, unknown][] = [];
     const orders: { column: string; ascending: boolean }[] = [];
     let limit = Infinity;
     let insert: Row | null = null;
+    let upsert: { row: Row; onConflict: string[] } | null = null;
     let isDelete = false;
+    let single = false;
     for (const [method, ...args] of calls) {
+      if (method === 'eq' && String(args[0]).includes('.')) {
+        const [alias, column] = String(args[0]).split('.');
+        embedFilters.push([alias, column, args[1]]);
+        continue;
+      }
+      if (method === 'single') single = true;
+      if (method === 'upsert') {
+        const conflict = (args[1] as { onConflict?: string } | undefined)?.onConflict ?? 'id';
+        upsert = { row: args[0] as Row, onConflict: conflict.split(',') };
+      }
       if (method === 'eq') filters.push((r) => r[args[0] as string] === args[1]);
       if (method === 'neq') filters.push((r) => r[args[0] as string] !== args[1]);
       if (method === 'in') filters.push((r) => (args[1] as unknown[]).includes(r[args[0] as string]));
@@ -152,9 +207,42 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       if (method === 'insert') insert = args[0] as Row;
       if (method === 'delete') isDelete = true;
     }
+    if (table === 'post_scores') {
+      const matching = postScores().filter((r) => filters.every((f) => f(r)));
+      return { data: matching, error: null };
+    }
     const rows = tables[table] as Row[];
+    if (upsert) {
+      const { row, onConflict } = upsert;
+      if (table === 'votes') {
+        const refused = voteRefusal(row);
+        if (refused) return { data: null, error: refused };
+      }
+      const existing = rows.find((r) => onConflict.every((k) => r[k] === row[k]));
+      if (existing) Object.assign(existing, row);
+      else rows.push({ ...row });
+      return { data: single ? (existing ?? row) : null, error: null };
+    }
     if (insert) {
-      const row: Row = insert;
+      let row: Row = insert;
+      if (table === 'votes') {
+        const refused = voteRefusal(row);
+        if (refused) return { data: null, error: refused };
+        if (rows.some((x) => x.post_id === row.post_id && x.user_id === row.user_id)) {
+          return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } };
+        }
+      }
+      if (table === 'comments') {
+        commentCounter += 1;
+        // The server's defaults: a fresh id and "now" (a fixed, ever-later time keeps tests stable).
+        row = {
+          id: `comment-${commentCounter}`,
+          created_at: new Date(Date.UTC(2026, 10, 15, 20, 0, commentCounter)).toISOString(),
+          ...row,
+        };
+        rows.push(row);
+        return { data: single ? withAuthor(row) : null, error: null };
+      }
       if (table === 'follows') {
         const a = row.follower_id;
         const b = row.followee_id;
@@ -182,15 +270,27 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       }
       return 0;
     });
-    return { data: sorted.slice(0, limit), error: null };
+    let out: Row[] = sorted.slice(0, limit);
+    if (table === 'posts') {
+      // Nest each post's votes under `my_vote`, then narrow by any alias filter — PostgREST's embed.
+      out = out.map((post) => {
+        let votes = tables.votes.filter((v) => v.post_id === post.id);
+        for (const [alias, column, value] of embedFilters) {
+          if (alias === 'my_vote') votes = votes.filter((v) => v[column] === value);
+        }
+        return { ...post, my_vote: votes.map((v) => ({ value: v.value })) };
+      });
+    }
+    if (table === 'comments') out = out.map(withAuthor);
+    return { data: out, error: null };
   }
 
   const client = {
-    from(table: keyof FakeSocialTables) {
+    from(table: FakeSource) {
       const calls: FakeCall[] = [['from', table]];
       requests.push(calls);
       const builder: Record<string, unknown> = {};
-      for (const method of ['select', 'eq', 'neq', 'in', 'not', 'or', 'order', 'limit', 'insert', 'delete']) {
+      for (const method of ['select', 'eq', 'neq', 'in', 'not', 'or', 'order', 'limit', 'insert', 'upsert', 'delete', 'single']) {
         builder[method] = (...args: unknown[]) => {
           calls.push([method, ...args]);
           return builder;

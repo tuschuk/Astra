@@ -15,6 +15,7 @@ import {
   FEED_SELECT,
   feedAuthorIds,
   loadFeedPage,
+  SCORES_SELECT,
   toFeedPost,
   type FeedPost,
 } from './feed';
@@ -55,21 +56,66 @@ describe('feedAuthorIds', () => {
 });
 
 describe('loadFeedPage', () => {
-  it('asks for the authors’ posts with the full embed, newest first, one page', async () => {
-    const { client, requests } = createFakeSocialClient();
-    await loadFeedPage(client, [ME, 'friend'], null);
+  it('asks for the authors’ posts with the full embed, my vote only, newest first, one page — then their scores', async () => {
+    const { client, requests } = createFakeSocialClient({
+      posts: [rawPost({ id: 'lift', author: friend, createdAt: '2026-11-15T08:00:00.000Z' })],
+    });
+    await loadFeedPage(client, ME, [ME, 'friend'], null);
     expect(requests[0]).toEqual([
       ['from', 'posts'],
       ['select', FEED_SELECT],
       ['in', 'user_id', [ME, 'friend']],
+      // B23: the filter names the embed's alias, not the votes table.
+      ['eq', 'my_vote.user_id', ME],
       ['order', 'created_at', { ascending: false }],
       ['order', 'id', { ascending: false }],
       ['limit', FEED_PAGE_SIZE],
     ]);
+    expect(requests[1]).toEqual([
+      ['from', 'post_scores'],
+      ['select', SCORES_SELECT],
+      ['in', 'post_id', ['lift']],
+    ]);
+    expect(FEED_SELECT).toContain('flair:flairs(id,name,upvotes_only)');
+    expect(FEED_SELECT).toContain('my_vote:votes(value)');
     // B22: a plain (left) embed — an inner join would hide every photo post (no workout).
     expect(FEED_SELECT).toContain('workout:workouts(');
     expect(FEED_SELECT).not.toContain('!inner');
     expect(FEED_SELECT).toMatch(/^id,created_at,kind,image_path,visibility,/);
+  });
+
+  it('B23: each post carries the tally of everyone’s votes, its comment count, and only my own vote', async () => {
+    const { client } = createFakeSocialClient({
+      posts: [
+        rawPost({ id: 'busy', author: friend, createdAt: '2026-11-15T09:00:00.000Z' }),
+        rawPost({ id: 'quiet', author: friend, createdAt: '2026-11-15T08:00:00.000Z' }),
+      ],
+      votes: [
+        { post_id: 'busy', user_id: 'a', value: 1 },
+        { post_id: 'busy', user_id: 'b', value: 1 },
+        { post_id: 'busy', user_id: ME, value: -1 },
+        { post_id: 'quiet', user_id: 'a', value: -1 },
+      ],
+      comments: [
+        { id: 'c1', post_id: 'busy', user_id: 'a', body: 'hi', created_at: '2026-11-15T09:10:00.000Z' },
+        { id: 'c2', post_id: 'busy', user_id: 'b', body: 'yo', created_at: '2026-11-15T09:20:00.000Z' },
+      ],
+    });
+    const page = await loadFeedPage(client, ME, ['friend'], null);
+    expect(page.posts.map((p) => [p.id, p.score, p.commentCount, p.myVote])).toEqual([
+      ['busy', 1, 2, -1],
+      ['quiet', -1, 0, null],
+    ]);
+  });
+
+  it('B23: the scores request fails → the page fails (no half-scored feed)', async () => {
+    const fake = createFakeSocialClient({ posts: [rawPost({ id: 'x', author: me, createdAt: '2026-11-15T08:00:00.000Z' })] });
+    const real = fake.client.from.bind(fake.client);
+    (fake.client as unknown as { from: (t: string) => unknown }).from = (t: string) => {
+      if (t === 'post_scores') fake.setOffline(true);
+      return real(t as never);
+    };
+    await expect(loadFeedPage(fake.client, ME, [ME], null)).rejects.toThrow('Loading the scores failed');
   });
 
   it('B22: photo posts come through beside workout posts; a workout post whose workout was withheld is dropped', async () => {
@@ -82,7 +128,7 @@ describe('loadFeedPage', () => {
         hidden,
       ],
     });
-    const page = await loadFeedPage(client, [ME, 'friend'], null);
+    const page = await loadFeedPage(client, ME, [ME, 'friend'], null);
     expect(page.posts.map((p) => [p.id, p.kind])).toEqual([
       ['pic', 'progress-pic'],
       ['pr', 'pr'],
@@ -98,7 +144,7 @@ describe('loadFeedPage', () => {
         rawPost({ id: 'new', author: friend, createdAt: '2026-11-15T08:00:00.000Z' }),
       ],
     });
-    const page = await loadFeedPage(client, [ME, 'friend'], null);
+    const page = await loadFeedPage(client, ME, [ME, 'friend'], null);
     expect(page.posts.map((p) => p.id)).toEqual(['new', 'old']);
     expect(page.next).toBeNull();
   });
@@ -111,26 +157,27 @@ describe('loadFeedPage', () => {
       return rawPost({ id: `p${n}`, author: friend, createdAt });
     });
     const { client, requests } = createFakeSocialClient({ posts });
-    const first = await loadFeedPage(client, ['friend'], null);
+    const first = await loadFeedPage(client, ME, ['friend'], null);
     expect(first.posts).toHaveLength(FEED_PAGE_SIZE);
     expect(first.next).not.toBeNull();
-    const second = await loadFeedPage(client, ['friend'], first.next);
+    const second = await loadFeedPage(client, ME, ['friend'], first.next);
     expect(second.posts).toHaveLength(5);
     expect(second.next).toBeNull();
     const all = [...first.posts, ...second.posts].map((p) => p.id);
     expect(new Set(all).size).toBe(25);
-    expect(requests[1]).toContainEqual(['or', beforeCursorFilter(first.next!)]);
+    // requests: posts, scores, posts (page two), scores.
+    expect(requests[2]).toContainEqual(['or', beforeCursorFilter(first.next!)]);
   });
 
   it('makes no request for an empty author list', async () => {
     const { client, requests } = createFakeSocialClient();
-    expect(await loadFeedPage(client, [], null)).toEqual({ posts: [], next: null });
+    expect(await loadFeedPage(client, ME, [], null)).toEqual({ posts: [], next: null });
     expect(requests).toHaveLength(0);
   });
 
   it('throws when the request fails', async () => {
     const { client } = createFakeSocialClient({}, { offline: true });
-    await expect(loadFeedPage(client, [ME], null)).rejects.toThrow('Loading the feed failed');
+    await expect(loadFeedPage(client, ME, [ME], null)).rejects.toThrow('Loading the feed failed');
   });
 });
 
@@ -150,7 +197,7 @@ describe('toFeedPost', () => {
     raw.workout.workout_exercises[1].sets[0].weight_kg = '102.5' as unknown as number;
     const post = toFeedPost(raw);
     if (post?.kind !== 'workout') throw new Error('expected a workout post');
-    expect(post.flair).toEqual({ id: 'some-new-flair', name: 'Deload Day' });
+    expect(post.flair).toEqual({ id: 'some-new-flair', name: 'Deload Day', upvotesOnly: false });
     expect(post.workout.entries.map((e) => e.exerciseName)).toEqual(['Squat', null]);
     expect(post.workout.entries[0].sets.map((s) => s.reps)).toEqual([5, 3]);
     expect(post.workout.entries[0].sets[1].weight_kg).toBe(102.5);
@@ -172,10 +219,25 @@ describe('toFeedPost', () => {
       kind: 'progress-pic',
       imagePath: `${ME}/pic.jpg`,
       visibility: 'private',
-      flair: { id: 'physique-check', name: 'Physique Check' },
+      flair: { id: 'physique-check', name: 'Physique Check', upvotesOnly: true },
       author: { id: ME, username: 'me_lifts', displayName: null },
+      score: 0,
+      commentCount: 0,
+      myVote: null,
     });
     expect(toFeedPost({ ...raw, image_path: null })).toBeNull();
+  });
+
+  it('B23: reads the flair row’s upvotes_only flag, the scores row, and my vote; a missing flag or scores row reads as the quiet default', () => {
+    const raw = {
+      ...rawPost({ id: 'p1', author: me, createdAt: '2026-11-15T08:00:00.000Z', flair: { id: 'zz', name: 'Zz', upvotes_only: true } }),
+      my_vote: [{ value: 1 }],
+    };
+    const post = toFeedPost(raw, { post_id: 'p1', score: 7, comment_count: 3 });
+    expect(post).toMatchObject({ flair: { upvotesOnly: true }, score: 7, commentCount: 3, myVote: 1 });
+    const bare = toFeedPost({ ...raw, flair: { id: 'zz', name: 'Zz' }, my_vote: undefined });
+    expect(bare).toMatchObject({ flair: { upvotesOnly: false }, score: 0, commentCount: 0, myVote: null });
+    expect(toFeedPost({ ...raw, my_vote: [{ value: 5 }] })?.myVote).toBeNull();
   });
 
   it('B22: drops a workout post whose workout the viewer may not see (no empty card)', () => {
