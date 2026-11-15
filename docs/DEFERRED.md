@@ -251,10 +251,12 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - **Timer isn't reset on sign-out**, like the calculators' session above (nothing sensitive).
   - `mmdc` was not permitted for the headless builder; `app-flow.md` was not render-checked.
 - B18 analysis-engine follow-ups (`analysis-engine`):
-  - **Gate 2 live probes not run by the builder** (curl not permitted): POST
-    `/functions/v1/analyze-workout` with no token → refused (401); as a real signed-in user on a
-    seeded finished workout → 200 + one row; again → still one row; on another user's PUBLIC
-    workout → 404 with the owner's row unchanged.
+  - **Live probes:** Gate 2 (Nov 15, 2026) confirmed the deployed function (version 2, ACTIVE,
+    `verify_jwt: true`) refuses a call with no token (401, missing authorization header) and a
+    call with only the publishable key (401, "Sign in first"), and that `workout_analyses` has
+    RLS on with a single owner `select` policy. **Still to run with a real signed-in user**
+    (part of Tristen's device check): a seeded finished workout → 200 + one row; again → still
+    one row; another user's PUBLIC workout → 404 with the owner's row unchanged.
   - **Device check (Tristen):** Finish (also in airplane mode) lands on the analysis — headline,
     volume in the chosen unit, sets "· n warm-up", duration, New PRs, statement at the bottom;
     View workout; the saved workout's Analysis button, including on a workout finished before
