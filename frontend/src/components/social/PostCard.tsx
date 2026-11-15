@@ -16,11 +16,20 @@
  *     can't be shown. On the lifter's OWN progress pic, a line says "Only you can see this post",
  *     so a progress pic's privacy is never a surprise.
  *
- * What the viewer can do: read it. Tapping through to the whole workout arrives with a later
- * step (another lifter's workout has no copy on this phone and no screen yet).
+ *   - (B23) a footer: an upvote arrow, the post's net score (ups minus downs), a downvote arrow,
+ *     and a comments button ("3 comments", or "Comment" when there are none). The arrow matching
+ *     the viewer's own vote is lit. On a post whose flair takes upvotes only (Physique Check —
+ *     read from the flair row, never by name) there is simply no downvote arrow.
+ *
+ * What the viewer can do: read it; vote — tap an arrow to vote, tap the lit one again to take
+ * the vote back, tap the other to switch. The score moves at once and moves back, with a short
+ * message, if the server refuses; and open the post's comments. Tapping through to the whole
+ * workout arrives with a later step (another lifter's workout has no copy on this phone and no
+ * screen yet). Without the vote / comment handlers (tests, or no session) the footer only shows.
  */
-import React, { useState } from 'react';
-import { Image, StyleSheet, View } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { Image, Pressable, StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 
 import { LetterAvatar } from '@/components/social/LetterAvatar';
 import { Card } from '@/components/ui/Card';
@@ -29,6 +38,7 @@ import { useDisplayUnit } from '@/settings/displayUnit';
 import type { FeedEntry, FeedPost, FeedWorkout } from '@/social/feed';
 import { personLabels } from '@/social/names';
 import type { PostImageSource } from '@/social/postImages';
+import { nextVote, VOTE_REFUSAL_MESSAGES, voteDelta, type VoteResult, type VoteValue } from '@/social/votes';
 import { colors, radii, spacing } from '@/theme';
 import {
   formatDropSet,
@@ -64,9 +74,16 @@ interface PostCardProps {
    * app); null when there is no session to fetch with, which shows the plain panel.
    */
   photoSource?: (imagePath: string) => PhotoSource | null;
+  /**
+   * Sends the viewer's new vote on this post — +1, −1, or null to take it back (B23; `castVote` /
+   * `clearVote` in the app). Left out, the arrows only show.
+   */
+  onVote?: (postId: string, vote: VoteValue | null) => Promise<VoteResult>;
+  /** Opens this post's comments (B23). Left out, the comment count only shows. */
+  onOpenComments?: (postId: string) => void;
 }
 
-export function PostCard({ post, now, viewerId, photoSource }: PostCardProps) {
+export function PostCard({ post, now, viewerId, photoSource, onVote, onOpenComments }: PostCardProps) {
   const { author, flair } = post;
   const who = personLabels(author);
   // The owner's own progress pic (private by rule until B26) says so; other cards are unchanged.
@@ -99,7 +116,119 @@ export function PostCard({ post, now, viewerId, photoSource }: PostCardProps) {
           {ONLY_YOU_LINE}
         </Body>
       ) : null}
+
+      <PostFooter post={post} onVote={onVote} onOpenComments={onOpenComments} />
     </Card>
+  );
+}
+
+/** What the comments button says: "Comment" with none yet, else "1 comment" / "n comments". */
+export function commentButtonLabel(count: number): string {
+  if (count <= 0) return 'Comment';
+  return `${count} comment${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * The card's footer (B23): the vote arrows around the net score, and the comments button.
+ * Holds the shown score and the viewer's vote locally so a tap shows at once ("optimistic"):
+ * the score moves by `voteDelta`, the vote is sent, and if the server refuses, both go back and
+ * the reason shows under the footer. A fresh feed load (new `post` values) resets both to the
+ * server's numbers — the server's tally is always the truth.
+ */
+function PostFooter({
+  post,
+  onVote,
+  onOpenComments,
+}: Pick<PostCardProps, 'post' | 'onVote' | 'onOpenComments'>) {
+  const [vote, setVote] = useState<VoteValue | null>(post.myVote);
+  const [score, setScore] = useState(post.score);
+  const [message, setMessage] = useState<string | null>(null);
+  // A ref, not state: two taps before the next draw must still send only one vote at a time.
+  const sending = useRef(false);
+
+  // A refreshed feed brings new server numbers: show those (React's "adjust state when a prop
+  // changes" pattern — compared during render, no effect).
+  const [server, setServer] = useState({ vote: post.myVote, score: post.score });
+  if (server.vote !== post.myVote || server.score !== post.score) {
+    setServer({ vote: post.myVote, score: post.score });
+    setVote(post.myVote);
+    setScore(post.score);
+  }
+
+  /**
+   * One arrow tapped: move the score now, send the vote, undo it if refused. The undo takes the
+   * same step back (−delta) rather than restoring a snapshot, so a feed refresh that landed
+   * while the vote was in flight isn't overwritten with older numbers.
+   */
+  async function tap(tapped: VoteValue): Promise<void> {
+    if (!onVote || sending.current) return;
+    const before = vote;
+    const after = nextVote(before, tapped);
+    const delta = voteDelta(before, after);
+    setVote(after);
+    setScore((s) => s + delta);
+    setMessage(null);
+    sending.current = true;
+    const result = await onVote(post.id, after);
+    sending.current = false;
+    if (!result.ok) {
+      setVote((v) => (v === after ? before : v));
+      setScore((s) => s - delta);
+      setMessage(VOTE_REFUSAL_MESSAGES[result.reason]);
+    }
+  }
+
+  const commentLabel = commentButtonLabel(post.commentCount);
+  return (
+    <View style={styles.footerWrap}>
+      <View style={styles.footer}>
+        <View style={styles.votes}>
+          <VoteArrow direction="up" lit={vote === 1} onPress={onVote ? () => void tap(1) : undefined} />
+          <View accessible accessibilityLabel={`Score ${score}`} testID="post-score">
+            <Body style={styles.score}>{String(score)}</Body>
+          </View>
+          {/* No downvote control at all on an upvote-only post — the flair row's flag decides. */}
+          {post.flair.upvotesOnly ? null : (
+            <VoteArrow direction="down" lit={vote === -1} onPress={onVote ? () => void tap(-1) : undefined} />
+          )}
+        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={commentLabel}
+          disabled={!onOpenComments}
+          onPress={() => onOpenComments?.(post.id)}
+          style={styles.commentButton}
+          hitSlop={8}
+        >
+          <Ionicons name="chatbubble-outline" size={18} color={colors.muted} />
+          <Body variant="small">{commentLabel}</Body>
+        </Pressable>
+      </View>
+      {message ? (
+        <Body variant="small" style={styles.voteMessage}>
+          {message}
+        </Body>
+      ) : null}
+    </View>
+  );
+}
+
+/** One vote arrow: red and filled when it is the viewer's vote, outlined otherwise. */
+function VoteArrow({ direction, lit, onPress }: { direction: 'up' | 'down'; lit: boolean; onPress?: () => void }) {
+  const label = direction === 'up' ? 'Upvote' : 'Downvote';
+  const icon =
+    direction === 'up' ? (lit ? 'arrow-up-circle' : 'arrow-up-circle-outline') : lit ? 'arrow-down-circle' : 'arrow-down-circle-outline';
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: lit, disabled: !onPress }}
+      disabled={!onPress}
+      onPress={onPress}
+      hitSlop={8}
+    >
+      <Ionicons name={icon} size={26} color={lit ? colors.accent : colors.muted} />
+    </Pressable>
   );
 }
 
@@ -245,6 +374,33 @@ const styles = StyleSheet.create({
   },
   privacy: {
     marginTop: spacing.sm,
+    color: colors.muted,
+  },
+  footerWrap: {
+    marginTop: spacing.sm,
+    gap: spacing.xs,
+  },
+  footer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  votes: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  score: {
+    color: colors.text,
+    minWidth: 24,
+    textAlign: 'center',
+  },
+  commentButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  voteMessage: {
     color: colors.muted,
   },
 });

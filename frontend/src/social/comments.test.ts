@@ -1,0 +1,99 @@
+/**
+ * Tests for reading and writing comments (B23, SOC-5): the request built, conversation order,
+ * the "more exist" flag at the cap, shaping, and adding one — refused up front when the text
+ * breaks the rules, otherwise returned as the server saved it.
+ */
+import { describe, expect, it } from '@jest/globals';
+
+import { createFakeSocialClient } from '@/test-utils/fakeSocialClient';
+import { profile } from '@/test-utils/feedFixtures';
+
+import { COMMENT_EMPTY, COMMENT_MAX_CHARS, COMMENT_TOO_LONG } from './commentLimits';
+import { addComment, COMMENT_SELECT, COMMENTS_LIMIT, loadComments, toPostComment } from './comments';
+
+const ann = profile('ann', 'ann_lifts', 'Ann');
+const bob = profile('bob', 'bob_lifts', null);
+
+/** A stored comment row. */
+function comment(id: string, user: string, createdAt: string, body = `Comment ${id}`, postId = 'p1') {
+  return { id, post_id: postId, user_id: user, body, created_at: createdAt };
+}
+
+describe('loadComments', () => {
+  it('asks for one post’s comments with the author, oldest first, id as the tiebreak', async () => {
+    const fake = createFakeSocialClient({
+      profiles: [ann, bob],
+      comments: [
+        comment('c3', 'ann', '2026-11-15T10:00:00.000Z'),
+        comment('c1', 'bob', '2026-11-15T09:00:00.000Z'),
+        comment('c2', 'ann', '2026-11-15T09:00:00.000Z'),
+        comment('other', 'ann', '2026-11-15T08:00:00.000Z', 'elsewhere', 'p2'),
+      ],
+    });
+    const page = await loadComments(fake.client, 'p1');
+    expect(page.comments.map((c) => c.id)).toEqual(['c1', 'c2', 'c3']);
+    expect(page.comments[0].author).toEqual({ id: 'bob', username: 'bob_lifts', displayName: null });
+    expect(page.more).toBe(false);
+    expect(fake.requests[0]).toEqual([
+      ['from', 'comments'],
+      ['select', COMMENT_SELECT],
+      ['eq', 'post_id', 'p1'],
+      ['order', 'created_at', { ascending: true }],
+      ['order', 'id', { ascending: true }],
+      ['limit', COMMENTS_LIMIT],
+    ]);
+  });
+
+  it('says more exist when a full load arrives', async () => {
+    const many = Array.from({ length: COMMENTS_LIMIT + 3 }, (_, i) =>
+      comment(`c${String(i).padStart(3, '0')}`, 'ann', '2026-11-15T09:00:00.000Z'),
+    );
+    const fake = createFakeSocialClient({ profiles: [ann], comments: many });
+    const page = await loadComments(fake.client, 'p1');
+    expect(page.comments).toHaveLength(COMMENTS_LIMIT);
+    expect(page.more).toBe(true);
+  });
+
+  it('throws when the request fails (no connection)', async () => {
+    const fake = createFakeSocialClient({}, { offline: true });
+    await expect(loadComments(fake.client, 'p1')).rejects.toThrow('Loading the comments failed');
+  });
+});
+
+describe('toPostComment', () => {
+  it('fills in a missing author from the row’s user id instead of crashing', () => {
+    expect(toPostComment({ ...comment('c', 'ghost', '2026-11-15T09:00:00.000Z'), author: null }).author).toEqual({
+      id: 'ghost',
+      username: null,
+      displayName: null,
+    });
+  });
+});
+
+describe('addComment', () => {
+  it('inserts as me and returns the saved row, author and all', async () => {
+    const fake = createFakeSocialClient({ profiles: [ann] });
+    const saved = await addComment(fake.client, 'ann', 'p1', 'Huge PR!');
+    expect(saved).toMatchObject({ body: 'Huge PR!', author: { id: 'ann', username: 'ann_lifts', displayName: 'Ann' } });
+    expect(saved.id).toBeTruthy();
+    expect(fake.tables.comments).toEqual([expect.objectContaining({ post_id: 'p1', user_id: 'ann', body: 'Huge PR!' })]);
+    expect(fake.requests[0]).toEqual([
+      ['from', 'comments'],
+      ['insert', { post_id: 'p1', user_id: 'ann', body: 'Huge PR!' }],
+      ['select', COMMENT_SELECT],
+      ['single'],
+    ]);
+  });
+
+  it('refuses blank or over-long text without sending anything', async () => {
+    const fake = createFakeSocialClient();
+    await expect(addComment(fake.client, 'ann', 'p1', '   ')).rejects.toThrow(COMMENT_EMPTY);
+    await expect(addComment(fake.client, 'ann', 'p1', 'x'.repeat(COMMENT_MAX_CHARS + 1))).rejects.toThrow(COMMENT_TOO_LONG);
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it('throws when the request fails', async () => {
+    const fake = createFakeSocialClient({}, { offline: true });
+    await expect(addComment(fake.client, 'ann', 'p1', 'hi')).rejects.toThrow('Posting the comment failed');
+  });
+});

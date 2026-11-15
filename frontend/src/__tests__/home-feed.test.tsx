@@ -173,6 +173,43 @@ describe('Home feed', () => {
     expect(mockPush).toHaveBeenCalledWith('/new-post');
   });
 
+  it('B23: a vote from Home reaches the server and the score the next load reads is the tally', async () => {
+    mockSocial = createFakeSocialClient({
+      posts: [rawPost({ id: 'lift', author: me, createdAt: '2026-11-15T08:00:00.000Z' })],
+      votes: [{ post_id: 'lift', user_id: 'friend', value: 1 }],
+    });
+    await renderSignedIn(<HomeScreen />);
+    expect(await screen.findByLabelText('Score 1')).toBeTruthy();
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Upvote'));
+    });
+    expect(mockSocial.tables.votes).toContainEqual({ post_id: 'lift', user_id: ME, value: 1 });
+    await act(async () => {
+      (screen.getByTestId('home-feed').props.refreshControl.props.onRefresh as () => void)();
+    });
+    expect(await screen.findByLabelText('Score 2')).toBeTruthy();
+    expect(listedPosts()[0]).toMatchObject({ score: 2, myVote: 1 });
+  });
+
+  it('B23: a Physique Check post on Home has an upvote arrow and no downvote control', async () => {
+    mockSocial = createFakeSocialClient({
+      posts: [rawImagePost({ id: 'pic', author: me, createdAt: '2026-11-15T09:00:00.000Z', kind: 'progress-pic' })],
+    });
+    await renderSignedIn(<HomeScreen />);
+    await screen.findByLabelText('Flair: Physique Check');
+    expect(screen.getByLabelText('Upvote')).toBeTruthy();
+    expect(screen.queryByLabelText('Downvote')).toBeNull();
+  });
+
+  it('B23: the comments button opens that post’s comments', async () => {
+    mockSocial = createFakeSocialClient({
+      posts: [rawPost({ id: 'lift', author: me, createdAt: '2026-11-15T08:00:00.000Z' })],
+    });
+    await renderSignedIn(<HomeScreen />);
+    await fireEvent.press(await screen.findByLabelText('Comment'));
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/post-comments/[id]', params: { id: 'lift' } });
+  });
+
   it('B22: photo posts render on Home beside workout posts, the owner’s progress pic marked private', async () => {
     mockSocial = createFakeSocialClient({
       posts: [

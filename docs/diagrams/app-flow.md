@@ -30,7 +30,7 @@ flowchart TD
 
   Tabs["Tab layout (only with a session)<br/>five bottom tabs, Workout dead center,<br/>floating top-right profile button"]
 
-  Tabs --> Home["Home (app/(tabs)/index.tsx, B20, SOC-1)<br/>FlatList of PostCards: followed lifters' + my own posts, newest first —<br/>workout posts, and (B22) progress-pic / PR photo posts: the photo is an RN Image of<br/>/storage/v1/object/authenticated/post-images/path with the viewer's Bearer token + apikey<br/>(postImageSource; 'Photo unavailable' panel on error); my own progress pic: 'Only you can see this post';<br/>reloads page 1 on every focus; pull-to-refresh; end of list → next page (20, keyset);<br/>header 'Share a photo' (B22) + 'Find lifters' buttons; empty: follow nobody → Find lifters + Log a workout,<br/>follow people who haven't posted → Find lifters;<br/>request failed / offline → 'The feed needs a connection' + Retry (nothing queued)"]
+  Tabs --> Home["Home (app/(tabs)/index.tsx, B20, SOC-1)<br/>FlatList of PostCards: followed lifters' + my own posts, newest first —<br/>workout posts, and (B22) progress-pic / PR photo posts: the photo is an RN Image of<br/>/storage/v1/object/authenticated/post-images/path with the viewer's Bearer token + apikey<br/>(postImageSource; 'Photo unavailable' panel on error); my own progress pic: 'Only you can see this post';<br/>reloads page 1 on every focus; pull-to-refresh; end of list → next page (20, keyset);<br/>card footer (B23, SOC-4/5): Upvote · net score · Downvote (no Downvote at all when flair.upvotesOnly,<br/>e.g. Physique Check) — tap = optimistic score ± voteDelta, revert + message on refusal;<br/>'n comments' / 'Comment' button;<br/>header 'Share a photo' (B22) + 'Find lifters' buttons; empty: follow nobody → Find lifters + Log a workout,<br/>follow people who haven't posted → Find lifters;<br/>request failed / offline → 'The feed needs a connection' + Retry (nothing queued)"]
   Home -->|"Find lifters: router.push('/find-lifters')"| FindScr["Find lifters (app/find-lifters.tsx, B20, SOC-7 part)<br/>search box (≥ 2 letters, 300 ms after typing stops);<br/>UserCards (letter avatar, name, @handle, Follow / Following) — never me,<br/>never someone I blocked; no match / no connection messages; Back"]
   Home -->|"Log a workout (empty feed)"| Workout
   FindScr -->|"Back: router.back (Home reloads on focus)"| Home
@@ -40,13 +40,21 @@ flowchart TD
   ImgPostQ -->|"posts row + outbox line; photo file in documents"| LocalDB
   ImgPostQ -.->|"notifies"| Triggers
   NewPostScr -->|"Post saved: router.replace('/') at once"| Home
+  Home -->|"comments button: router.push('/post-comments/[id]')"| CommentsScr["Comments (app/post-comments/[id].tsx, B23, SOC-5)<br/>the post's comments oldest first (letter avatar, name, @handle · date, body);<br/>200 loaded → 'More comments exist than are shown here.';<br/>'Write a comment' box (counter from 450 chars; over 500 → the one refusal line);<br/>Send (off while blank / too long / sending) → appends the server's saved row;<br/>failed send → keeps the text + a line; failed load / offline → 'Comments need a connection' + Retry; Back"]
+  CommentsScr -->|"Back: router.back (Home reloads on focus — fresh counts)"| Home
+  Home -->|"arrow tap: castVote (upsert on post_id,user_id) / clearVote (delete mine)"| VoteQ
+  CommentsScr --> CommentQ
   subgraph SocialMod["Social reads (src/social, B20): online only, client passed in, RLS decides visibility"]
-    FeedQ["feed.ts: feedAuthorIds = me + follows.followee_id where follower_id = me;<br/>loadFeedPage: posts.select(FEED_SELECT: kind, image_path, visibility, flair, author,<br/>workout (plain left embed since B22) → entries → exercise name, sets)<br/>.in(user_id, authors) [.or(beforeCursorFilter)] order created_at desc, id desc, limit 20;<br/>toFeedPost: photo post → kind + imagePath; workout post → sort entries + sets, weight → number;<br/>a workout post whose workout RLS withheld (null) is dropped; appendPage drops repeats"]
+    FeedQ["feed.ts: feedAuthorIds = me + follows.followee_id where follower_id = me;<br/>loadFeedPage(client, me, authors, after): posts.select(FEED_SELECT: kind, image_path, visibility,<br/>flair (id, name, upvotes_only — B23), author, workout (plain left embed since B22) → entries →<br/>exercise name, sets, my_vote:votes(value) — B23) .in(user_id, authors) .eq(my_vote.user_id, me)<br/>[.or(beforeCursorFilter)] order created_at desc, id desc, limit 20;<br/>then (B23) loadPostScores: post_scores.select(post_id, score, comment_count).in(post_id, page ids);<br/>toFeedPost: photo post → kind + imagePath; workout post → sort entries + sets, weight → number;<br/>+ score, commentCount (0 without a scores row), myVote (+1 / −1 / null);<br/>a workout post whose workout RLS withheld (null) is dropped; appendPage drops repeats"]
+    VoteQ["votes.ts (B23): castVote → votes.upsert(onConflict post_id,user_id);<br/>clearVote → delete where post_id + user_id = me; never throw:<br/>P0001 (upvote-only trigger) → 'This post takes upvotes only.', anything else → 'didn't go through';<br/>voteDelta / nextVote: the card's optimistic arithmetic (the tally itself stays on the server)"]
+    CommentQ["comments.ts (B23): loadComments → comments.select(…, author:profiles) eq post_id<br/>order created_at, id asc, limit 200; addComment → commentBodyError first<br/>(commentLimits.ts: 500 chars, not blank — mirrors the CHECK), then insert(…).select().single()"]
     FollowQ["follows.ts: searchLifters (sanitized ilike on username / display_name,<br/>not me, not in my blocks, limit 20, + which I follow);<br/>follow = insert follows row (duplicate = ok; RLS refusal → 'You can't follow this lifter.');<br/>unfollow = delete my row"]
   end
   Home --> FeedQ
   FindScr --> FollowQ
   FeedQ -->|"supabase-js select as the signed-in user"| DB
+  VoteQ -->|"upsert / delete votes (RLS + votes_upvote_only trigger)"| DB
+  CommentQ -->|"select / insert comments (RLS: post visible to me)"| DB
   FollowQ -->|"select profiles / blocks / follows; insert / delete follows"| DB
   DispUnit -->|"viewer's unit: PostCard sets via formatSet / formatDropSet"| Home
   Tabs --> Market["Marketplace<br/>programs (MKT-1..5)<br/>today: featured-section skeleton, placeholder cards"]
@@ -431,7 +439,15 @@ flowchart TD
    photo, then the post, in the background (retrying every sync until both land). Photo posts
    appear on Home as a photo card fetched with the viewer's sign-in, so the server decides who
    sees each one; the lifter's own progress pic says "Only you can see this post".
-16. Everything else is a placeholder that renders its final layout with inert controls (Start
+16. **Vote and comment (B23, SOC-4, SOC-5) — needs a connection.** Every card's footer has an
+   up arrow, the post's net score (ups minus downs, counted on the server) and a down arrow — no
+   down arrow at all on an upvote-only post (Physique Check; the flair row says so, and the
+   server refuses a downvote anyway). Tapping an arrow votes and the score moves at once; tapping
+   the lit arrow again takes the vote back; tapping the other switches. If the server refuses, the
+   score and arrow go back and a short line says why. The **Comment** / **n comments** button
+   opens the post's comments, oldest first, with a box to add one (up to 500 characters; Send
+   stays off while it's blank or too long). Back to Home reloads the counts.
+17. Everything else is a placeholder that renders its final layout with inert controls (Start
    from a program, Marketplace, Communities).
 
 ## Data path today
@@ -661,10 +677,24 @@ flowchart TD
   reads the session token, sends `x-upsert: true`) before `pushPost`. `FakeServer` grows an
   in-memory bucket (`objects`, `imageUploads`, `requestLog`, `failImageUploads`). `new-post` is
   declared in the root layout's signed-in guard; its picker is `expo-image-picker`.
+- **Votes and comments (B23).** Online only, like the feed: no device table, no outbox, no sync
+  change. `social/votes.ts` (cast = upsert on `(post_id, user_id)`, clear = delete mine, P0001 →
+  the upvote-only refusal; `voteDelta` / `nextVote` for the card's optimistic move),
+  `social/comments.ts` (`loadComments`, `addComment`) and `social/commentLimits.ts` (the 500-char
+  cap and blank rule — mirrors the `comments.body` CHECK by hand; change together). `loadFeedPage`
+  now takes the viewer id: the posts request embeds `my_vote:votes(value)` narrowed by
+  `eq('my_vote.user_id', me)`, and a second request reads `post_scores` by the page's post ids
+  (PostgREST refused embedding the view, PGRST200). `PostCard`'s footer keeps its score and vote in
+  local state, a ref blocks a second tap while one is in flight, and a refused vote steps back by
+  the same delta; a fresh feed load resets both to the server's numbers. The fake social client
+  grows `votes` / `comments` tables, a computed `post_scores`, the `my_vote` alias filter, `upsert`,
+  `.select().single()` after an insert and the upvote-only trigger (P0001). `post-comments/[id]` is
+  declared in the root layout's signed-in guard.
 - **Still unwired:** the Library reads the bundled catalog, not `astra.db`; posts can't be
   edited, deleted or re-offered from old workouts (photo posts can't be deleted either, so their
   storage objects are never removed); progress pics have no visibility choice (B26); feed cards don't
-  open a detail screen; the muscle map appears only on the analysis screen; Settings has no
+  open a detail screen; comments can't be deleted from the app (the RLS allows your own) and
+  aren't paged past 200; the muscle map appears only on the analysis screen; Settings has no
   Notifications (B47) or Privacy (B26) section.
 
 ## Shared pieces every screen uses
@@ -674,7 +704,7 @@ flowchart TD
 - `components/ProfileButton.tsx` is the floating route to You.
 - `components/ui/` holds Button, Card, EmptyState, Text, TextField (labeled input) and FormError
   (red alert line), all styled from `theme/tokens.ts`.
-- `components/social/` (B20) holds PostCard (one feed post — a workout, or since B22 a photo), UserCard (a person + Follow /
+- `components/social/` (B20) holds PostCard (one feed post — a workout, or since B22 a photo; since B23 with the vote / comments footer), UserCard (a person + Follow /
   Following, optimistic with revert) and LetterAvatar (the initial badge both use).
 - `components/auth/` holds SignInForm, SignUpForm, BirthdateInput and their shared layout styles.
   The route files in `app/(auth)/` only wire them to the router.

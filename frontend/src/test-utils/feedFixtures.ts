@@ -33,7 +33,7 @@ interface PostSpec {
   id: string;
   author: ReturnType<typeof profile>;
   createdAt: string;
-  flair?: { id: string; name: string };
+  flair?: { id: string; name: string; upvotes_only?: boolean };
   title?: string | null;
   notes?: string | null;
   /** Exercises in order; each with its sets and an optional superset number. */
@@ -55,7 +55,7 @@ export function rawPost(
     kind: 'workout',
     image_path: null,
     visibility: 'public',
-    flair: spec.flair ?? { id: 'wod', name: 'WOD' },
+    flair: spec.flair ?? { id: 'wod', name: 'WOD', upvotes_only: false },
     author: spec.author,
     workout: {
       id: `workout-${spec.id}`,
@@ -83,7 +83,7 @@ export function rawImagePost(spec: {
   author: ReturnType<typeof profile>;
   createdAt: string;
   kind: 'progress-pic' | 'pr';
-  flair?: { id: string; name: string };
+  flair?: { id: string; name: string; upvotes_only?: boolean };
 }): RawFeedPost & { user_id: string } {
   return {
     id: spec.id,
@@ -94,7 +94,10 @@ export function rawImagePost(spec: {
     visibility: spec.kind === 'progress-pic' ? 'private' : 'public',
     flair:
       spec.flair ??
-      (spec.kind === 'progress-pic' ? { id: 'physique-check', name: 'Physique Check' } : { id: 'new-pr', name: 'New PR' }),
+      (spec.kind === 'progress-pic'
+        ? // As seeded on the server (B20 migration): Physique Check takes upvotes only.
+          { id: 'physique-check', name: 'Physique Check', upvotes_only: true }
+        : { id: 'new-pr', name: 'New PR', upvotes_only: false }),
     author: spec.author,
     workout: null,
   };
