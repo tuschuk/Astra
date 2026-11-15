@@ -79,6 +79,16 @@ claude -p <prompt> --output-format json --permission-mode acceptEdits
   migrations, probe them and read the project URL/keys. The Management API (auth config such as
   email confirmation) is not an MCP tool; a run that needs it reads it with the
   `SUPABASE_ACCESS_TOKEN` from `.env`. `mmdc` (diagram rendering) is still not allowed.
+- Headless runs cannot make outbound HTTP (`curl` is declined), so live HTTP probes of edge
+  functions belong to Gate 2. In the Gate 2 session the Bash sandbox also returns `000` for
+  outbound `curl.exe`; use the PowerShell tool (`Invoke-WebRequest` / `Invoke-RestMethod`)
+  instead — localhost calls to n8n work from either. A probe that needs a real user JWT while
+  email confirmation is ON (B32's recipe): insert a throwaway row into `auth.users` by SQL with
+  `email_confirmed_at = now()`, `encrypted_password = extensions.crypt(pw, extensions.gen_salt
+  ('bf'))`, the token columns set to `''`, and `raw_user_meta_data` carrying `birthdate` (the
+  18+ signup trigger refuses otherwise), plus a matching `auth.identities` row; then call
+  `/auth/v1/token?grant_type=password` with the publishable key. Delete the user afterwards
+  (or, as in B32, let the function under test delete it).
 
 ## Failure handling (v1)
 
