@@ -14,6 +14,7 @@ import { profile } from '@/test-utils/feedFixtures';
 import {
   createTeam,
   inviteToTeam,
+  isCoachRole,
   joinModeLabel,
   joinTeam,
   leaveTeam,
@@ -25,6 +26,7 @@ import {
   roleLabel,
   searchTeams,
   setJoinMode,
+  setMemberRole,
   TEAM_FAILED,
   TEAM_INVITE_REFUSED,
   TEAM_JOIN_REFUSED,
@@ -174,6 +176,30 @@ describe('searchTeams', () => {
     expect((await searchTeams(fake.client, 'club')).map((t) => t.name)).toEqual(['100%_Club', 'Barbell Club']);
     expect((await searchTeams(fake.client, '%_')).map((t) => t.name)).toEqual(['100%_Club']);
     expect(await searchTeams(fake.client, '"()')).toEqual([]);
+  });
+});
+
+describe('setMemberRole (B37)', () => {
+  it('makes a member a coach and back; never changes the owner row or mints an owner', async () => {
+    const fake = createFakeSocialClient({
+      teams: [team('t1', 'Crew')],
+      team_members: [member('t1', 'owner', 'owner'), member('t1', 'pat')],
+    });
+    expect(await setMemberRole(fake.client, 't1', 'pat', 'coach')).toEqual({ ok: true });
+    expect(fake.tables.team_members.find((m) => m.user_id === 'pat')?.role).toBe('coach');
+    expect(await setMemberRole(fake.client, 't1', 'pat', 'member')).toEqual({ ok: true });
+    expect(await setMemberRole(fake.client, 't1', 'owner', 'member')).toEqual({ ok: false, message: TEAM_NOT_ALLOWED });
+    expect(fake.tables.team_members.find((m) => m.user_id === 'owner')?.role).toBe('owner');
+    expect(await setMemberRole(fake.client, 't1', 'nobody', 'coach')).toEqual({ ok: false, message: TEAM_NOT_ALLOWED });
+  });
+
+  it('reports a dropped connection calmly', async () => {
+    const fake = createFakeSocialClient({}, { offline: true });
+    expect(await setMemberRole(fake.client, 't1', 'pat', 'coach')).toEqual({ ok: false, message: TEAM_FAILED });
+  });
+
+  it('the owner and coaches coach; members do not', () => {
+    expect([isCoachRole('owner'), isCoachRole('coach'), isCoachRole('member'), isCoachRole(null)]).toEqual([true, true, false, false]);
   });
 });
 

@@ -10,6 +10,10 @@
  * once (works with no signal) and begins at the program's first session; any program that was
  * running is ended in the same save. The panel then closes and the tab shows the run, with
  * "Start next session". Or **Cancel**.
+ *
+ * Pick mode (B37): given `onPick`, the same list is a chooser — a tap just reports the program
+ * (with its own heading and line), so a coach can pick a program to push to a team or assign to
+ * a member. Nothing is started.
  */
 import React, { useEffect, useState } from 'react';
 import { Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
@@ -33,15 +37,34 @@ export interface ProgramPickerSheetProps {
   db: SqlDriver | null;
   /** The signed-in lifter, whose programs are listed and who will run the pick. */
   userId: string | null;
-  /** Called with the new run once the picked program has started. */
-  onStarted: (run: ProgramRunRow) => void;
+  /** Called with the new run once the picked program has started (start mode). */
+  onStarted?: (run: ProgramRunRow) => void;
+  /**
+   * Pick mode (B37): when given, a tap reports the picked program's id instead of starting it —
+   * how a coach chooses a program to push to the team or assign to a member.
+   */
+  onPick?: (programId: string) => void;
+  /** The panel's heading (default "Start a program"). */
+  title?: string;
+  /** The line under the heading (default: the start-mode explanation). */
+  intro?: string;
   /** Called when the lifter wants to go and build a program (the empty state's button). */
   onOpenPrograms: () => void;
   /** Called when the lifter cancels. */
   onClose: () => void;
 }
 
-export function ProgramPickerSheet({ visible, db, userId, onStarted, onOpenPrograms, onClose }: ProgramPickerSheetProps) {
+export function ProgramPickerSheet({
+  visible,
+  db,
+  userId,
+  onStarted,
+  onPick,
+  title = 'Start a program',
+  intro = 'Pick a program to run. Each tap of Start next session opens its next workout.',
+  onOpenPrograms,
+  onClose,
+}: ProgramPickerSheetProps) {
   const insets = useSafeAreaInsets();
   const [programs, setPrograms] = useState<ProgramSummary[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -66,9 +89,13 @@ export function ProgramPickerSheet({ visible, db, userId, onStarted, onOpenProgr
     };
   }, [visible, db, userId]);
 
-  /** Starts running `programId` and reports the new run. */
+  /** Pick mode: reports `programId`. Start mode: starts running it and reports the new run. */
   async function pick(programId: string): Promise<void> {
-    if (!db || !userId || busy) return;
+    if (onPick) {
+      onPick(programId);
+      return;
+    }
+    if (!db || !userId || busy || !onStarted) return;
     setBusy(true);
     setError(null);
     try {
@@ -85,11 +112,11 @@ export function ProgramPickerSheet({ visible, db, userId, onStarted, onOpenProgr
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} transparent={false}>
       <View style={[styles.root, { paddingTop: insets.top + spacing.lg }]}>
         <View style={styles.header}>
-          <Heading size="section">Start a program</Heading>
+          <Heading size="section">{title}</Heading>
           <Button label="Cancel" variant="ghost" onPress={onClose} />
         </View>
         <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + spacing.xxl, gap: spacing.md }}>
-          <Body variant="muted">Pick a program to run. Each tap of Start next session opens its next workout.</Body>
+          <Body variant="muted">{intro}</Body>
           <FormError message={error} />
           {programs && programs.length === 0 ? (
             <View style={styles.empty}>
@@ -103,7 +130,7 @@ export function ProgramPickerSheet({ visible, db, userId, onStarted, onOpenProgr
               <Pressable
                 key={item.program.id}
                 accessibilityRole="button"
-                accessibilityLabel={`Start ${item.program.name}`}
+                accessibilityLabel={`${onPick ? 'Pick' : 'Start'} ${item.program.name}`}
                 accessibilityState={{ disabled: !runnable || busy }}
                 disabled={!runnable || busy}
                 onPress={() => void pick(item.program.id)}

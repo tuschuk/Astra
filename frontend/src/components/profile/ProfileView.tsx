@@ -32,8 +32,10 @@
  * Where the data comes from:
  *   - your own History and PRs are read from the phone, so they work with no signal, and a past
  *     workout opens its saved-workout screen when tapped;
- *   - everything about another lifter is read from the server as you (never stored on the phone),
- *     and their workouts aren't tappable — there is no screen for someone else's workout yet;
+ *   - everything about another lifter is read from the server as you (never stored on the phone);
+ *     tapping one of their workouts (B37) opens the whole session, read online (`/session/[id]`).
+ *     If you coach a team they're on, their History includes their private workouts too — the
+ *     server's coach rule, never decided here;
  *   - your own name, bio and photo are also remembered on the phone (`ownProfileCache`), so the
  *     You tab shows who you are offline. Counts and posts need a connection; without one the
  *     counts show a dash and the screen says so, with Retry.
@@ -41,7 +43,7 @@
  * A profile that doesn't exist (a deleted account, a bad link) says "This lifter isn't available".
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, FlatList, StyleSheet, View } from 'react-native';
+import { Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 
 import { useAuth } from '@/auth/AuthProvider';
@@ -651,7 +653,10 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
           onPress={() => router.push({ pathname: '/workout/[id]', params: { id: row.summary.workout.id } })}
         />
       ) : (
-        <OtherWorkoutRow workout={row.workout} />
+        <OtherWorkoutRow
+          workout={row.workout}
+          onPress={() => router.push({ pathname: '/session/[id]', params: { id: row.workout.id } })}
+        />
       );
     }
     const line = formatPrLine(item.group.records, unit);
@@ -695,12 +700,18 @@ function Count({ label, value }: { label: string; value: number | null }) {
 
 /**
  * One of someone else's workouts in their History: its title (or date), "58 min · 3 exercises ·
- * 12 sets", and the exercises' names. Not tappable — their workout has no screen on this phone.
+ * 12 sets", and the exercises' names. Tapping it (B37) opens the whole session read from the
+ * server (`/session/[id]`) — how a team's coach reads a member's training log.
  */
-function OtherWorkoutRow({ workout }: { workout: ProfileWorkout }) {
+function OtherWorkoutRow({ workout, onPress }: { workout: ProfileWorkout; onPress: () => void }) {
   const title = workout.title ?? workoutDateLabel(workout.started_at);
   return (
-    <View style={styles.otherWorkout}>
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`Open ${title}`}
+      onPress={onPress}
+      style={({ pressed }) => [styles.otherWorkout, pressed && styles.pressed]}
+    >
       <Body style={styles.prName}>{title}</Body>
       <Body variant="small">{workoutDetailsLabel(workout, workout.exerciseNames.length, workout.setCount)}</Body>
       {workout.exerciseNames.length > 0 ? (
@@ -708,11 +719,14 @@ function OtherWorkoutRow({ workout }: { workout: ProfileWorkout }) {
           {workout.exerciseNames.map((name) => name ?? UNNAMED_EXERCISE).join(' · ')}
         </Body>
       ) : null}
-    </View>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
+  pressed: {
+    opacity: 0.7,
+  },
   identityRow: {
     flexDirection: 'row',
     alignItems: 'center',

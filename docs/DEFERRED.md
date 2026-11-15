@@ -636,3 +636,37 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     chip row and the team page at phone width; airplane mode → the connection message.
   - Mermaid render of both diagrams was not run by the builder (`mmdc` declined by the permission
     layer) — Gate 2 should render them once.
+- **B37 team-coaching:**
+  - **Coach-custom exercises don't copy** (plan G9): a pushed / assigned program slot naming the
+    coach's own custom exercise arrives with no exercise ("Deleted exercise") in the member's copy,
+    and is skipped when a pushed workout starts. The Start / Save confirmation states the count;
+    starting a pushed workout does not (the logger opens straight away). Copying custom rows is its
+    own feature.
+  - **Duplicate copies after a kill** (plan risk 3): a kill between copy and run start, or a failed
+    assignment delete, leaves a saved program plus the standing assignment; Start again makes a
+    second copy. Tolerated by design; dedupe state rejected as speculative.
+  - **Coach's corner shows the newest 20 pushes**, no paging (plan G15).
+  - **Owner moderation of pushes**, removing members — B38. **Push notifications** — B47.
+    **Program visibility / shared reads** — B39 (the payload RPCs are team-scoped stopgaps).
+  - **Coach access ignores mutes** (a coach who muted a member still reads their log) — a product
+    nuance of "coaching implies log access"; one clause in `private.coach_reads_logs` if unwanted.
+  - **`private.program_workout_json` keeps the default EXECUTE grant** (no gate of its own). Safe
+    while the `private` schema stays unexposed through the API (the repo's standing assumption for
+    every `private.*` helper); revoke it in a later migration if that ever changes.
+  - **A revoke or dismiss that deletes nothing reports success** (`removeAssignment` doesn't ask
+    for the removed row back) — harmless: the row is gone either way, the page re-reads.
+  - **Review smells left as-is:** the target-fields reshaping (camelCase payload slot →
+    `target_*`) in three places; the payload cache keyed by string with casts; `useTeamCoaching`
+    holding loading, actions and modals together; payload types living in `social/` while
+    `programs/copyProgram.ts` and `workout/startPushedWorkout.ts` import them.
+  - **Device check (Tristen):** two accounts, A owns a team, B is a member. A: Make coach on B
+    (badge flips; Remove coach undoes). A: Announce → text appears in Coach's corner on both
+    phones. A: Push a program (one already synced) → B taps the card → weeks / targets → Save to
+    my programs → Workout → Your programs lists it. A: Push a workout → B → Start this workout →
+    logger prefilled with "Target:" notes. A: Assign a program on B → B sees "Your coach assigned
+    …" → View → Start program → Workout tab shows the run with Day 1 next. B logs a **private**
+    workout; A opens B's profile → History shows it → tap → full session with sets. B blocks A (or
+    leaves) → A's History of B no longer shows it. Push a just-made program in airplane-then-online
+    → the "wait for it to sync" line. Judge the team page at phone width.
+  - Mermaid render of both diagrams was not run by the builder (`mmdc` declined by the permission
+    layer) — Gate 2 should render them once.

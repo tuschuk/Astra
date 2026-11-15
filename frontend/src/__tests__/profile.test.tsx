@@ -133,7 +133,7 @@ describe('Another lifter’s profile (B25)', () => {
     expect(screen.queryByText('My own post')).toBeNull();
   });
 
-  it('pages their complete history from the server; rows are not tappable (YOU-2)', async () => {
+  it('pages their complete history from the server (YOU-2); a row opens the whole session (B37)', async () => {
     await renderSignedIn(<ProfileScreen />);
     await fireEvent.press(await screen.findByLabelText('Show workout history'));
     expect(await screen.findByText(`Session ${HISTORY_PAGE_SIZE + 3}`)).toBeTruthy();
@@ -142,7 +142,9 @@ describe('Another lifter’s profile (B25)', () => {
       fireEvent(screen.getByTestId('profile-list'), 'onEndReached');
     });
     expect(listed()).toHaveLength(HISTORY_PAGE_SIZE + 4);
-    expect(screen.queryAllByLabelText(/^Open workout from/)).toHaveLength(0);
+    // Someone else's row opens the online session view, never the own-workout screen.
+    await fireEvent.press(screen.getByLabelText(`Open Session ${HISTORY_PAGE_SIZE + 3}`));
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/session/[id]', params: { id: `w0${HISTORY_PAGE_SIZE + 3}` } });
   });
 
   it('lists their PRs per exercise in my unit (YOU-3)', async () => {
