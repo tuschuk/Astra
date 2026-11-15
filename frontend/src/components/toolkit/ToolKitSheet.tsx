@@ -1,16 +1,17 @@
 /**
- * ToolKitSheet — the Tool Kit: four training calculators in one full-screen panel that slides
- * up over whatever the lifter was doing.
+ * ToolKitSheet — the Tool Kit: four training calculators and a workout timer in one full-screen
+ * panel that slides up over whatever the lifter was doing.
  *
- * What it shows: a "Tool Kit" header with a Close button, a four-way switcher — 1RM | RPE |
- * %1RM | Plates — and the chosen calculator below it (TK-1..TK-4). Every number comes from
- * `@training-math`; weights are typed and shown in the lifter's display unit, except on the
- * plate loader, which works in its rack's unit (see PlateLoader).
+ * What it shows: a "Tool Kit" header with a Close button, a five-way switcher — 1RM | RPE |
+ * %1RM | Plates | Timer — and the chosen tool below it (TK-1..TK-5). Every calculator number
+ * comes from `@training-math`; weights are typed and shown in the lifter's display unit, except
+ * on the plate loader, which works in its rack's unit (see PlateLoader). The timer (TimerScreen)
+ * keeps running when the panel closes — it lives in `toolkit/timerStore.ts`, not in the panel.
  *
- * What the lifter can do: switch calculators, use them, and close the panel (Close, or the
- * system back button). It is opened from two places — the floating Tool Kit button in the
- * active workout (one tap from any point in the workout) and the Workout tab's tiles (which
- * open it straight at that calculator via `initialTool`).
+ * What the lifter can do: switch tools, use them, and close the panel (Close, or the system
+ * back button). It is opened from two places — the floating Tool Kit button in the active
+ * workout (one tap from any point in the workout) and the Workout tab's tiles (which open it
+ * straight at that tool via `initialTool`).
  *
  * Why a panel over the screen and not a screen of its own: the logger stays exactly where it
  * was underneath — scroll position, half-typed reps and all — so closing the Tool Kit loses
@@ -35,13 +36,15 @@ import { IntensityCalculator } from './IntensityCalculator';
 import { OneRmCalculator } from './OneRmCalculator';
 import { PlateLoader } from './PlateLoader';
 import { RpeCalculator } from './RpeCalculator';
+import { TimerScreen } from './TimerScreen';
 
-/** The switcher's four options, in order, with what a screen reader says for each. */
+/** The switcher's five options, in order, with what a screen reader says for each. */
 export const TOOL_OPTIONS: readonly ChoiceOption<ToolId>[] = [
   { value: 'oneRm', label: '1RM', spoken: '1RM calculator' },
   { value: 'rpe', label: 'RPE', spoken: 'RPE calculator' },
   { value: 'percent', label: '%1RM', spoken: 'Intensity calculator' },
   { value: 'plates', label: 'Plates', spoken: 'Plate loader' },
+  { value: 'timer', label: 'Timer', spoken: 'Timer' },
 ];
 
 interface ToolKitSheetProps {
@@ -49,7 +52,7 @@ interface ToolKitSheetProps {
   visible: boolean;
   /** Called when the lifter closes it. */
   onClose: () => void;
-  /** The calculator to open on; without it, the one last used this session. */
+  /** The tool to open on; without it, the one last used this session. */
   initialTool?: ToolId;
 }
 
@@ -62,7 +65,7 @@ export function ToolKitSheet({ visible, onClose, initialTool }: ToolKitSheetProp
   );
 }
 
-/** The panel's contents: header, switcher and the chosen calculator. */
+/** The panel's contents: header, switcher and the chosen tool. */
 function SheetBody({ onClose, initialTool }: Omit<ToolKitSheetProps, 'visible'>) {
   const insets = useSafeAreaInsets();
   const unit = useDisplayUnit();
@@ -92,6 +95,7 @@ function SheetBody({ onClose, initialTool }: Omit<ToolKitSheetProps, 'visible'>)
         {tool === 'rpe' ? <RpeCalculator unit={unit} /> : null}
         {tool === 'percent' ? <IntensityCalculator unit={unit} /> : null}
         {tool === 'plates' ? <PlateLoader displayUnit={unit} /> : null}
+        {tool === 'timer' ? <TimerScreen /> : null}
       </ScrollView>
     </KeyboardAvoidingView>
   );

@@ -1,7 +1,7 @@
 /**
- * Tests for the Tool Kit panel: the switcher shows each calculator, the panel opens on the
- * tool asked for (or the one last used), Close reports, and the weight calculators follow the
- * lifter's display unit.
+ * Tests for the Tool Kit panel: the switcher shows each calculator and the timer, the panel
+ * opens on the tool asked for (or the one last used), Close reports, and the weight calculators
+ * follow the lifter's display unit.
  */
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
@@ -11,11 +11,13 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { unitStore } from '@/settings/unitStore';
 import { resetPlateRackCache } from '@/toolkit/plateRack';
 import { resetToolKitSession, type ToolId } from '@/toolkit/session';
+import { resetTimerStore } from '@/toolkit/timerStore';
 import { TEST_SAFE_AREA_METRICS } from '@/test-utils/renderWithAuth';
 
 import { ToolKitSheet } from './ToolKitSheet';
 
 afterEach(() => {
+  resetTimerStore();
   resetToolKitSession();
   resetPlateRackCache();
   unitStore.reset();
@@ -33,7 +35,7 @@ async function renderSheet(props: { visible?: boolean; initialTool?: ToolId } = 
 }
 
 describe('ToolKitSheet', () => {
-  it('opens on the 1RM calculator and switches between all four', async () => {
+  it('opens on the 1RM calculator and switches between all five tools', async () => {
     await renderSheet();
     expect(screen.getByText('Tool Kit')).toBeTruthy();
     expect(screen.getByLabelText('Reps')).toBeTruthy();
@@ -43,6 +45,8 @@ describe('ToolKitSheet', () => {
     expect(screen.getByLabelText('Percent of 1RM (%)')).toBeTruthy();
     await fireEvent.press(screen.getByLabelText('Plate loader'));
     expect(await screen.findByLabelText('Add plate')).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Timer'));
+    expect(screen.getByLabelText('Time left: 2:00')).toBeTruthy();
   });
 
   it('opens straight at the tool asked for', async () => {

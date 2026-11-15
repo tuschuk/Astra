@@ -6,9 +6,9 @@
  *     logger) and **Start from a program** (disabled until programs arrive, B35);
  *   - with a workout in progress on this phone (even one left behind when the app was killed):
  *     **Resume workout** and **Discard** instead — never a second workout on top of the first;
- *   - the Tool Kit tiles: 1RM, RPE, %1RM and Plates each open the Tool Kit panel straight at
- *     that calculator (TK-1..TK-4, B16), so a lifter can plan at home without starting a
- *     workout; the Timer tile is still a placeholder (TK-5, B17);
+ *   - the Tool Kit tiles: 1RM, RPE, %1RM, Plates and Timer each open the Tool Kit panel
+ *     straight at that tool (TK-1..TK-5), so a lifter can plan — or run a conditioning timer —
+ *     without starting a workout;
  *   - the lifter's finished workouts, newest first (the latest 100), each opening the saved
  *     workout with every set.
  *
@@ -47,7 +47,7 @@ export default function WorkoutScreen() {
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Which calculator's tile was tapped (the Tool Kit is open at it), or null when closed.
+  // Which tool's tile was tapped (the Tool Kit is open at it), or null when closed.
   const [openTool, setOpenTool] = useState<ToolId | null>(null);
 
   /** Re-reads the workout in progress (into the session slot) and the history list. */
@@ -149,15 +149,10 @@ export default function WorkoutScreen() {
             </Card>
           </Pressable>
         ))}
-        {/* The timer arrives with B17; until then its tile is a placeholder. */}
-        <View style={styles.toolTile}>
-          <Card tier="deep" style={[styles.toolCard, styles.toolCardSoon]}>
-            <Body style={styles.toolText}>Timer</Body>
-          </Card>
-        </View>
       </View>
       <Body variant="small" style={styles.toolkitHint}>
-        Calculators and plate math — tap one here, or the Tool Kit button during any workout. Works offline.
+        Calculators, plate math and a workout timer — tap one here, or the Tool Kit button during any workout.
+        Works offline.
       </Body>
 
       <SectionLabel style={styles.historyLabel}>Past workouts</SectionLabel>
@@ -219,9 +214,6 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
     alignItems: 'center',
-  },
-  toolCardSoon: {
-    opacity: 0.5,
   },
   toolText: {
     fontFamily: fonts.subBold,

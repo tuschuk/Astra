@@ -332,3 +332,61 @@ Tristen overrules.
 - **Scope verdict:** right as written. Five modes, timestamp math, one notification at zero,
   both platforms via the device run. The two recorded readings (final-zero-only, Built vs Done
   split) are flagged above rather than smuggled.
+
+## Build deviations (recorded by the builder)
+
+The plan was built as written except for these, none of which changes scope:
+
+1. **Tabata's set-up boxes are whole seconds** (Work (s), Rest (s), Rounds — work 1–600, rest
+   0–600), not minutes + seconds pairs. Tabata intervals are seconds-scale; five boxes for one
+   protocol was clutter. Countdown, EMOM and AMRAP use minutes + seconds as planned
+   (`readMinSec`, new in `toolkit/inputs.ts`: 0–99 min, 0–59 s, above 0:00).
+2. **Set-up edits don't call `cancel`.** `setMode` is refused while a run exists and
+   `updateDraft` never touches a run, so there is never a pending alert to cancel at configure
+   time — `reset` already cancelled it. Cancel stays on pause and reset exactly as planned.
+3. **The alerts wrapper has a generation guard** the plan didn't spell out: every schedule or
+   cancel bumps a counter, so a pause/reset made *while the permission dialog is open* wins — the
+   late schedule books nothing (and a booking that lands after a cancel is withdrawn at once).
+   Without it, pausing during the first-ever permission prompt would leave a stale alert booked.
+4. **Where things live:** the set-up drafts (`TimerDrafts`, defaults) and their reader
+   (`readTimerConfig`) sit in `toolkit/timer.ts` beside the engine; the pure transitions
+   `startRun` / `pauseRun` / `resumeRun` are there too and the store wraps them with the clock
+   and the alerts. `timerStore` is a stable pass-through over a swappable instance so
+   `resetTimerStore(fakeAlerts)` works for tests without a mutable export.
+5. **Small shared additions:** `ChoiceChips` gained a `disabled` prop (the locked mode chips);
+   the theme gained `type.timer` (88 px Space Grotesk bold; the screen adds tabular numerals).
+6. **Mode order is Stopwatch | Countdown | EMOM | AMRAP | Tabata**, opening on Countdown (2:00)
+   — the rest timer is the common case. The countdown's presets are a separate "Rest" chip row
+   above the minutes/seconds boxes, as planned.
+7. **Integration test clock:** `tool-kit.test.tsx` moves time with a `Date.now` spy rather than
+   Jest fake timers (the real-SQLite logger under it awaits real promises); `TimerScreen.test.tsx`
+   uses fake timers throughout, as planned.
+8. **EMOM's big number** counts down the current interval ("Time left this round"), with the
+   round above it — the wall-timer reading the plan implied but didn't state.
+9. **Mode chips stay locked once a timer has finished**, not only while running or paused: the
+   done state offers Go again / Reset, and Reset (one tap) unlocks them. Same reason as the
+   grilling's "hard to kill" decision — the chips never act on a timer that exists.
+
+### Review fixes (code-review, both axes)
+
+- **Fixed alert name (`TIMER_ALERT_ID`).** The review found that an alert booked before the
+  app died couldn't be withdrawn after relaunch (its id was only in memory), so Reset couldn't
+  stop it and a new timer's alert would fire next to it. Every booking now uses one fixed
+  identifier: a new booking replaces the old one, and cancel reaches it from any process. The
+  plan's "the scheduled notification survives app death" still holds; now it can also be
+  overridden.
+- **Stale booking answers ignored.** A slow "unavailable" from a replaced booking could flip
+  the alerts-off line on after a newer booking succeeded; the store now honours only the latest
+  booking's answer.
+- **Announcements made consistent.** The first round is now announced on Start every time
+  (before, it was skipped on a first run but spoken after Go again); pause/resume never repeat
+  it, reopening the panel mid-run stays silent, and the end speaks the notification's words.
+- **One home for end-of-timer words.** The screen's finished line now shows `zeroAlertText`'s
+  title and body (the notification's words) instead of a second copy.
+- **Invalid set-up preview** names the chosen mode with "–:––", not the stopwatch's "Elapsed".
+- **Checked and not changed:** the Spec reviewer doubted that SDK 58 shows foreground
+  notifications without `setNotificationHandler`. The installed expo-notifications 58.1.9 ships a
+  default handler that shows a banner and plays a sound (`build/NotificationsHandler.js`;
+  CHANGELOG, expo/expo#49072), so the plan's reading stands. The device check still confirms it.
+  Kept as judgement calls: the `timerStore` pass-through (the test seam, deviation 4) and the
+  per-mode `switch`es (a five-member union; exhaustiveness is checked by tsc).
