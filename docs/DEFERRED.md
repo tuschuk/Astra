@@ -494,3 +494,13 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - Review judgement calls left as-is: the share-card `router.push` is written in three places and
     the re-share `useCallback` in two (Home, ProfileView); the footer's three icon+label pressables
     could share a `FooterAction`. Merge if another footer action arrives.
+- **B29 library-filters-and-detail:**
+  - **Device check (Tristen):** at phone width, the four region chips + two sideways-scrolling
+    chip rows + search before the first card (the plan's fallback: collapse the two rows behind a
+    "Filters" toggle); detail screen legibility; card tap feel.
+  - Info/detail link from the logger's `ExercisePicker` — its rows add on tap, so a detail link
+    needs a second tap target (plan, Out of scope).
+  - Muscle-filter noise: any involvement counts, ordered hardest first; if it reads as noisy on
+    device, the knob is a threshold in `filterExercises` (one line, no UI change).
+  - Mermaid render of the updated `app-flow.md` was not run by the builder (`mmdc` was declined
+    by the permission layer) — Gate 2 should render it once.

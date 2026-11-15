@@ -12,7 +12,9 @@ import { PATTERN_MUSCLES } from '@/library/exercises';
 import { isShaded, muscleShapes } from '@/test-utils/muscleMapQueries';
 
 import { MIN_SHADE_OPACITY, MuscleMap, shadeOpacity, trainedMuscleNames, trainedMuscles } from './MuscleMap';
-import { BODY_OUTLINE, MUSCLE_NAMES, MUSCLE_ORDER, MUSCLE_REGIONS } from './muscleMapPaths';
+import { MUSCLE_ORDER } from '@/library/muscles';
+
+import { BODY_OUTLINE, MUSCLE_REGIONS } from './muscleMapPaths';
 
 describe('MuscleMap', () => {
   it('fills exactly the trained muscles and leaves every other one plain', async () => {
@@ -62,10 +64,8 @@ describe('muscle map drawing data', () => {
     Object.values(PATTERN_MUSCLES).flatMap((m) => Object.keys(m) as MuscleKey[]),
   );
 
-  it('lists all twelve muscle keys once, each with a name and at least one shape', () => {
-    expect(MUSCLE_ORDER).toHaveLength(12);
-    expect(new Set(MUSCLE_ORDER).size).toBe(12);
-    expect(Object.keys(MUSCLE_NAMES).sort()).toEqual([...MUSCLE_ORDER].sort());
+  // The twelve-keys / every-key-named invariants live with the vocabulary in library/muscles.test.ts.
+  it('draws at least one shape for every muscle key', () => {
     for (const key of MUSCLE_ORDER) {
       expect([key, MUSCLE_REGIONS.some((r) => r.muscle === key)]).toEqual([key, true]);
     }

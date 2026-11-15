@@ -113,16 +113,23 @@ flowchart TD
   UnitStore -.->|"notifies"| Triggers
 
   Library -->|type a name| Search["Live name search<br/>alias-aware, e.g. Squats finds Back Squat"]
-  Library -->|tap a chip| Filter["Body-region filter chips<br/>four regions + result count + no-results state"]
+  Library -->|tap a chip| Filter["Filter chips (B29): region row (4) +<br/>muscle row (12) + equipment row (6), each scrolls sideways;<br/>one per row, re-tap clears, rows AND together;<br/>a muscle orders hardest-trained first;<br/>result count + no-results state"]
+  Library -->|tap a card| ExDetail["Exercise detail (app/exercise/[id].tsx), read-only (B29, LIB-3)<br/>name, region, equipment, pattern(s);<br/>Muscles worked (ranked); How to do it (5 coaching steps,<br/>**bold** cue spans); Tips; unknown id → not-found; Back"]
 
   subgraph LibData["Exercise library data (frontend/src/library)"]
     Seed[("exercises.ts<br/>founder's library by movement pattern:<br/>22 patterns, equipment, muscle intensities,<br/>5-step coaching cues, name aliases")]
-    Catalog[("catalog.ts<br/>one entry per unique exercise (151),<br/>canonical names, searchExercises")]
+    Catalog[("catalog.ts<br/>one entry per unique exercise (151),<br/>canonical names, searchExercises,<br/>filterExercises, exerciseById, EQUIPMENT_ORDER")]
+    Muscles[("muscles.ts<br/>MUSCLE_ORDER, MUSCLE_NAMES, rankMuscles —<br/>the one home of muscle vocabulary")]
+    CueFmt[("cueFormat.ts<br/>boldSegments: **bold** markers → spans")]
     Seed --> Catalog
   end
   Catalog --> Library
   Catalog --> Search
   Catalog --> Filter
+  Catalog --> ExDetail
+  Muscles --> Filter
+  Muscles --> ExDetail
+  CueFmt --> ExDetail
 
   subgraph Device["On the device"]
     Store[("expo-sqlite key-value store<br/>the saved Supabase session<br/>(survives killing the app)")]
@@ -353,7 +360,10 @@ flowchart TD
    with no network, straight into the tabs.
 4. **Sign out** from Settings (You → gear button). The guard returns the user to sign-in.
 5. Move between the five tabs and the You screen. On Library, scroll, search and filter every
-   launch exercise from the bundled, read-only catalog.
+   launch exercise from the bundled, read-only catalog — by body region, by one of the twelve
+   muscles (hardest-trained first) and by equipment, the rows combining (B29). Tap a card to
+   open its detail screen: muscles worked, the five coaching steps and tips; Back returns.
+   Nothing is read from the network or the phone's database, so it all works offline.
 6. **Log a workout (B09), with no signal needed.** On the Workout tab, tap **Start empty
    workout**. The logger opens full-screen: **Add exercise** searches the library; each
    exercise card takes reps and/or weight in pounds (**Log set**), repeats the last set in one
@@ -730,8 +740,10 @@ flowchart TD
   the bundled catalog (`ALL_EXERCISES`, id = slug), and combines their `muscles`. The analysis
   screen reads it in the same keyed load as `analysisForScreen`, so the map and the numbers are
   always the same workout's. `components/MuscleMap.tsx` draws two `react-native-svg` figures from
-  the shape data in `components/muscleMapPaths.ts` (hand-authored art, replaceable as data;
-  `MUSCLE_ORDER` is the tie-break order, `MUSCLE_NAMES` the display names). Nothing is stored and
+  the shape data in `components/muscleMapPaths.ts` (hand-authored art, replaceable as data).
+  Muscle names and order come from `library/muscles.ts` (`MUSCLE_ORDER` the tie-break order,
+  `MUSCLE_NAMES` the display names, `rankMuscles` the most-direct-first rule that both the map's
+  legend and the Library's exercise detail screen use — moved there in B29). Nothing is stored and
   nothing syncs.
 - **Feed and follows (B20).** Other people's data is never stored on the phone, so Home and
   Find lifters read the server directly and keep nothing: no device table, no outbox, no sync

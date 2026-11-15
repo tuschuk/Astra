@@ -224,3 +224,30 @@ adversarially and settled; the earlier draft was revised in place where an answe
 - **Scope check:** the step's scope line matches what B03 left undone exactly; nothing here
   widens it (no videos, no history, no DB reads). The `ExercisePicker` link was consciously
   dropped rather than half-shipped.
+
+## Build record (builder, B29)
+
+Implemented as planned. Deviations and additions, all small:
+
+- **`EQUIPMENT_ORDER` and `BODY_REGION_LABELS` in `catalog.ts`.** The plan says "one row for the
+  6 `Equipment` values" without saying where their order lives. The order is derived from a
+  `Record<Equipment, number>`, so a new equipment kind fails `tsc` until it gets a chip. The four
+  region labels moved beside `BodyRegion` because the detail screen shows a region label too
+  (review finding: a second hand-kept copy in the route).
+- **Detail header shows the region as dot + label**, not the dot alone, and **Back is on every
+  detail state** (not only not-found), falling through to `/library` when there is no history —
+  the same pattern as `exercise-history/[exerciseId]`.
+- **`ChipRow<T>` helper inside `library.tsx`** for the two scrolling rows (review finding:
+  duplicated block). Still screen-local; `ChoiceChips` untouched, as planned.
+- **Card `testID="exercise-card"`** so screen tests can address cards without leaning on label
+  punctuation.
+- **`exercise-detail.test.tsx` renders all 151 exercises** (name, ranked muscles, every step
+  title) — the plan's "running over real catalog data" taken literally; ~10 s of suite time.
+
+Review (`mattpocock-skills:code-review`, Standards + Spec sub-agents in parallel): Spec found
+nothing missing or wrong. Standards found no correctness bugs; fixed the duplicated region labels,
+the duplicated chip rows, a cue test that recomputed its expected value with the implementation's
+own regex, the `key={tip}` collision risk, and the fragile card selector. Left as-is:
+`trainedMuscles` is now a one-line delegate to `rankMuscles` (the plan keeps it as the analysis
+screen's stable name); the slug as a bare `string` in `exerciseById` (the catalog's existing
+convention).
