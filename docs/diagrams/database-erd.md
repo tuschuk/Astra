@@ -11,6 +11,8 @@ Source migrations: `20261114100000_identity.sql`, `20261114100100_training.sql`,
 `20261115031049_sets_notes.sql`, `20261115035806_personal_records.sql`,
 `20261115045638_sync_tombstones.sql` (B14, applied live), `20261115080420_workout_analyses.sql`
 (B18, applied live), `20261115093217_posts_flairs.sql` (B20, applied live),
+`20261115105852_post_images.sql` (B22, applied live — posts kinds, the `post-images` bucket and
+its storage policies),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -39,8 +41,9 @@ erDiagram
   workouts ||--o| workout_analyses : "id = workout id (cascade); one per workout"
   profiles ||--o{ workout_analyses : "user_id owns (cascade)"
   profiles ||--o{ posts : "user_id shares (cascade)"
-  workouts ||--o| posts : "workout_id shared (cascade); one post per workout"
+  workouts |o--o| posts : "workout_id shared (cascade); workout posts only; one post per workout"
   flairs ||--o{ posts : "flair_id: exactly one per post"
+  posts |o..o| storage_objects : "image_path = object name (photo posts; no FK)"
 
   auth_users {
     uuid id PK "managed by Supabase Auth"
@@ -178,22 +181,68 @@ erDiagram
   }
 
   posts {
-    uuid id PK "client-generated: made on the phone at the Post step, even offline (B21)"
+    uuid id PK "client-generated: made on the phone (Post step or Share a photo), even offline"
     uuid user_id FK "the author"
     text flair_id FK "required: exactly one flair"
-    uuid workout_id FK, UK "the shared workout; one post per workout"
-    workout_visibility visibility "public, followers or private; default public"
+    text kind "workout (default), progress-pic or pr (B22)"
+    uuid workout_id FK, UK "workout posts only (null for photo posts); one post per workout"
+    text image_path "photo posts only: <user_id>/<post_id>.<ext> in post-images (B22)"
+    workout_visibility visibility "public, followers or private; default public; progress-pic always private"
     timestamptz created_at "feed order, newest first"
     timestamptz updated_at
   }
+
+  storage_objects {
+    text bucket_id "post-images (private; 10 MiB cap; jpeg, png, webp)"
+    text name "object path; first folder = owner's user id"
+    uuid owner "uploader (Supabase-managed)"
+  }
 ```
+
+## Photo posts and the `post-images` bucket (B22)
+
+Migration `20261115105852_post_images.sql` adds two more kinds of post — **progress-pic** and
+**pr** — that carry one photo instead of a workout. `posts.kind` (default `'workout'`, so every
+older row and an older app's upload stay workout posts) says which. Four CHECKs keep the shapes
+honest:
+
+- `posts_kind_shape` — a `workout` post has a `workout_id` and no `image_path`; a photo post has an
+  `image_path` and no `workout_id`. (`unique (workout_id)` is untouched: nulls never collide.)
+- `posts_image_in_own_folder` — `image_path` must start with the author's own `user_id/`. Without
+  it a lifter could cite someone else's private photo in their own public post and the bucket's
+  read rule would open it.
+- `posts_progress_pic_private` — a progress pic is always `private` (CLAUDE.md privacy rule) until
+  B26 gives lifters the choice and relaxes this by migration.
+- `posts_image_path_idx` (partial, `image_path is not null`) serves the bucket's read rule.
+
+The insert/update policies now read `workout_id is null or private.owns_workout(workout_id)`.
+
+**The bucket** `post-images` is a row in `storage.buckets`: `public = false`, `file_size_limit =
+10485760` (10 MiB — mirrored by `MAX_POST_IMAGE_BYTES` in `frontend/src/social/mediaLimits.ts`;
+change both together), `allowed_mime_types = jpeg, png, webp` (no HEIC). Storage refuses an
+over-limit or wrong-format upload itself, whatever the phone does. Its policies on
+`storage.objects`, all scoped to `bucket_id = 'post-images'`:
+
+| Action | Who |
+| --- | --- |
+| insert | only into your own folder (`(storage.foldername(name))[1] = auth.uid()`) |
+| update | only your own folder (a retried upload with `x-upsert` replaces the same object) |
+| select | your own folder, **or** any object a post you may see cites (`exists posts where image_path = name and private.workout_visible(user_id, visibility)`) |
+| delete | only your own folder (nothing deletes photos yet) |
+
+So a progress pic is readable by its owner only (its post is private by CHECK); a PR photo by
+anyone who may see the post; and a photo whose post hasn't landed yet by its owner only. The app
+reads photos through `/storage/v1/object/authenticated/post-images/<path>` with the viewer's token
+— there are no public URLs. Live-probed as two users at build time: B's progress pic and its object
+invisible to A, B's PR photo and object visible to A, A refused uploading into B's folder, citing
+B's object, a public progress pic, an imageless photo post and a workoutless workout post.
 
 ## Posts and the feed (B20)
 
 `posts` and `flairs` (migration `20261115093217_posts_flairs.sql`) are what the Home feed is made
-of. A post shares one finished workout; at launch that is the only kind of post, so `workout_id` is
-required (a later step relaxes it when image posts exist). `unique (workout_id)` makes sharing the
-same session twice impossible, which is what makes finish-to-post (B21) safe to retry.
+of. A workout post shares one finished workout (B22 added photo posts, above, whose
+`workout_id` is null). `unique (workout_id)` makes sharing the same session twice impossible,
+which is what makes finish-to-post (B21) safe to retry.
 
 **How a post is made (B21).** Only by the phone's Post step after Finish → analysis. The phone
 writes the post into its own `posts` table with a fresh uuid, `visibility` copied from the
@@ -219,8 +268,10 @@ foreign key, since an offline finish's analysis may reach the server after the p
   `flairs` (download-only, replaced whole each sync) — see the device mirror section.
 - **The visibility enum is shared.** `posts.visibility` reuses `workout_visibility` (same three
   values, same meaning) so `private.workout_visible` serves both. The post and its workout each
-  have their own visibility; the feed shows a post only when **both** are visible to the viewer
-  (it joins the workout with `!inner`, and the workout's own RLS applies).
+  have their own visibility; the feed shows a workout post only when **both** are visible to the
+  viewer. Since B22 the feed embeds the workout as a plain (left) join — `!inner` would drop every
+  photo post — so the workout's own RLS returns a hidden workout as null and the app
+  (`toFeedPost`) drops that empty workout card. RLS is still what withholds the content.
 
 ## The launch library inside `exercises`
 
@@ -365,7 +416,8 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `sync_tombstones` | only your own | nobody — only the `record_tombstone` trigger inserts |
 | `workout_analyses` | only your own | nobody — no write policies; only the `analyze-workout` function (service role) upserts |
 | `flairs` | any signed-in user | nobody — new flairs arrive by migration |
-| `posts` | per the visibility rule below (same helper as workouts) | insert and update only as yourself **and** only for a workout you own (`private.owns_workout`); delete only your own |
+| `posts` | per the visibility rule below (same helper as workouts) | insert and update only as yourself **and**, for a workout post, only for a workout you own (`private.owns_workout`; photo posts have no workout); delete only your own |
+| `storage.objects` in `post-images` (B22) | your own folder, or cited by a post you may see | insert, update, delete only in your own folder — see the photo posts section |
 
 **Workout visibility rule** (`private.workout_visible`): you always see your own; a block in either
 direction hides everything; otherwise `public` is open to any signed-in user, `followers` requires
@@ -403,7 +455,10 @@ of `exercises`, `workouts`, `workout_exercises`, `sets`, `personal_records` and 
 phone syncs; `default_workout_visibility` is not mirrored yet; version 7 (B18) added
 `workout_analyses`, download-only, with `new_prs` as JSON text; version 8 (B21) added `flairs (id,
 name, position, upvotes_only)`, download-only, and `posts (id, user_id, flair_id, workout_id
-unique, visibility, created_at, updated_at)`, the lifter's own posts, upload-only; versions are append-only,
+unique, visibility, created_at, updated_at)`, the lifter's own posts, upload-only; version 9 (B22)
+rebuilt `posts` with `kind`, a nullable `workout_id` (still unique) and `image_path` — the photo
+waiting to upload is a file in the app's documents folder, `post-images/<post_id>.<ext>`, not a
+column; versions are append-only,
 upgraded on launch). There is no device copy of `sync_tombstones` — tombstones are applied as
 they download, and `sync_state` keeps the last applied id (`pull_cursor:tombstones`). It has the same column names, but
 uses text for uuids and timestamps and 0/1 for booleans, and it does not repeat the server's
@@ -453,6 +508,12 @@ and `sync_state`, the download bookmarks. What this means for the server:
   other refusal keeps the line for the next sync. Deleting a workout on the phone — or applying
   its tombstone from another device — also deletes the phone's post of it and that post's unsent
   lines (the device has no cascade), so a post of a gone workout can never jam the queue.
+- **Photo posts (B22) upload their photo first.** In the posts phase the phone sends
+  `POST /storage/v1/object/post-images/<image_path>` (streamed from the waiting file, `x-upsert:
+  true`, the user's token) and only then upserts the post row, so the object exists — owner-only
+  readable — before the post that reveals it. A retry re-uploads to the same path; an over-limit
+  upload is refused by the bucket (4xx) and retried like any failure. If the waiting file is gone,
+  the post is dropped on the phone (it can never upload). After the row lands the file is deleted.
 - **`flairs` (B21) are read whole, last in every download** (`select … order by position`, no
   bookmark: the table has no `updated_at`), and replace the device copy in one transaction. A
   failed read is logged and the old copy kept; an empty answer is ignored.

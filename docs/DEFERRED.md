@@ -333,3 +333,31 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - A failing settings upload holds queued posts back too (the posts phase runs after it);
     accepted, noted in `pushPostsPhase`.
   - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.
+- B22 image-posts follow-ups (`image-posts`):
+  - **Device check (Tristen):** Home → Share a photo → Progress pic → Choose photo → Post → back on
+    Home at once; the card appears (private, "Only you can see this post") once uploaded. Same for
+    a PR photo, then from a second account following you: the PR photo shows, the progress pic
+    does not. Pick a >10 MB photo (a long-exposure or a screenshot of a huge PNG) → the "This photo
+    is N MB — the limit is 10 MB" line and Post disabled. Airplane mode → Post → reconnect → posts
+    once. **On iPhone, confirm the picker hands back JPEG (not HEIC) with `quality: 0.9`** (G9).
+    Confirm photos render with the Bearer-header `<Image>` on both platforms (risk 2; fallback is
+    signed URLs behind `postImageSource`).
+  - **Not exercised live by the builder:** a real Storage upload (`/storage/v1/object/post-images/…`
+    with `x-upsert`, the user token and `apikey`), the bucket's `file_size_limit` refusing a >10 MiB
+    HTTP upload, and the authenticated GET. Bucket config and every storage/posts RLS rule were
+    probed in SQL as two users; the HTTP surface was pinned only against fakes.
+  - **No sweep of stray waiting photos** in `documents/post-images/` (failed best-effort delete, a
+    kill between acknowledge and delete, a dropped post). Add a sweep (delete files with no queued
+    post) when storage on the phone matters.
+  - **Permanent non-23505 refusals of a photo post** (a CHECK the app never violates today, a 4xx
+    from the bucket on a corrupted file) would hold the posts queue, the B07 known limit. Map
+    known-permanent codes to a settled drop if one is ever seen.
+  - **Deleting photo posts** (and their storage objects) lands with the post-deletion step;
+    the bucket's owner-delete policy is already in place for it.
+  - **B26** relaxes `posts_progress_pic_private` by migration when the visibility choice ships;
+    **B28** should know a PR post is a photo with the New PR flair, with no link to
+    `personal_records` (owner-only RLS).
+  - Review judgement calls left as-is: the 10 MiB cap and mime list are mirrored by hand in the
+    migration and `mediaLimits.ts` (commented to change together, the `limits.ts` precedent); the
+    storage policies repeat the own-folder expression; `saveImage`'s returned path is unused.
+  - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.

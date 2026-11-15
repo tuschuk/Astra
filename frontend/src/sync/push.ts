@@ -48,6 +48,8 @@
 import type { SqlDriver } from '@/db/driver';
 import { deletePostsTx, getRowsByIds, rootWorkoutIds, SYNC_ORDER, type RowByTable, type SyncedTable } from '@/db/dao';
 import { readUserSettingsRow } from '@/db/userSettings';
+import { mimeTypeForPath } from '@/social/mediaLimits';
+import { localPostImageFiles, localPostImageUri, type LocalPostImageFiles } from '@/social/postImages';
 
 import { acknowledge, pendingRows } from './outbox';
 import { PostAlreadyExistsError, type PushRow, type SyncTransport } from './transport';
@@ -111,7 +113,11 @@ function zeroCounts(): Record<SyncedTable, number> {
  * guards updates, never sees a lowered update to refuse. Upload first and the
  * keep-best rule would quietly keep the old, wrong record.
  */
-export async function pushOutbox(db: SqlDriver, transport: SyncTransport): Promise<PushResult> {
+export async function pushOutbox(
+  db: SqlDriver,
+  transport: SyncTransport,
+  files: LocalPostImageFiles = localPostImageFiles,
+): Promise<PushResult> {
   const pushed = zeroCounts();
   const deleted = zeroCounts();
 
@@ -150,7 +156,7 @@ export async function pushOutbox(db: SqlDriver, transport: SyncTransport): Promi
   }
 
   const userSettings = await pushUserSettingsPhase(db, transport);
-  const posts = await pushPostsPhase(db, transport);
+  const posts = await pushPostsPhase(db, transport, files);
 
   return { pushed, deleted, userSettings, posts };
 }
@@ -174,13 +180,40 @@ export async function pushOutbox(db: SqlDriver, transport: SyncTransport): Promi
  * with all its lines — keeping it would be refused on every sync and block the posts behind it.
  * Any other failure stops the push with the lines kept, like every other phase.
  *
+ * Photo posts (B22) take one more step first: their picture is uploaded from the phone's waiting
+ * copy (`social/postImages.ts`) to its fixed path in the server bucket, THEN the post row is
+ * sent, and once both landed the waiting copy is deleted. That is the whole "background upload
+ * with retry": the Post button only saved things on the phone, and this phase — run by the sync
+ * engine after each change, on reconnect and on launch — keeps trying until both are up. A retry
+ * re-uploads to the same path (replacing it), so nothing is ever duplicated. If the waiting copy
+ * has vanished, the post can never upload and is dropped rather than block the queue forever.
+ * `files` is the phone's file system (an in-memory one in tests).
+ *
  * Returns how many posts the server accepted.
  */
-async function pushPostsPhase(db: SqlDriver, transport: SyncTransport): Promise<number> {
+async function pushPostsPhase(db: SqlDriver, transport: SyncTransport, files: LocalPostImageFiles): Promise<number> {
   let sent = 0;
   for (const pending of await pendingRows(db, 'posts')) {
     const [row] = await getRowsByIds(db, 'posts', [pending.rowId]);
+    let localImage: string | null = null;
     if (row) {
+      localImage = row.image_path ? localPostImageUri(row.image_path) : null;
+      // Photo posts (B22): the picture goes up BEFORE the post row. The server only accepts a
+      // post naming a photo in its author's folder, and uploading first means the photo is
+      // there (readable by its owner only) by the time the post that reveals it lands.
+      if (row.image_path !== null && localImage !== null) {
+        const mimeType = mimeTypeForPath(row.image_path);
+        if (!mimeType || !(await files.exists(localImage))) {
+          // The waiting copy is gone (the phone cleared the folder) or was never usable: this
+          // post can never upload. Drop it, like a refused duplicate, so it can't block the
+          // posts queued behind it.
+          await db.withTransactionAsync((tx) => deletePostsTx(tx, [row.id]));
+          continue;
+        }
+        // Same path every time, replacing the file — a retry never duplicates it. Any failure
+        // (no signal, refused by the bucket) stops the push with the lines kept: retried next sync.
+        await transport.uploadPostImage(row.image_path, localImage, mimeType);
+      }
       const { updated_at: _serverStamped, ...upload } = row;
       try {
         await transport.pushPost(upload);
@@ -192,6 +225,9 @@ async function pushPostsPhase(db: SqlDriver, transport: SyncTransport): Promise<
       }
     }
     await acknowledge(db, 'posts', [pending]);
+    // The server holds the photo now; the phone's copy has done its job. Best effort: a file
+    // that won't delete is wasted space, not a wrong post, so it never fails the sync.
+    if (localImage) await files.remove(localImage).catch(() => undefined);
   }
   return sent;
 }

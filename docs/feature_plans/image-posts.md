@@ -327,6 +327,40 @@ behind that seam, old docs' import paths are not.
    blocks every later social upload. The `x-upsert` retry path and the 23505 path must stay
    distinct and both covered.
 
+## Build deviations (builder, Nov 15, 2026)
+
+All recorded here; none relaxes a privacy rule.
+
+- **Migration applied cleanly by MCP** — `create policy on storage.objects` was *not* refused, so
+  no dashboard fallback was needed. Recorded version `20261115105852` (file renamed). Probed live
+  as two synthetic users inside a rolled-back block: B's progress-pic post and object invisible to
+  A; B's PR post and object visible to A; A refused uploading into B's folder (42501), citing B's
+  object (`posts_image_in_own_folder`), a public progress pic (`posts_progress_pic_private`), an
+  imageless photo post and a workoutless workout post (`posts_kind_shape`); bucket cap 10485760.
+  **Not probed:** the bucket's `file_size_limit` refusing a real >10 MiB HTTP upload — that needs a
+  signed-in user token against the Storage API; left for Gate 2 / the device check.
+- **Local file helper named `localPostImageUri(imagePath)`**, not `postImageFileUri(postId)`: the
+  ext lives in the path, so the path is the natural input. Same location rule.
+- **The file seam is injected, not module-mocked:** `pushOutbox(db, transport, files?)` takes a
+  `LocalPostImageFiles` (default the real one), and `createImagePost` takes `saveImage` in its
+  options; tests use `test-utils/fakePostImageFiles.ts`. `createSupabaseTransport(client, config?,
+  upload?)` takes the project config (passed by `useSync`) and an injectable `uploadFile`.
+  Uploads send `apikey` as well as the Bearer token (Storage's gateway expects both), and so does
+  `postImageSource`.
+- **Tightenings:** a photo whose size can't be read is refused (it can't be promised to the
+  server); a queued photo post whose path has no allowed file ending is dropped like a missing
+  file; the refusal rounds the size **up** to one decimal so one byte over reads "10.1 MB", never
+  a contradictory "10.0 MB — the limit is 10 MB" (review catch).
+- **"Only you can see this post"** shows only on the owner's own *progress pic*, as specified (an
+  earlier draft showed it on every own private post; review caught it).
+- **Type chip label "PR photo"**, not "PR" — reads as a photo type beside "Progress pic".
+- **No opportunistic sweep of stray waiting files.** The file is deleted best-effort after the row
+  is acknowledged; a failed delete, a kill between ack and delete, or a dropped post leaves a
+  stray file in `documents/post-images/`. Storage only, not correctness — deferred.
+- **Accepted, not fixed:** a photo post the server refuses permanently for a reason other than
+  23505 (e.g. a CHECK the client never violates today) would hold the posts queue, the B07 known
+  limit. Deferred with the stray-file sweep.
+
 ## Grilling decisions (settled)
 
 Run via `mattpocock-skills:grilling` in the planner session at full severity, the session

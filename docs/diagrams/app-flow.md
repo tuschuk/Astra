@@ -30,12 +30,18 @@ flowchart TD
 
   Tabs["Tab layout (only with a session)<br/>five bottom tabs, Workout dead center,<br/>floating top-right profile button"]
 
-  Tabs --> Home["Home (app/(tabs)/index.tsx, B20, SOC-1)<br/>FlatList of PostCards: followed lifters' + my own workout posts, newest first;<br/>reloads page 1 on every focus; pull-to-refresh; end of list → next page (20, keyset);<br/>header 'Find lifters' button; empty: follow nobody → Find lifters + Log a workout,<br/>follow people who haven't posted → Find lifters;<br/>request failed / offline → 'The feed needs a connection' + Retry (nothing queued)"]
+  Tabs --> Home["Home (app/(tabs)/index.tsx, B20, SOC-1)<br/>FlatList of PostCards: followed lifters' + my own posts, newest first —<br/>workout posts, and (B22) progress-pic / PR photo posts: the photo is an RN Image of<br/>/storage/v1/object/authenticated/post-images/path with the viewer's Bearer token + apikey<br/>(postImageSource; 'Photo unavailable' panel on error); my own progress pic: 'Only you can see this post';<br/>reloads page 1 on every focus; pull-to-refresh; end of list → next page (20, keyset);<br/>header 'Share a photo' (B22) + 'Find lifters' buttons; empty: follow nobody → Find lifters + Log a workout,<br/>follow people who haven't posted → Find lifters;<br/>request failed / offline → 'The feed needs a connection' + Retry (nothing queued)"]
   Home -->|"Find lifters: router.push('/find-lifters')"| FindScr["Find lifters (app/find-lifters.tsx, B20, SOC-7 part)<br/>search box (≥ 2 letters, 300 ms after typing stops);<br/>UserCards (letter avatar, name, @handle, Follow / Following) — never me,<br/>never someone I blocked; no match / no connection messages; Back"]
   Home -->|"Log a workout (empty feed)"| Workout
   FindScr -->|"Back: router.back (Home reloads on focus)"| Home
+  Home -->|"Share a photo: router.push('/new-post')"| NewPostScr["Share a photo (app/new-post.tsx, B22: SOC-2, NFR-4, NFR-5)<br/>type chips Progress pic | PR photo; privacy line (progress pics private for now,<br/>PR photos public) + the kind's flair name from the device flairs rows;<br/>Choose photo → expo-image-picker library (images, quality 0.9 → iOS HEIC re-encoded to JPEG);<br/>preview; checkPostImage (social/mediaLimits.ts: ≤ 10 MiB, jpeg / png / webp) at pick time —<br/>over limit → 'This photo is 12.4 MB — the limit is 10 MB…', Post disabled;<br/>no flairs synced → Post disabled + a line why; Post · Cancel"]
+  NewPostScr -->|"Cancel: router.back"| Home
+  NewPostScr -->|Post| ImgPostQ["createImagePost (social/createPost.ts, B22):<br/>re-check limits + kind's flair on the phone (progress-pic → physique-check,<br/>private; pr → new-pr, public); copy the picked file to<br/>documents/post-images/postId.ext (postImages.ts); then ONE transaction:<br/>posts row (kind, workout_id null, image_path = userId/postId.ext) + outbox line 'posts';<br/>notifyLocalWrite — nothing is uploaded here"]
+  ImgPostQ -->|"posts row + outbox line; photo file in documents"| LocalDB
+  ImgPostQ -.->|"notifies"| Triggers
+  NewPostScr -->|"Post saved: router.replace('/') at once"| Home
   subgraph SocialMod["Social reads (src/social, B20): online only, client passed in, RLS decides visibility"]
-    FeedQ["feed.ts: feedAuthorIds = me + follows.followee_id where follower_id = me;<br/>loadFeedPage: posts.select(FEED_SELECT: flair, author, workout!inner → entries → exercise name, sets)<br/>.in(user_id, authors) [.or(beforeCursorFilter)] order created_at desc, id desc, limit 20;<br/>toFeedPost: sort entries + sets, weight → number; appendPage drops repeats"]
+    FeedQ["feed.ts: feedAuthorIds = me + follows.followee_id where follower_id = me;<br/>loadFeedPage: posts.select(FEED_SELECT: kind, image_path, visibility, flair, author,<br/>workout (plain left embed since B22) → entries → exercise name, sets)<br/>.in(user_id, authors) [.or(beforeCursorFilter)] order created_at desc, id desc, limit 20;<br/>toFeedPost: photo post → kind + imagePath; workout post → sort entries + sets, weight → number;<br/>a workout post whose workout RLS withheld (null) is dropped; appendPage drops repeats"]
     FollowQ["follows.ts: searchLifters (sanitized ilike on username / display_name,<br/>not me, not in my blocks, limit 20, + which I follow);<br/>follow = insert follows row (duplicate = ok; RLS refusal → 'You can't follow this lifter.');<br/>unfollow = delete my row"]
   end
   Home --> FeedQ
@@ -72,7 +78,7 @@ flowchart TD
 
   subgraph Device["On the device"]
     Store[("expo-sqlite key-value store<br/>the saved Supabase session<br/>(survives killing the app)")]
-    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records, user_settings (B15: user_id, unit),<br/>workout_analyses (B18, download-only, new_prs as JSON text),<br/>flairs (B21, download-only, replaced whole), posts (B21, my own, upload-only) (schema V8)<br/>+ outbox (unsent changes; op = upsert or delete, B14) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
+    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records, user_settings (B15: user_id, unit),<br/>workout_analyses (B18, download-only, new_prs as JSON text),<br/>flairs (B21, download-only, replaced whole), posts (B21, my own, upload-only;<br/>B22: kind, nullable workout_id, image_path) (schema V9)<br/>+ outbox (unsent changes; op = upsert or delete, B14) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
     LocalSeed["First-launch seed (library/seedLocal.ts)<br/>insert-if-missing all 151 exercises,<br/>id = uuidv5(namespace, slug); never queued"]
     WriteLocal["writeLocal / writeLocalRowsTx / writeLocalTree (db/dao.ts): the queued write paths<br/>rows + outbox lines + re-stamp & queue parent workout,<br/>all-or-nothing (writeLocalTree: a whole workout in one transaction)<br/>deleteLocalRowsTx (B14): delete rows + 'delete' outbox line + touch the root<br/>(a deleted workout also drops its analysis and, B21, its post + the post's unsent lines)"]
     Drafts["writeDraftRows / deleteDraftRowsTx (db/dao.ts): the in-progress path<br/>saved at once, NEVER queued; refused for a finished workout"]
@@ -215,7 +221,7 @@ flowchart TD
   subgraph SyncEng["Sync engine (src/sync), mounted by useSync in the root layout"]
     Triggers{{"Triggers, debounced 750 ms, one run at a time:<br/>start with a session, app back to foreground,<br/>network reconnects, a local write"}}
     PrePass["Tombstones first (B14): apply other devices' deletions<br/>BEFORE uploading, so an unsent edit can't re-create<br/>a workout deleted elsewhere"]
-    Push["Push: DELETE phase first (B14): outbox 'delete' lines,<br/>children's tables first, batches of 100 ids;<br/>then outbox → server upserts, parents first<br/>(… sets, then personal_records), batches of 500 on id (no updated_at),<br/>then workouts again to re-touch roots;<br/>clear lines up to each row's watermark PER OP; stop on failure;<br/>LAST (B15): settings phase — pending user_settings line → UPDATE unit by user_id<br/>(never insert; zero-row update = done);<br/>then (B21) posts phase — each pending posts line → upsert on id (no updated_at),<br/>after its workout landed; 23505 (another device posted it) → drop the local post + lines"]
+    Push["Push: DELETE phase first (B14): outbox 'delete' lines,<br/>children's tables first, batches of 100 ids;<br/>then outbox → server upserts, parents first<br/>(… sets, then personal_records), batches of 500 on id (no updated_at),<br/>then workouts again to re-touch roots;<br/>clear lines up to each row's watermark PER OP; stop on failure;<br/>LAST (B15): settings phase — pending user_settings line → UPDATE unit by user_id<br/>(never insert; zero-row update = done);<br/>then (B21) posts phase — each pending posts line → upsert on id (no updated_at),<br/>after its workout landed; 23505 (another device posted it) → drop the local post + lines;<br/>B22 photo post: FIRST stream the waiting file to Storage (uploadPostImage, x-upsert: same path<br/>every retry), THEN upsert the row, ack, delete the waiting file;<br/>waiting file missing → drop the post (can never upload); bucket refusal / no signal → keep line, retry next sync"]
     Pull["Pull: exercises, then own workouts by (updated_at, id)<br/>bookmark minus 5 s; fetch their entries and sets;<br/>reconcile (B14): drop local entries / sets the server's copy lacks<br/>(+ PR rows citing them), unless they have unsent lines;<br/>then own personal_records on their own bookmark (B13);<br/>LAST: tombstones after the stored id (B14): deleted workout → local tree<br/>+ its outbox lines go; deleted PR → goes unless unsent or newer;<br/>then (B15) the user_settings row, no bookmark: saved unless a toggle is unsent<br/>(check + save in one transaction), then onUserSettingsPulled → unitStore.applyPulled;<br/>save page + bookmark in one transaction;<br/>skip rows with unsent local edits;<br/>B18: after personal_records, workout_analyses on pull_cursor:workout_analyses<br/>(saved as they come — never any outbox lines); a workout tombstone also drops its analysis<br/>and (B21) its post + the post's unsent lines;<br/>VERY LAST (B21): flairs select-all by position → replace the device copy<br/>(a failure is recorded + logged, not a failed pull; an empty answer is ignored)"]
     Triggers --> PrePass --> Push --> Pull
     Pull -->|"only if the pull succeeded (B18)"| ReqPass
@@ -236,7 +242,8 @@ flowchart TD
   subgraph Backend["Supabase project (live)"]
     AuthAPI["Supabase Auth<br/>email + password accounts"]
     Trigger{"signup trigger handle_new_user<br/>refuses missing / under-18 birthdate;<br/>creates profile, settings, body data"}
-    DB[("Postgres<br/>profiles, settings, body data, follows, blocks,<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records (owner-only RLS; keep-best trigger<br/>never lets an UPDATE lower a record; delete+insert can),<br/>sync_tombstones (B14: written by delete triggers, owner-only read),<br/>workout_analyses (B18: owner read only; NO write policies),<br/>flairs + posts (B20: posts read per workout_visible; write only own post of own workout)<br/>see database-erd.md")]
+    DB[("Postgres<br/>profiles, settings, body data, follows, blocks,<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records (owner-only RLS; keep-best trigger<br/>never lets an UPDATE lower a record; delete+insert can),<br/>sync_tombstones (B14: written by delete triggers, owner-only read),<br/>workout_analyses (B18: owner read only; NO write policies),<br/>flairs + posts (B20: posts read per workout_visible; write only own post of own workout;<br/>B22: kind / image_path, own-folder + progress-pic-private CHECKs)<br/>see database-erd.md")]
+    Bucket[("Storage bucket post-images (B22, private)<br/>10 MiB cap, jpeg / png / webp only;<br/>write only in your own userId/ folder;<br/>read own folder, or any object a visible post cites (workout_visible)")]
     AnalyzeFn["Edge function analyze-workout (B18, deployed, verify_jwt on)<br/>POST {workoutId} with the user's token → getUser;<br/>reads AS THE CALLER (RLS); 404 unless the caller OWNS the workout;<br/>422 if unfinished; buildAnalysis (no model); upsert by id<br/>with the SERVICE ROLE (one statement); returns the stored row"]
     AuthAPI --> Trigger --> DB
     AnalyzeFn -->|"select as caller; upsert workout_analyses as service role"| DB
@@ -253,6 +260,8 @@ flowchart TD
   SettingsScr -->|"Sign out (local scope:<br/>clears this device first, works offline)"| Store
 
   Push -->|"supabase-js delete by id, then upsert, as the signed-in user (RLS);<br/>user_settings: update by user_id"| DB
+  Push -->|"B22: FileSystem.uploadAsync POST /storage/v1/object/post-images/path<br/>(Bearer token, apikey, x-upsert: true), before the post row"| Bucket
+  Bucket -->|"authenticated GET as the viewer (RLS per photo)"| Home
   DB -->|"supabase-js select (RLS-scoped), incl. sync_tombstones"| Pull
   DB -->|"sync_tombstones after id"| PrePass
   PrePass -->|"deletes local rows + their lines"| LocalDB
@@ -413,7 +422,16 @@ flowchart TD
    **Following** (one-way, no approval; it flips at once and flips back with "You can't follow
    this lifter." if a block stops it). Posts are made at the Post step after Finish (item 13).
    Offline, Home says the feed needs a connection (with Retry); everything else keeps working.
-15. Everything else is a placeholder that renders its final layout with inert controls (Start
+15. **Share a photo (B22, SOC-2, NFR-4, NFR-5).** Home's **Share a photo** opens a screen with two
+   type chips — **Progress pic** (private: only the lifter sees it for now; Physique Check flair)
+   and **PR photo** (public; New PR flair) — and **Choose photo** (the phone's photo library). A
+   photo over 10 MB, or not JPEG / PNG / WebP, is refused the moment it is picked with a sentence
+   saying how big it is and what the limit is, and Post stays disabled. **Post** saves the post
+   and a copy of the photo on the phone and returns to Home at once; the sync engine uploads the
+   photo, then the post, in the background (retrying every sync until both land). Photo posts
+   appear on Home as a photo card fetched with the viewer's sign-in, so the server decides who
+   sees each one; the lifter's own progress pic says "Only you can see this post".
+16. Everything else is a placeholder that renders its final layout with inert controls (Start
    from a program, Marketplace, Communities).
 
 ## Data path today
@@ -606,8 +624,9 @@ flowchart TD
   and pass them to `social/feed.ts` / `social/follows.ts` (client as a parameter, so tests hand
   in `test-utils/fakeSocialClient.ts`, an in-memory fake that actually evaluates `in`, `not`,
   `or()` filter strings, `order` and `limit`). Row-level security decides every visibility
-  question: the posts policy calls `private.workout_visible`, and the feed's `workouts!inner`
-  embed drops a post whose workout the viewer may not see. Paging is by bookmark
+  question: the posts policy calls `private.workout_visible`; since B22 the workout is a plain
+  embed (photo posts have none) and `toFeedPost` drops a workout post whose workout RLS withheld.
+  Paging is by bookmark
   (`beforeCursorFilter`: older `created_at`, or the same with a smaller `id`), so a post arriving
   mid-scroll never repeats or skips a card; Home's `generation` counter drops answers that land
   after a newer load started, and a ref keeps one next-page request in flight. `PostCard` prints
@@ -629,8 +648,22 @@ flowchart TD
   locally or by tombstone calls `deleteWorkoutPostsTx`. The analysis route reads a `post=1`
   param (set only by `active-workout.tsx`'s finish) to show Next; `post-workout/[id]` is declared
   in the root layout's signed-in guard. Nothing on this path touches the network directly.
+- **Photo posts (B22).** Device schema V9 rebuilds `posts` (kind, nullable `workout_id`,
+  `image_path`). `social/mediaLimits.ts` is the app's one spelling of the photo limits
+  (`MAX_POST_IMAGE_BYTES` = 10 MiB, jpeg / png / webp, `checkPostImage` with the refusal
+  sentence; mirrored by hand in the bucket migration). `social/postImages.ts` is the one module
+  touching `expo-file-system/legacy`: object path `userId/postId.ext`, the waiting copy in
+  `documents/post-images/`, `localPostImageFiles` (exists / remove — `pushOutbox`'s optional third
+  argument, faked in tests by `test-utils/fakePostImageFiles.ts`), `uploadFile` (native streamed
+  `uploadAsync`, binary body) and `postImageSource` (authenticated URL + headers for `<Image>`).
+  `createImagePost` copies then writes row + line in one transaction; `pushPostsPhase` calls
+  `transport.uploadPostImage` (the Supabase transport takes the project config from `useSync`,
+  reads the session token, sends `x-upsert: true`) before `pushPost`. `FakeServer` grows an
+  in-memory bucket (`objects`, `imageUploads`, `requestLog`, `failImageUploads`). `new-post` is
+  declared in the root layout's signed-in guard; its picker is `expo-image-picker`.
 - **Still unwired:** the Library reads the bundled catalog, not `astra.db`; posts can't be
-  edited, deleted or re-offered from old workouts; feed cards don't
+  edited, deleted or re-offered from old workouts (photo posts can't be deleted either, so their
+  storage objects are never removed); progress pics have no visibility choice (B26); feed cards don't
   open a detail screen; the muscle map appears only on the analysis screen; Settings has no
   Notifications (B47) or Privacy (B26) section.
 
@@ -641,7 +674,7 @@ flowchart TD
 - `components/ProfileButton.tsx` is the floating route to You.
 - `components/ui/` holds Button, Card, EmptyState, Text, TextField (labeled input) and FormError
   (red alert line), all styled from `theme/tokens.ts`.
-- `components/social/` (B20) holds PostCard (one feed post), UserCard (a person + Follow /
+- `components/social/` (B20) holds PostCard (one feed post — a workout, or since B22 a photo), UserCard (a person + Follow /
   Following, optimistic with revert) and LetterAvatar (the initial badge both use).
 - `components/auth/` holds SignInForm, SignUpForm, BirthdateInput and their shared layout styles.
   The route files in `app/(auth)/` only wire them to the router.

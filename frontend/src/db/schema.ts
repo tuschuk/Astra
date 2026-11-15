@@ -12,7 +12,8 @@
  *   - workout_analyses — each finished workout's post-workout analysis, as the
  *     server function wrote it (version 7, B18; download-only).
  *   - flairs — the server's list of post flairs (version 8, B21; download-only, replaced whole).
- *   - posts — the lifter's own workout posts from the Post step (version 8, B21; upload-only).
+ *   - posts — the lifter's own posts: workout posts from the Post step (version 8, B21) and photo
+ *     posts from Share a photo (version 9, B22). Upload-only.
  *   - outbox — the list of local changes (uploads and, from version 5,
  *     deletions) not yet sent to the server (see `sync/outbox.ts`).
  *   - sync_state — small bookkeeping values, such as how far the last
@@ -222,8 +223,38 @@ create table posts (
 );
 `;
 
+/**
+ * Version 9 (B22): posts can be photos. Mirrors the server's `…_post_images.sql`:
+ *   - `kind` — 'workout' (every existing post, which the default fills in), 'progress-pic' or 'pr';
+ *   - `workout_id` becomes optional — a photo post shares no workout. Still unique: SQLite, like
+ *     Postgres, lets any number of rows hold null in a unique column;
+ *   - `image_path` — where the photo goes in the server's `post-images` bucket
+ *     (`<user_id>/<post_id>.<ext>`); null for workout posts.
+ * SQLite cannot drop a NOT NULL in place, so the table is rebuilt: a new table, every row copied
+ * across, the old one dropped and the new one renamed. It runs inside the migration's own
+ * transaction, so a kill mid-way leaves version 8 exactly as it was. The photo's file on the phone
+ * is not a column: its location follows from the post's id (`social/postImages.ts`).
+ */
+const V9 = `
+create table posts_v9 (
+  id         text primary key not null,
+  user_id    text not null,
+  flair_id   text not null,
+  kind       text not null default 'workout',
+  workout_id text unique,
+  image_path text,
+  visibility text not null,
+  created_at text not null,
+  updated_at text not null
+);
+insert into posts_v9 (id, user_id, flair_id, kind, workout_id, image_path, visibility, created_at, updated_at)
+  select id, user_id, flair_id, 'workout', workout_id, null, visibility, created_at, updated_at from posts;
+drop table posts;
+alter table posts_v9 rename to posts;
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8];
+export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

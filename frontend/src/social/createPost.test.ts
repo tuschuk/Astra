@@ -1,6 +1,7 @@
 /**
- * Tests for making a workout post on the phone (B21), on real SQLite: one row and one outbox line
- * in one transaction, the workout's visibility copied, and every refusal saving nothing.
+ * Tests for making a post on the phone, on real SQLite: a workout post (B21) — one row and one
+ * outbox line in one transaction, the workout's visibility copied — and a photo post (B22) — the
+ * photo checked and copied first, progress pics born private — with every refusal saving nothing.
  */
 import { describe, expect, it, jest } from '@jest/globals';
 
@@ -8,10 +9,13 @@ import { prepareDatabase } from '@/db/database';
 import { onLocalWrite, writeLocal, type FlairRow } from '@/db/dao';
 import { replaceFlairsTx } from '@/db/flairs';
 import { outboxSize, pendingRows } from '@/sync/outbox';
+import { FakePostImageFiles } from '@/test-utils/fakePostImageFiles';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { OTHER_USER_ID, USER_ID, WORKOUT } from '@/test-utils/workoutFixtures';
 
-import { createWorkoutPost, hasPostForWorkout, PostRefusedError } from './createPost';
+import { createImagePost, createWorkoutPost, hasPostForWorkout, PostRefusedError } from './createPost';
+import { MAX_POST_IMAGE_BYTES } from './mediaLimits';
+import { localPostImageUri } from './postImages';
 
 const FLAIRS: FlairRow[] = [
   { id: 'wod', name: 'WOD', position: 1, upvotes_only: false },
@@ -43,7 +47,9 @@ describe('createWorkoutPost', () => {
       id: POST_ID,
       user_id: USER_ID,
       flair_id: 'new-pr',
+      kind: 'workout',
       workout_id: WORKOUT.id,
+      image_path: null,
       visibility: 'public',
       created_at: NOW,
       updated_at: NOW,
@@ -111,6 +117,94 @@ describe('createWorkoutPost', () => {
         [USER_ID, WORKOUT.id],
       ),
     ).rejects.toThrow(/UNIQUE/);
+  });
+});
+
+describe('createImagePost (B22)', () => {
+  const JPEG = { uri: 'file:///cache/picked.jpg', byteSize: 2_000_000, mimeType: 'image/jpeg' };
+
+  /** A phone with the flair list synced (the two photo flairs among them) and nothing queued. */
+  async function phone() {
+    const db = await prepareDatabase(createNodeSqliteDriver());
+    await db.withTransactionAsync((tx) =>
+      replaceFlairsTx(tx, [...FLAIRS, { id: 'physique-check', name: 'Physique Check', position: 3, upvotes_only: true }]),
+    );
+    return db;
+  }
+
+  it('a progress pic is born private, wears Physique Check, names a photo in the lifter’s own folder, and is queued once', async () => {
+    const db = await phone();
+    const files = new FakePostImageFiles();
+    const post = await createImagePost(db, USER_ID, 'progress-pic', JPEG, {
+      now: NOW,
+      newId: () => POST_ID,
+      saveImage: files.save,
+    });
+    expect(post).toEqual({
+      id: POST_ID,
+      user_id: USER_ID,
+      flair_id: 'physique-check',
+      kind: 'progress-pic',
+      workout_id: null,
+      image_path: `${USER_ID}/${POST_ID}.jpg`,
+      visibility: 'private',
+      created_at: NOW,
+      updated_at: NOW,
+    });
+    expect(await db.getAllAsync('select * from posts')).toEqual([post]);
+    expect(await pendingRows(db, 'posts')).toEqual([{ rowId: POST_ID, mark: expect.any(Number) }]);
+    // The picked photo was copied into the waiting folder, under the post's id.
+    expect([...files.files.entries()]).toEqual([[localPostImageUri(post.image_path!), JPEG.uri]]);
+  });
+
+  it('a PR photo is public and wears New PR; a PNG keeps its format', async () => {
+    const db = await phone();
+    const files = new FakePostImageFiles();
+    const post = await createImagePost(db, USER_ID, 'pr', { ...JPEG, mimeType: 'image/png' }, {
+      newId: () => POST_ID,
+      saveImage: files.save,
+    });
+    expect(post).toMatchObject({ kind: 'pr', flair_id: 'new-pr', visibility: 'public', image_path: `${USER_ID}/${POST_ID}.png` });
+  });
+
+  it('refuses an over-limit photo with the lifter-facing message, copying and saving nothing', async () => {
+    const db = await phone();
+    const files = new FakePostImageFiles();
+    const attempt = createImagePost(db, USER_ID, 'pr', { ...JPEG, byteSize: MAX_POST_IMAGE_BYTES + 1 }, { saveImage: files.save });
+    await expectRefused(attempt, 'image-refused');
+    await expect(attempt).rejects.toThrow('This photo is 10.1 MB — the limit is 10 MB. Choose a smaller photo.');
+    expect(files.files.size).toBe(0);
+    expect(await outboxSize(db)).toBe(0);
+  });
+
+  it('refuses when the flair list hasn’t synced (unknown-flair), and saves nothing when the copy fails', async () => {
+    const bare = await prepareDatabase(createNodeSqliteDriver());
+    const files = new FakePostImageFiles();
+    await expectRefused(createImagePost(bare, USER_ID, 'pr', JPEG, { saveImage: files.save }), 'unknown-flair');
+    expect(files.files.size).toBe(0);
+
+    const db = await phone();
+    files.failSaves = true;
+    await expect(createImagePost(db, USER_ID, 'pr', JPEG, { saveImage: files.save })).rejects.toThrow('disk full');
+    expect(await db.getFirstAsync('select count(*) as n from posts')).toEqual({ n: 0 });
+    expect(await outboxSize(db)).toBe(0);
+  });
+
+  it('any number of photo posts fit on the phone (no workout, so the one-per-workout rule doesn’t apply)', async () => {
+    const db = await phone();
+    const files = new FakePostImageFiles();
+    await createImagePost(db, USER_ID, 'pr', JPEG, { saveImage: files.save });
+    await createImagePost(db, USER_ID, 'progress-pic', JPEG, { saveImage: files.save });
+    expect(await db.getFirstAsync('select count(*) as n from posts')).toEqual({ n: 2 });
+  });
+
+  it('tells the sync engine once the post is saved', async () => {
+    const db = await phone();
+    const heard = jest.fn();
+    const stop = onLocalWrite(db, heard);
+    await createImagePost(db, USER_ID, 'pr', JPEG, { saveImage: new FakePostImageFiles().save });
+    stop();
+    expect(heard).toHaveBeenCalledWith('posts');
   });
 });
 

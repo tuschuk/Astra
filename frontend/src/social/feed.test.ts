@@ -6,7 +6,7 @@
 import { describe, expect, it } from '@jest/globals';
 
 import { createFakeSocialClient } from '@/test-utils/fakeSocialClient';
-import { feedSet, profile, rawPost } from '@/test-utils/feedFixtures';
+import { feedSet, profile, rawImagePost, rawPost } from '@/test-utils/feedFixtures';
 
 import {
   appendPage,
@@ -66,8 +66,28 @@ describe('loadFeedPage', () => {
       ['order', 'id', { ascending: false }],
       ['limit', FEED_PAGE_SIZE],
     ]);
-    // The workout is an inner join: a post whose workout the viewer can't see drops out.
-    expect(FEED_SELECT).toContain('workout:workouts!inner(');
+    // B22: a plain (left) embed — an inner join would hide every photo post (no workout).
+    expect(FEED_SELECT).toContain('workout:workouts(');
+    expect(FEED_SELECT).not.toContain('!inner');
+    expect(FEED_SELECT).toMatch(/^id,created_at,kind,image_path,visibility,/);
+  });
+
+  it('B22: photo posts come through beside workout posts; a workout post whose workout was withheld is dropped', async () => {
+    const hidden = { ...rawPost({ id: 'hidden', author: friend, createdAt: '2026-11-15T07:00:00.000Z' }), workout: null };
+    const { client } = createFakeSocialClient({
+      posts: [
+        rawImagePost({ id: 'pic', author: me, createdAt: '2026-11-15T09:00:00.000Z', kind: 'progress-pic' }),
+        rawImagePost({ id: 'pr', author: friend, createdAt: '2026-11-15T08:30:00.000Z', kind: 'pr' }),
+        rawPost({ id: 'lift', author: friend, createdAt: '2026-11-15T08:00:00.000Z' }),
+        hidden,
+      ],
+    });
+    const page = await loadFeedPage(client, [ME, 'friend'], null);
+    expect(page.posts.map((p) => [p.id, p.kind])).toEqual([
+      ['pic', 'progress-pic'],
+      ['pr', 'pr'],
+      ['lift', 'workout'],
+    ]);
   });
 
   it('shows the followed user’s posts newest first, and never a stranger’s (step DoD)', async () => {
@@ -129,6 +149,7 @@ describe('toFeedPost', () => {
     raw.workout.workout_exercises.reverse();
     raw.workout.workout_exercises[1].sets[0].weight_kg = '102.5' as unknown as number;
     const post = toFeedPost(raw);
+    if (post?.kind !== 'workout') throw new Error('expected a workout post');
     expect(post.flair).toEqual({ id: 'some-new-flair', name: 'Deload Day' });
     expect(post.workout.entries.map((e) => e.exerciseName)).toEqual(['Squat', null]);
     expect(post.workout.entries[0].sets.map((s) => s.reps)).toEqual([5, 3]);
@@ -139,8 +160,27 @@ describe('toFeedPost', () => {
   it('fills in a missing flair or author instead of crashing', () => {
     const raw = { ...rawPost({ id: 'p1', author: me, createdAt: '2026-11-15T08:00:00.000Z' }), flair: null, author: null };
     const post = toFeedPost(raw);
-    expect(post.flair.name).toBe('Post');
-    expect(post.author).toEqual({ id: '', username: null, displayName: null });
+    expect(post?.flair.name).toBe('Post');
+    expect(post?.author).toEqual({ id: '', username: null, displayName: null });
+  });
+
+  it('B22: shapes a photo post (kind, photo path, visibility, flair) and drops one with no photo', () => {
+    const raw = rawImagePost({ id: 'pic', author: me, createdAt: '2026-11-15T08:00:00.000Z', kind: 'progress-pic' });
+    expect(toFeedPost(raw)).toEqual({
+      id: 'pic',
+      createdAt: '2026-11-15T08:00:00.000Z',
+      kind: 'progress-pic',
+      imagePath: `${ME}/pic.jpg`,
+      visibility: 'private',
+      flair: { id: 'physique-check', name: 'Physique Check' },
+      author: { id: ME, username: 'me_lifts', displayName: null },
+    });
+    expect(toFeedPost({ ...raw, image_path: null })).toBeNull();
+  });
+
+  it('B22: drops a workout post whose workout the viewer may not see (no empty card)', () => {
+    const raw = { ...rawPost({ id: 'p1', author: friend, createdAt: '2026-11-15T08:00:00.000Z' }), workout: null };
+    expect(toFeedPost(raw)).toBeNull();
   });
 });
 

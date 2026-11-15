@@ -17,11 +17,14 @@
  *   - analyses (B18) are made only by `requestAnalysis` — which runs the real server
  *     function's handler — one per workout, only for its owner, and deleted with their workout;
  *   - flairs (B21) are the four rows the real migration seeds; posts (B21) are one per workout,
- *     only about the poster's own workout already on the server, and deleted with it.
+ *     only about the poster's own workout already on the server, and deleted with it;
+ *   - photo posts (B22) name a photo in their author's folder and no workout, progress pics are
+ *     private, and the `post-images` bucket replaces an object uploaded to the same path again.
  *
  * And it can misbehave on demand:
  *   - `offline = true` — every call fails, like airplane mode;
  *   - `failUpsertsOn(tbl)` — uploads to one table fail;
+ *   - `failPosts` / `failImageUploads` — post rows / post photos are refused;
  *   - `loseNextResponse()` — the next upload is SAVED but the reply is lost,
  *     so the phone thinks it failed and will retry (the classic duplicate trap).
  */
@@ -372,20 +375,70 @@ export class FakeServer implements SyncTransport {
    */
   async pushPost(row: PostPushRow): Promise<void> {
     this.postPushes.push(row.id);
+    this.requestLog.push(`post:${row.id}`);
     this.guard();
     if (this.failPosts) throw new Error('Upload of post failed: refused');
     if ('updated_at' in row) throw new Error('client must not send updated_at');
-    const workout = this.tables.workouts.get(row.workout_id);
-    if (!workout || workout.user_id !== row.user_id) {
-      throw new Error('Upload of post failed: new row violates row-level security policy for table "posts"');
+    if (row.kind === 'workout') {
+      const workout = row.workout_id ? this.tables.workouts.get(row.workout_id) : undefined;
+      if (!workout || workout.user_id !== row.user_id || row.image_path !== null) {
+        throw new Error('Upload of post failed: new row violates row-level security policy for table "posts"');
+      }
+    } else {
+      // The B22 rules: an image post names a photo in its author's own folder and no workout,
+      // and a progress pic is private.
+      if (row.workout_id !== null || !row.image_path) {
+        throw new Error('Upload of post failed: violates check constraint "posts_kind_shape"');
+      }
+      if (!row.image_path.startsWith(`${row.user_id}/`)) {
+        throw new Error('Upload of post failed: violates check constraint "posts_image_in_own_folder"');
+      }
+      if (row.kind === 'progress-pic' && row.visibility !== 'private') {
+        throw new Error('Upload of post failed: violates check constraint "posts_progress_pic_private"');
+      }
     }
     if (!this.flairs.some((f) => f.id === row.flair_id)) {
       throw new Error('Upload of post failed: violates foreign key constraint "posts_flair_id_fkey"');
     }
     for (const other of this.posts.values()) {
-      if (other.workout_id === row.workout_id && other.id !== row.id) throw new PostAlreadyExistsError(row.workout_id);
+      if (row.workout_id !== null && other.workout_id === row.workout_id && other.id !== row.id) {
+        throw new PostAlreadyExistsError(row.workout_id);
+      }
     }
     this.posts.set(row.id, { ...this.posts.get(row.id), ...row, updated_at: this.now() });
+    if (this.loseResponse) {
+      this.loseResponse = false;
+      throw new Error('Network request failed (response lost)');
+    }
+  }
+
+  /**
+   * The server's `post-images` bucket (B22): object path → what was uploaded (which phone file,
+   * which format). An upload to a path already there replaces it, like `x-upsert: true`.
+   */
+  readonly objects = new Map<string, { fileUri: string; mimeType: string }>();
+  /** Every photo upload received, by path, in order (including failed ones). */
+  readonly imageUploads: string[] = [];
+  /** Photo uploads and post uploads in the order they arrived ("image:<path>", "post:<id>"). */
+  readonly requestLog: string[] = [];
+  /** When true, photo uploads are refused (e.g. the bucket's size limit) while everything else works. */
+  failImageUploads = false;
+
+  /**
+   * Like Storage's upload with `x-upsert: true`: stores (or replaces) the object at `imagePath`.
+   * Enforced like the real bucket's rules: the path's first folder must be a user id (owner-only
+   * uploads; the fake has no logins, so it checks the shape) and the format must be allowed.
+   */
+  async uploadPostImage(imagePath: string, localFileUri: string, mimeType: string): Promise<void> {
+    this.imageUploads.push(imagePath);
+    this.requestLog.push(`image:${imagePath}`);
+    this.guard();
+    if (this.failImageUploads) throw new Error('Upload of post photo failed: 413 Payload too large');
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(mimeType)) {
+      throw new Error('Upload of post photo failed: 415 mime type not supported');
+    }
+    if (!imagePath.includes('/')) throw new Error('Upload of post photo failed: 403 row-level security');
+    this.objects.set(imagePath, { fileUri: localFileUri, mimeType });
     if (this.loseResponse) {
       this.loseResponse = false;
       throw new Error('Network request failed (response lost)');

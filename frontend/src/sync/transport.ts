@@ -1,5 +1,5 @@
 /**
- * The sync engine's view of the server: fourteen operations, nothing more.
+ * The sync engine's view of the server: fifteen operations, nothing more.
  *
  * Why an interface: the real implementation (`supabaseTransport.ts`) talks to
  * Supabase over the network; tests use an in-memory fake server
@@ -139,6 +139,15 @@ export interface SyncTransport {
   pushPost(row: PostPushRow): Promise<void>;
 
   /**
+   * Uploads a photo post's picture (B22) from the phone's file `localFileUri` to the server's
+   * `post-images` bucket at `imagePath` (`<user_id>/<post_id>.<ext>`), as format `mimeType`.
+   * Uploading the same path again REPLACES the file, so a retry after a lost reply never makes a
+   * second copy. Throws on any failure — no signal, refused by the bucket (too big, wrong format)
+   * or by its security rules — which means "try again later".
+   */
+  uploadPostImage(imagePath: string, localFileUri: string, mimeType: string): Promise<void>;
+
+  /**
    * The whole flair list (B21), in display order. Read whole on every download: the server table
    * is a handful of founder-curated rows with no `updated_at` to bookmark.
    */
@@ -154,8 +163,8 @@ export type PostPushRow = Omit<PostRow, 'updated_at'>;
  * workout has its post, so the upload treats this post as settled and drops it (push.ts).
  */
 export class PostAlreadyExistsError extends Error {
-  constructor(readonly workoutId: string) {
-    super(`Workout ${workoutId} already has a post`);
+  constructor(readonly workoutId: string | null) {
+    super(workoutId ? `Workout ${workoutId} already has a post` : 'The post conflicts with an existing post');
     this.name = 'PostAlreadyExistsError';
   }
 }

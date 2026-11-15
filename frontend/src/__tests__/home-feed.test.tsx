@@ -10,9 +10,10 @@ import React from 'react';
 import { act, fireEvent, screen } from '@testing-library/react-native';
 
 import { createFakeSocialClient } from '@/test-utils/fakeSocialClient';
-import { profile, rawPost } from '@/test-utils/feedFixtures';
+import { profile, rawImagePost, rawPost } from '@/test-utils/feedFixtures';
 import { renderSignedIn, SIGNED_IN_USER_ID } from '@/test-utils/loggerTestKit';
 import type { FeedPost } from '@/social/feed';
+import { ONLY_YOU_LINE } from '@/components/social/PostCard';
 
 import HomeScreen from '@/app/(tabs)/index';
 
@@ -162,5 +163,26 @@ describe('Home feed', () => {
     await screen.findByText(/Find people to follow/);
     await fireEvent.press(screen.getAllByLabelText('Find lifters')[0]);
     expect(mockPush).toHaveBeenCalledWith('/find-lifters');
+  });
+
+  it('B22: the header’s Share a photo button opens the photo post screen', async () => {
+    mockSocial = createFakeSocialClient();
+    await renderSignedIn(<HomeScreen />);
+    await screen.findByText(/Find people to follow/);
+    await fireEvent.press(screen.getByLabelText('Share a photo'));
+    expect(mockPush).toHaveBeenCalledWith('/new-post');
+  });
+
+  it('B22: photo posts render on Home beside workout posts, the owner’s progress pic marked private', async () => {
+    mockSocial = createFakeSocialClient({
+      posts: [
+        rawImagePost({ id: 'pic', author: profile(SIGNED_IN_USER_ID, 'me'), createdAt: '2026-11-15T09:00:00.000Z', kind: 'progress-pic' }),
+        rawPost({ id: 'lift', author: profile(SIGNED_IN_USER_ID, 'me'), createdAt: '2026-11-15T08:00:00.000Z' }),
+      ],
+    });
+    await renderSignedIn(<HomeScreen />);
+    expect(await screen.findByLabelText('Flair: Physique Check')).toBeTruthy();
+    expect(screen.getByText(ONLY_YOU_LINE)).toBeTruthy();
+    expect(screen.getByText('Bench Press')).toBeTruthy();
   });
 });

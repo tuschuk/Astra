@@ -1,6 +1,6 @@
 /**
  * Reading the Home feed (SOC-1): the posts of the people the lifter follows (and their own),
- * newest first, a page at a time.
+ * newest first, a page at a time — shared workouts and (B22) progress-pic and PR photo posts.
  *
  * Why this exists: the feed is the one screen that shows other people's workouts, and those are
  * never copied onto the phone (the device holds only the lifter's own rows). So the feed is read
@@ -14,7 +14,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import type { SetRow, WorkoutExerciseRow } from '@/db/dao';
+import type { ImagePostKind, PostKind, SetRow, WorkoutExerciseRow, WorkoutVisibility } from '@/db/dao';
 import { throwIfError } from '@/lib/throwIfError';
 
 import type { PersonName } from './names';
@@ -41,23 +41,35 @@ export interface FeedEntry extends Pick<WorkoutExerciseRow, 'id' | 'position' | 
   sets: FeedSet[];
 }
 
-/** One post, shaped for the card that shows it. */
-export interface FeedPost {
+/** The workout a workout post shares, as its card shows it. */
+export interface FeedWorkout {
+  id: string;
+  title: string | null;
+  notes: string | null;
+  started_at: string;
+  ended_at: string | null;
+  /** In workout order. */
+  entries: FeedEntry[];
+}
+
+/** What every post has, whatever its kind. */
+interface FeedPostBase {
   id: string;
   createdAt: string;
   /** The post's one flair, straight from the `flairs` table — the app never spells flair names itself. */
   flair: { id: string; name: string };
   author: PersonName & { id: string };
-  workout: {
-    id: string;
-    title: string | null;
-    notes: string | null;
-    started_at: string;
-    ended_at: string | null;
-    /** In workout order. */
-    entries: FeedEntry[];
-  };
+  /** Who may see it (B22: the card tells the owner when a post is private). */
+  visibility: WorkoutVisibility;
 }
+
+/**
+ * One post, shaped for the card that shows it: a shared workout, or (B22) a photo — a progress
+ * pic or a PR moment — named by its path in the `post-images` bucket.
+ */
+export type FeedPost =
+  | (FeedPostBase & { kind: 'workout'; workout: FeedWorkout })
+  | (FeedPostBase & { kind: ImagePostKind; imagePath: string });
 
 /** One page of the feed, and the bookmark for the next one (null when this was the last). */
 export interface FeedPage {
@@ -67,15 +79,17 @@ export interface FeedPage {
 
 /**
  * The columns asked for, with the author, flair and whole workout nested in (PostgREST
- * "embedding"). `workouts!inner` is deliberate: the workouts table's own security filters the
- * nested workout, and `!inner` drops a post whose workout the viewer may not see (its owner
- * made it private after posting) instead of showing an empty card.
+ * "embedding"). The workout is a plain (left) embed since B22: a photo post has no workout, and
+ * the old `workouts!inner` would have hidden every photo post. The workouts table's own security
+ * still filters the nested workout — a workout the viewer may not see (its owner made it private
+ * after posting) arrives as null — and `toFeedPost` then drops that empty workout card, the job
+ * `!inner` used to do on the server. Who may see what is unchanged: it was never the join.
  */
 export const FEED_SELECT =
-  'id,created_at,' +
+  'id,created_at,kind,image_path,visibility,' +
   'flair:flairs(id,name),' +
   'author:profiles(id,username,display_name),' +
-  'workout:workouts!inner(id,title,notes,started_at,ended_at,' +
+  'workout:workouts(id,title,notes,started_at,ended_at,' +
   'workout_exercises(id,position,superset_group,exercise:exercises(name),' +
   'sets(id,position,reps,weight_kg,rpe,is_warmup,drop_set_position,duration_seconds,score)))';
 
@@ -83,8 +97,12 @@ export const FEED_SELECT =
 export interface RawFeedPost {
   id: string;
   created_at: string;
+  kind: PostKind;
+  image_path: string | null;
+  visibility: WorkoutVisibility;
   flair: { id: string; name: string } | null;
   author: { id: string; username: string | null; display_name: string | null } | null;
+  /** Null for a photo post, or a workout post whose workout the viewer may not see. */
   workout: {
     id: string;
     title: string | null;
@@ -95,7 +113,7 @@ export interface RawFeedPost {
       exercise: { name: string } | null;
       sets: (FeedSet & { weight_kg: number | string | null })[];
     })[];
-  };
+  } | null;
 }
 
 /**
@@ -128,11 +146,30 @@ export async function feedAuthorIds(client: SupabaseClient, me: string): Promise
 export const MISSING_FLAIR = { id: '', name: 'Post' } as const;
 
 /**
- * Turns one server post into the card's shape: exercises sorted into workout order, each
- * exercise's sets into logged order, the weight made sure to be a number (Postgres `numeric`
- * can arrive as text), and a missing flair or author filled in so the card never crashes.
+ * Turns one server post into the card's shape, or null when there is nothing to show.
+ *   - A workout post: exercises sorted into workout order, each exercise's sets into logged
+ *     order, the weight made sure to be a number (Postgres `numeric` can arrive as text). Null
+ *     when its workout didn't come along (the viewer may not see it) — no empty card.
+ *   - A photo post (B22): its photo's path; null if the server sent none (can't happen — the
+ *     server's shape rule requires one — so it only guards against a broken reply).
+ * A missing flair or author is filled in so the card never crashes.
  */
-export function toFeedPost(raw: RawFeedPost): FeedPost {
+export function toFeedPost(raw: RawFeedPost): FeedPost | null {
+  const base = {
+    id: raw.id,
+    createdAt: raw.created_at,
+    flair: raw.flair ?? { ...MISSING_FLAIR },
+    author: {
+      id: raw.author?.id ?? '',
+      username: raw.author?.username ?? null,
+      displayName: raw.author?.display_name ?? null,
+    },
+    visibility: raw.visibility,
+  };
+  if (raw.kind === 'progress-pic' || raw.kind === 'pr') {
+    return raw.image_path ? { ...base, kind: raw.kind, imagePath: raw.image_path } : null;
+  }
+  if (!raw.workout) return null;
   const entries = [...raw.workout.workout_exercises]
     .sort((a, b) => a.position - b.position)
     .map((entry) => ({
@@ -145,14 +182,8 @@ export function toFeedPost(raw: RawFeedPost): FeedPost {
         .map((set) => ({ ...set, weight_kg: set.weight_kg == null ? null : Number(set.weight_kg) })),
     }));
   return {
-    id: raw.id,
-    createdAt: raw.created_at,
-    flair: raw.flair ?? { ...MISSING_FLAIR },
-    author: {
-      id: raw.author?.id ?? '',
-      username: raw.author?.username ?? null,
-      displayName: raw.author?.display_name ?? null,
-    },
+    ...base,
+    kind: 'workout',
     workout: {
       id: raw.workout.id,
       title: raw.workout.title,
@@ -197,7 +228,8 @@ export async function loadFeedPage(
   const raw = (data ?? []) as unknown as RawFeedPost[];
   const last = raw[raw.length - 1];
   return {
-    posts: raw.map(toFeedPost),
+    // Dropped posts still count toward the bookmark below, so paging never re-reads them.
+    posts: raw.map(toFeedPost).filter((p): p is FeedPost => p !== null),
     next: raw.length === FEED_PAGE_SIZE && last ? { created_at: last.created_at, id: last.id } : null,
   };
 }

@@ -1,13 +1,15 @@
 /**
  * Home — the social feed (SOC-1).
  *
- * What it shows: workout posts from the lifters you follow, and your own, newest first, as
- * post cards (components/social/PostCard). Twenty at a time; scrolling to the bottom loads the
- * next twenty, and pulling down refreshes. The feed also refreshes each time Home comes back
- * into view (after following someone on Find lifters, their posts are there).
+ * What it shows: posts from the lifters you follow, and your own, newest first, as post cards
+ * (components/social/PostCard) — shared workouts, and (B22) progress-pic and PR photos, each
+ * photo fetched with the viewer's sign-in so the server decides who sees it. Twenty at a time;
+ * scrolling to the bottom loads the next twenty, and pulling down refreshes. The feed also
+ * refreshes each time Home comes back into view (after following someone on Find lifters, their
+ * posts are there; after Share a photo, yours is, once it has uploaded).
  *
- * What the user can do: read the feed, pull to refresh, and open Find lifters (the button at
- * the top) to search for people and follow them.
+ * What the user can do: read the feed, pull to refresh, open Share a photo (B22) to post a
+ * progress pic or PR photo, and open Find lifters to search for people and follow them.
  *
  * When there is nothing to show:
  *   - following nobody and no posts of your own → an invitation to find lifters, plus the
@@ -29,8 +31,9 @@ import { PostCard } from '@/components/social/PostCard';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
-import { getSupabase } from '@/lib/supabase';
+import { getSupabase, readSupabaseConfig, type SupabaseConfig } from '@/lib/supabase';
 import { appendPage, feedAuthorIds, loadFeedPage, type FeedCursor, type FeedPost } from '@/social/feed';
+import { postImageSource } from '@/social/postImages';
 import { colors, spacing } from '@/theme';
 
 /** What Home is showing: the first load, a failed load, or the feed itself. */
@@ -44,6 +47,19 @@ export default function HomeScreen() {
   const { session } = useAuth();
   const me = session?.user.id ?? null;
   const client = useMemo(() => getSupabase(), []);
+  // How photo posts' pictures are fetched (B22): as this viewer, so the server's rules decide.
+  const accessToken = session?.access_token ?? null;
+  const photoSource = useMemo(() => {
+    let config: SupabaseConfig | null = null;
+    try {
+      config = readSupabaseConfig();
+    } catch {
+      // Only reachable unconfigured (Jest): in the app a missing address already failed
+      // `getSupabase()` above, loudly. Photos then show the plain panel instead of crashing.
+      config = null;
+    }
+    return (imagePath: string) => (config && accessToken ? postImageSource(config, imagePath, accessToken) : null);
+  }, [accessToken]);
 
   const [state, setState] = useState<FeedState>({ status: 'loading' });
   const [refreshing, setRefreshing] = useState(false);
@@ -122,7 +138,10 @@ export default function HomeScreen() {
       <Heading size="display">Astra</Heading>
       <View style={styles.headerRow}>
         <SectionLabel>Your feed</SectionLabel>
-        <Button label="Find lifters" variant="ghost" onPress={() => router.push('/find-lifters')} />
+        <View style={styles.headerActions}>
+          <Button label="Share a photo" variant="ghost" onPress={() => router.push('/new-post')} />
+          <Button label="Find lifters" variant="ghost" onPress={() => router.push('/find-lifters')} />
+        </View>
       </View>
     </View>
   );
@@ -184,7 +203,7 @@ export default function HomeScreen() {
         testID="home-feed"
         data={state.posts}
         keyExtractor={(post) => post.id}
-        renderItem={({ item }) => <PostCard post={item} />}
+        renderItem={({ item }) => <PostCard post={item} viewerId={me} photoSource={photoSource} />}
         ListHeaderComponent={header}
         ListEmptyComponent={empty}
         ListFooterComponent={footer}
@@ -208,6 +227,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+  },
+  headerActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    flexShrink: 1,
+    gap: spacing.xs,
   },
   footer: {
     alignItems: 'center',
