@@ -27,8 +27,8 @@ export interface ChoiceOption<T> {
 
 interface ChoiceChipsProps<T> {
   options: readonly ChoiceOption<T>[];
-  /** The chosen value. */
-  selected: T;
+  /** The chosen value, or null while nothing is chosen yet (B27's report sheet starts that way). */
+  selected: T | null;
   onSelect: (value: T) => void;
   /** Stretch the chips to share the row evenly (a switcher) instead of wrapping (a picker). */
   fill?: boolean;

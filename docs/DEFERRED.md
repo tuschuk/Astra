@@ -451,3 +451,29 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     grows); `'private'` as the fallback appears in `DEFAULT_USER_SETTINGS`, `parseVisibility` and two
     screens' initial state.
   - `mmdc` needs approval for the headless builder; neither diagram was render-checked.
+- B27 moderation-and-safety follow-ups (`moderation-and-safety`):
+  - **Live HTTP probe of `moderate`** (Gate 2 / Tristen): the builder's outbound `curl` was declined
+    by the permission layer. Deployed v2 (`verify_jwt` on); still unproven over HTTP: no token →
+    401, a non-moderator → 403, a moderator removing a real photo post (storage object gone),
+    a comment, a throwaway account (both storage folders swept), and their own account → 409.
+    The database side of every removal was proven in SQL.
+  - **Appeal address** for `docs/CONTENT_POLICY.md` — Tristen to pick one; the policy says plainly
+    it isn't published yet. Surface the policy in the app (sign-up link, Settings link) in the
+    same change.
+  - **In-app founder queue / removal screen** — on evidence the dashboard + function stop
+    sufficing; the `moderators read the queue` policy already admits it, no migration needed.
+  - **Removed post's ghost on the author's phone** (plan G9): the device `posts` mirror keeps the
+    row; nothing shows it (own-post reads are server reads). Sweep it in the step that builds
+    post-deletion UI.
+  - **Block cutting DMs** — B48 (SOC-8's DM clause; Gate 2 notes it on SOC-8).
+  - **Report-then-block shortcut**, report notifications, strikes, rate limits, block/mute list
+    screens — on evidence.
+  - **`remove-post` retry after a failed photo delete** answers 404 (the row is gone) and leaves an
+    unreachable object in `post-images`; sweep orphans if it ever happens.
+  - Review judgement calls left as-is: `workout_visible` still spells the block check inline (its
+    pre-B27 body) rather than calling `blocked_either`; `ReportResult` / `SafetyResult` /
+    `FollowResult` are the same shape and `SAFETY_FAILED` = `FOLLOW_FAILED` in words; `json` /
+    `check` helpers copied between the two server functions; `'post' | 'comment'` written in three
+    types. Merge if a third copy appears.
+  - Builder session left a stray `expo start --port 8099` (pid 20408) running — stopping it was
+    declined by the permission layer; Gate 2 frees port 8099 anyway.

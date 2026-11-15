@@ -28,7 +28,10 @@
  * message, if the server refuses; open the post's comments; and (B26, own posts) tap the
  * visibility chip to choose Only you / Followers / Public — the chip moves at once and back, with
  * a message, if the server refuses. The server's row-level security is what makes the choice
- * real: a post made private disappears for everyone else through the API, not just on screen. Tapping through to the whole
+ * real: a post made private disappears for everyone else through the API, not just on screen.
+ * (B27) On OTHER people's posts, a ⋯ button beside the flair opens the report panel
+ * (`ReportSheet`) — the viewer picks a reason and the report goes to the founder's queue. Own
+ * posts have no ⋯ (you don't report yourself). Tapping through to the whole
  * workout arrives with a later step (another lifter's workout has no copy on this phone and no
  * screen yet). Without the vote / comment handlers (tests, or no session) the footer only shows.
  */
@@ -37,12 +40,14 @@ import { Image, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { Avatar } from '@/components/social/Avatar';
+import { ReportSheet } from '@/components/social/ReportSheet';
 import { Card } from '@/components/ui/Card';
 import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
 import { Body, SectionLabel } from '@/components/ui/Text';
 import type { WorkoutVisibility } from '@/db/dao';
 import { useDisplayUnit } from '@/settings/displayUnit';
 import type { FeedEntry, FeedPost, FeedWorkout } from '@/social/feed';
+import type { ReportReason, ReportResult } from '@/social/moderation';
 import { personLabels } from '@/social/names';
 import type { PostImageSource } from '@/social/postImages';
 import {
@@ -98,6 +103,11 @@ interface PostCardProps {
    * viewer's OWN posts. Left out, the owner still sees who can see the post, but can't change it.
    */
   onChangeVisibility?: (post: FeedPost, next: WorkoutVisibility) => Promise<PostVisibilityResult>;
+  /**
+   * Files a report about this post (B27; `report` in `social/moderation.ts`). Only offered on
+   * OTHER people's posts. Left out, there is no ⋯ button.
+   */
+  onReport?: (postId: string, reason: ReportReason, details: string) => Promise<ReportResult>;
 }
 
 export function PostCard({
@@ -109,12 +119,16 @@ export function PostCard({
   onOpenComments,
   onOpenProfile,
   onChangeVisibility,
+  onReport,
 }: PostCardProps) {
   const { author, flair } = post;
   const who = personLabels(author);
   // Only the author sees (and can change) who the post is shown to; other viewers' cards are
   // exactly as they were before B26.
   const own = viewerId != null && viewerId === author.id;
+  // The ⋯ (report) button is for other people's posts only, and only when there's a handler.
+  const reportable = !own && viewerId != null && onReport != null;
+  const [reporting, setReporting] = useState(false);
 
   return (
     <Card style={styles.card}>
@@ -137,7 +151,25 @@ export function PostCard({
             {flair.name}
           </SectionLabel>
         </View>
+        {reportable ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Report post"
+            onPress={() => setReporting(true)}
+            hitSlop={8}
+          >
+            <Ionicons name="ellipsis-horizontal" size={20} color={colors.muted} />
+          </Pressable>
+        ) : null}
       </View>
+      {reporting && onReport ? (
+        <ReportSheet
+          visible
+          kind="post"
+          onSubmit={(reason, details) => onReport(post.id, reason, details)}
+          onClose={() => setReporting(false)}
+        />
+      ) : null}
 
       {post.kind === 'workout' ? (
         <WorkoutBody workout={post.workout} />

@@ -2,14 +2,30 @@
 
 _Overwritten at the end of every session with where things stand now. Not a log._
 
-## Where things stand (Nov 15, 2026 — B05–B26 merged; pipeline on B27)
+## Where things stand (Nov 15, 2026 — B05–B26 merged; B27 built on its branch, awaiting Gate 2)
 
 **Twenty-two pipeline steps are merged to `main`.** Phase 1's logging, analysis and Tool Kit are
 built; the social layer has posts (workout, progress pic, PR photo), flairs, the Home feed with
 Latest / Hot and a flair filter, follows, finish-to-post, image upload, votes, comments, real
-profiles and per-post privacy. The pipeline is running **B27 moderation-and-safety**. Gates are
-delegated to the session (CLAUDE.md, "Autonomous sessions"). Tristen's hands-on list is at the
-end.
+profiles and per-post privacy. **B27 moderation-and-safety is built and committed on branch
+`moderation-and-safety`** (not merged). Gates are delegated to the session (CLAUDE.md,
+"Autonomous sessions"). Tristen's hands-on list is at the end.
+
+**B27 build record (for Gate 2):** migrations `20261115150035_moderation.sql` and
+`20261115151850_reports_not_self.sql`, both **applied live** (versions match `list_migrations`):
+`mutes`, `moderators`, `reports` (+ `reports_stamp_reported_user` trigger, `reports_not_self`
+CHECK), `private.muted_by_viewer` / `author_visible` / `is_moderator`, `workout_visible`
+re-created with the mute clause, votes / comments read policies re-created with author
+filtering. **Founder seeded live:** `insert into public.moderators (user_id) values
+('41d64fbd-d9cd-4050-92e7-fa3ed2b76262');` (the project's one real account). Edge function
+**`moderate` deployed v2**, `verify_jwt` on, from the repo files. App: `social/moderation.ts`,
+`ReportSheet`, ⋯ report on others' post cards (Home, profile) and comment rows, Mute / Block on
+others' profiles, `docs/CONTENT_POLICY.md`. Live probes (synthetic users, rolled back / deleted):
+report stamping, dedupe, ghost and self refusals, moderator-only queue, mute one-way with follows
+kept, block both ways with follows cut, third party unaffected, removal cascades in SQL. **Not
+probed:** the `moderate` function over HTTP (session's `curl` declined) — see DEFERRED. Checks:
+`tsc` clean, lint clean, Jest 110 suites / 1169 tests. Gate 2 should flip SOC-8 to Built with the
+note "block cuts DMs lands at B48", and NFR-7 to Built once the HTTP probe passes.
 
 **B26 post-privacy (merged, Gate 2 record):** migration `20261115141242_post_privacy.sql`
 (applied live, confirmed at Gate 2): `user_settings.progress_pic_visibility` (default
@@ -38,27 +54,6 @@ exercise-history-and-prs (LOG-4, LOG-5), B12 workout-notes (LOG-3), B11
 supersets-dropsets-timed (LOG-11, LOG-12), B10 set-types (LOG-14, LOG-15), B09 logger-screen
 (LOG-2, NFR-2), B08 active-workout-store (NFR-3), B07 local-store-and-sync (FND-3), B06
 training-math, B05 auth-and-signup. Details in each plan file.
-
-**B27 moderation-and-safety** (planning now): report a post or comment into a `reports` table the
-founder can read; mute (`mutes` table) and block from a profile; blocked and muted users'
-content filtered server-side; content policy document in `docs/`; removal of content or accounts
-through a service-role edge function. DoD: a report lands in the queue, a blocked user's content
-disappears for the actor, and the founder can remove a post. Standing inputs for its planner:
-`blocks` (PK blocker/blocked, auto-unfollow trigger, `blocked_either` used by `follows` RLS and
-`workout_visible`) exists since B02 — a block already hides posts, workouts, PRs and images in
-both directions; what B27 adds is the *controls* (block / mute / report from a profile and a
-card), the `mutes` table (one-directional, actor-only filtering, never affects the muted user's
-view), server-side filtering of **comments and votes by block / mute** (B23 recorded this as
-B27's), and the founder path; **there is no roles concept in the schema** — the planner must
-define how "the founder" is identified (e.g. a `founders` / `moderators` table keyed by profile
-id, or an `app_metadata` claim) so `reports` select and the removal function check it, never a
-hard-coded user id in app code; removal runs through an edge function in the B18 shape
-(`handler.ts` pure + `index.ts` Deno wrapper, `verify_jwt` on, caller must be a founder, service
-role used for exactly the delete) with fixture tests in `backend/supabase/functions/tests/`, deployed
-via the MCP; account removal must respect NFR-6's deletion promises (cascade from `profiles` /
-`auth.users` — probe that storage objects and tombstones behave); the content policy is a plain
-document in `docs/` (no legal claims beyond what Tristen approves; no numeric claims); all free
-tier, no moderation service; migrations applied live and renamed; live probe as three users.
 
 **Dev server for Tristen's phone:** worktree `C:\Users\trist\Astra\Astra-main` on a detached HEAD
 (never `main` — see `docs/PIPELINE.md`), Expo dev server detached on port 8081 (`--lan`), QR at
@@ -96,6 +91,9 @@ visibility inherits the workout's, no caption (B21); 10 MiB images, PR post = ph
 flair (B22); votes and comments online-only, 500-char comments (B23); feed preference per phone,
 sticky flair filter (B24); public-read avatars, username editable, blocked lifters can read your
 counts (B25); post and workout visibility in lockstep, three options not two, body-data control
-deferred (B26).
+deferred (B26); whole-content mute, per-viewer vote tallies, the six report reasons, and an appeal
+email address for the content policy (B27). (6) B27 device check: report a post and a comment
+from a second account (rows in `reports`), mute then block that account from its profile and
+confirm its posts and comments vanish; then call `moderate` with your own token to remove a post.
 
 Next pipeline step after B27 merges: **B28 share-cards**.

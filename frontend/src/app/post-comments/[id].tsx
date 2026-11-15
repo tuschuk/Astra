@@ -10,18 +10,23 @@
  * What the user can do: read everyone's comments and add their own — up to 500 characters; a
  * counter appears near the limit, and Send stays off while the box is blank, too long, or a
  * comment is on its way. The new comment appears as the server saved it. Back returns to Home.
+ * (B27) Each of other people's comments has a ⋯ that opens the report panel; reports go to the
+ * founder's moderation queue. Comments by lifters the viewer blocked or muted never arrive — the
+ * server leaves them out.
  *
  * Comments are read and written on the server (never stored on the phone), so with no
  * connection the screen says so and offers Retry. Who may see or comment on which post is the
  * server's security's call — exactly the people who can see the post.
  */
 import React, { useEffect, useMemo, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 
 import { useAuth } from '@/auth/AuthProvider';
 import { Screen } from '@/components/Screen';
 import { LetterAvatar } from '@/components/social/LetterAvatar';
+import { ReportSheet } from '@/components/social/ReportSheet';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Body, Heading } from '@/components/ui/Text';
@@ -29,6 +34,7 @@ import { TextField } from '@/components/ui/TextField';
 import { getSupabase } from '@/lib/supabase';
 import { COMMENT_COUNTER_FROM, COMMENT_MAX_CHARS, COMMENT_TOO_LONG, commentBodyError } from '@/social/commentLimits';
 import { addComment, loadComments, type PostComment } from '@/social/comments';
+import { reportComment } from '@/social/moderation';
 import { personLabels } from '@/social/names';
 import { colors, spacing } from '@/theme';
 import { postDateLabel } from '@/workout/format';
@@ -59,6 +65,8 @@ export default function PostCommentsScreen() {
   const [sendFailed, setSendFailed] = useState(false);
   // Bumped by Retry to load again.
   const [attempt, setAttempt] = useState(0);
+  // (B27) The comment whose report panel is open, if any.
+  const [reportingId, setReportingId] = useState<string | null>(null);
 
   // Load the post's comments on open and on each Retry. An answer arriving after the screen
   // closed (or after a newer load started) is ignored.
@@ -127,7 +135,11 @@ export default function PostCommentsScreen() {
           <View style={styles.list}>
             {state.comments.length === 0 ? <Body variant="muted">No comments yet. Start the conversation.</Body> : null}
             {state.comments.map((comment) => (
-              <CommentRow key={comment.id} comment={comment} />
+              <CommentRow
+                key={comment.id}
+                comment={comment}
+                onReport={me != null && comment.author.id !== me ? () => setReportingId(comment.id) : undefined}
+              />
             ))}
             {state.more ? <Body variant="small">{MORE_COMMENTS_LINE}</Body> : null}
           </View>
@@ -154,12 +166,24 @@ export default function PostCommentsScreen() {
           <Button label={sending ? 'Sending…' : 'Send'} onPress={() => void send()} disabled={!canSend} style={styles.send} />
         </>
       ) : null}
+
+      {reportingId && me ? (
+        <ReportSheet
+          visible
+          kind="comment"
+          onSubmit={(reason, details) => reportComment(client, me, reportingId, reason, details)}
+          onClose={() => setReportingId(null)}
+        />
+      ) : null}
     </Screen>
   );
 }
 
-/** One comment: who wrote it and when, then what they said. */
-function CommentRow({ comment }: { comment: PostComment }) {
+/**
+ * One comment: who wrote it and when, then what they said. (B27) With `onReport` — given only for
+ * other people's comments — a ⋯ button at the end of the row opens the report panel.
+ */
+function CommentRow({ comment, onReport }: { comment: PostComment; onReport?: () => void }) {
   const who = personLabels(comment.author);
   return (
     <View style={styles.row} testID="comment-row">
@@ -169,6 +193,11 @@ function CommentRow({ comment }: { comment: PostComment }) {
         <Body variant="small">{[who.handle, postDateLabel(comment.createdAt)].filter(Boolean).join(' · ')}</Body>
         <Body style={styles.body}>{comment.body}</Body>
       </View>
+      {onReport ? (
+        <Pressable accessibilityRole="button" accessibilityLabel={`Report ${who.name}’s comment`} onPress={onReport} hitSlop={8}>
+          <Ionicons name="ellipsis-horizontal" size={18} color={colors.muted} />
+        </Pressable>
+      ) : null}
     </View>
   );
 }

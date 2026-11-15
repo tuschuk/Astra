@@ -33,6 +33,10 @@
  * privacy control's "did anything change?" check). Posts are updated in place, so a later feed
  * read shows the new visibility.
  *
+ * B27 adds `mutes` and `reports` tables, and the unique-key refusal (23505) on blocks, mutes and
+ * reports, so "tapped twice" paths can be tested. The server's report trigger and the RLS that
+ * makes muted/blocked content disappear are not imitated — they were probed live.
+ *
  * What it does NOT do: row-level security or general embedding. Posts are seeded already shaped
  * the way the server's embed returns them (author, flair and workout nested in), and the follow
  * insert imitates the one RLS refusal the app handles (a block in either direction). Server-side
@@ -65,6 +69,10 @@ export interface FakeSocialTables {
   workouts: Row[];
   /** Record rows as the profile's PR read returns them (B25): with `exercise: { name }` nested in. */
   personal_records: Row[];
+  /** Mute rows: `{ muter_id, muted_id }` (B27). */
+  mutes: Row[];
+  /** Report rows as the app inserts them: `{ reporter_id, target_kind, target_id, reason, details }` (B27). */
+  reports: Row[];
 }
 
 /** What a request can name: the tables, plus the computed `post_scores` and (B24) `post_hot_scores` views. */
@@ -182,6 +190,8 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     comments: [...(seed.comments ?? [])],
     workouts: [...(seed.workouts ?? [])],
     personal_records: [...(seed.personal_records ?? [])],
+    mutes: [...(seed.mutes ?? [])],
+    reports: [...(seed.reports ?? [])],
   };
   const requests: FakeCall[][] = [];
   let offline = options.offline ?? false;
@@ -356,6 +366,16 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
         if (rows.some((x) => x.follower_id === a && x.followee_id === b)) {
           return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } };
         }
+      }
+      // B27: each table's primary / unique key, refused with Postgres's 23505 like the server.
+      const uniqueKeys: Partial<Record<FakeSource, string[]>> = {
+        blocks: ['blocker_id', 'blocked_id'],
+        mutes: ['muter_id', 'muted_id'],
+        reports: ['reporter_id', 'target_kind', 'target_id'],
+      };
+      const key = uniqueKeys[table];
+      if (key && rows.some((x) => key.every((k) => x[k] === row[k]))) {
+        return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } };
       }
       rows.push(row);
       return { data: null, error: null };

@@ -8,13 +8,18 @@
  * optimistic change, one change at a time, the revert on refusal.
  * And (B23) the vote footer: no downvote control on an upvote-only flair (read from the row),
  * optimistic score moves, the revert on refusal, and the comments button.
+ * And (B27) the ⋯ report button: only on other people's cards, opening the report panel.
  */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
 import { act, fireEvent, render, screen } from '@testing-library/react-native';
 
 import { toFeedPost, type FeedPost, type RawFeedPost } from '@/social/feed';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+
+import { REPORT_THANKS } from '@/social/moderation';
 import { POST_VISIBILITY_REFUSAL_MESSAGES } from '@/social/postPrivacy';
+import { TEST_SAFE_AREA_METRICS } from '@/test-utils/renderWithAuth';
 import { VOTE_REFUSAL_MESSAGES } from '@/social/votes';
 import { feedSet, profile, rawImagePost, rawPost } from '@/test-utils/feedFixtures';
 import { formatDropSet, formatSet, workoutDetailsLabel } from '@/workout/format';
@@ -323,5 +328,32 @@ describe('PostCard — who can see it (B26)', () => {
     await render(<PostCard post={post} now={NOW} viewerId="u1" />);
     await screen.rerender(<PostCard post={{ ...post, visibility: 'followers' }} now={NOW} viewerId="u1" />);
     expect(screen.getByLabelText('Who can see this post: Followers')).toBeTruthy();
+  });
+});
+
+describe('PostCard — reporting (B27)', () => {
+  const post = () => shaped(rawPost({ id: 'p9', author, createdAt: '2026-11-15T08:00:00.000Z' }));
+
+  it('someone else’s card has a ⋯ that opens the report panel and files through onReport', async () => {
+    const onReport = jest.fn(async (_postId: string, _reason: string, _details: string) => ({ ok: true as const }));
+    await render(
+      <SafeAreaProvider initialMetrics={TEST_SAFE_AREA_METRICS}>
+        <PostCard post={post()} now={NOW} viewerId="viewer" onReport={onReport} />
+      </SafeAreaProvider>,
+    );
+    await fireEvent.press(screen.getByLabelText('Report post'));
+    expect(screen.getByText('Report post')).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText(/^Spam:/));
+    await fireEvent.press(screen.getByLabelText('Send report'));
+    expect(onReport).toHaveBeenCalledWith('p9', 'spam', '');
+    expect(await screen.findByText(REPORT_THANKS)).toBeTruthy();
+  });
+
+  it('my own card has no ⋯, and neither does a card without a handler', async () => {
+    const onReport = jest.fn(async () => ({ ok: true as const }));
+    await render(<PostCard post={post()} now={NOW} viewerId="u1" onReport={onReport} />);
+    expect(screen.queryByLabelText('Report post')).toBeNull();
+    await screen.rerender(<PostCard post={post()} now={NOW} viewerId="viewer" />);
+    expect(screen.queryByLabelText('Report post')).toBeNull();
   });
 });

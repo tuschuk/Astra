@@ -46,6 +46,12 @@ flowchart TD
   CommentsScr -->|"Back: router.back (Home reloads on focus — fresh counts)"| Home
   Home -->|"arrow tap: castVote (upsert on post_id,user_id) / clearVote (delete mine)"| VoteQ
   CommentsScr --> CommentQ
+  Home -->|"others' card ⋯ (B27): ReportSheet → reportPost"| ModQ
+  CommentsScr -->|"others' comment ⋯ (B27): ReportSheet → reportComment"| ModQ
+  ProfileView -->|"others' card ⋯ → reportPost; Mute / Unmute, Block (Alert confirm) / Unblock → re-read header + relation + open tab"| ModQ
+  ReportSheet["ReportSheet (components/social, B27, SOC-8): Modal;<br/>six reason chips (REPORT_REASONS = the content policy's six sections) + the chosen one's sentence;<br/>'Details (optional)' (counter from 400, over 500 → line, Send off); Send report (off until a reason; once) ·<br/>Cancel; success → thanks + 'Mute or block them from their profile' + Done; refusal → calm line, try again"]
+  Home -.-> ReportSheet
+  CommentsScr -.-> ReportSheet
   subgraph SocialMod["Social reads (src/social, B20): online only, client passed in, RLS decides visibility"]
     FeedQ["feed.ts: feedAuthorIds = me + follows.followee_id where follower_id = me;<br/>loadFeedPage(client, me, authors, sort, flairId, after) — B24: Latest → from posts, Hot → from the<br/>post_hot_scores view (same select + hot_score); .select(FEED_SELECT: kind, image_path, visibility,<br/>flair (id, name, upvotes_only — B23), author:profiles!posts_user_id_fkey (hint required through the view, B24),<br/>workout (plain left embed since B22) → entries → exercise name, sets, my_vote:votes(value) — B23)<br/>.in(user_id, authors) .eq(my_vote.user_id, me) [.eq(flair_id, flairId) — B24, SOC-9]<br/>Latest: [.or(beforeCursorFilter)] order created_at desc, id desc;<br/>Hot: [.or(beforeHotCursorFilter: hot_score lt, or eq + id lt)] order hot_score desc, id desc; limit 20;<br/>the bookmark is tagged latest | hot — one from the other order is refused;<br/>then (B23) loadPostScores: post_scores.select(post_id, score, comment_count).in(post_id, page ids);<br/>toFeedPost: photo post → kind + imagePath; workout post → sort entries + sets, weight → number;<br/>+ score, commentCount (0 without a scores row), myVote (+1 / −1 / null);<br/>a workout post whose workout RLS withheld (null) is dropped; appendPage drops repeats"]
     VoteQ["votes.ts (B23): castVote → votes.upsert(onConflict post_id,user_id);<br/>clearVote → delete where post_id + user_id = me; never throw:<br/>P0001 (upvote-only trigger) → 'This post takes upvotes only.', anything else → 'didn't go through';<br/>voteDelta / nextVote: the card's optimistic arithmetic (the tally itself stays on the server)"]
@@ -53,7 +59,9 @@ flowchart TD
     CommentQ["comments.ts (B23): loadComments → comments.select(…, author:profiles) eq post_id<br/>order created_at, id asc, limit 200; addComment → commentBodyError first<br/>(commentLimits.ts: 500 chars, not blank — mirrors the CHECK), then insert(…).select().single()"]
     FollowQ["follows.ts: searchLifters (sanitized ilike on username / display_name,<br/>not me, not in my blocks, limit 20, + which I follow);<br/>follow = insert follows row (duplicate = ok; RLS refusal → 'You can't follow this lifter.');<br/>unfollow = delete my row; results carry avatar_url (B25)"]
     ProfileQ["profile.ts (B25): loadProfileRow (profiles row) · loadProfileHeader = row + rpc follow_counts<br/>+ (others) my follows row → viewerFollows; updateProfile → profiles.update eq id = me<br/>(23505 username → 'That username is taken.', 23514 → the box's message, else the calm line);<br/>loadWorkoutHistory → workouts.select(HISTORY_SELECT) eq user_id, ended_at not null,<br/>[.or(beforeStartedFilter)] order started_at, id desc, limit 20;<br/>loadProfilePrs → personal_records.select(…, exercise:exercises(name)) eq user_id → groupPrs"]
+    ModQ["moderation.ts (B27, SOC-8): report(client, me, {kind, id}, reason, details) → reports.insert<br/>(reporter_id, target_kind, target_id, reason, trimmed details or null — never the reported user);<br/>23505 (already reported) = thanks; else 'That report didn't go through…'; reportPost / reportComment wrap it;<br/>muteUser / unmuteUser → insert / delete mutes (muter_id = me); blockUser / unblockUser → blocks;<br/>re-tap 23505 = ok; relationTo → my blocks + mutes rows for one profile → {blocking, muting}"]
   end
+  ModQ -->|"insert reports (RLS: as me, content I can see, not my own; trigger stamps the author);<br/>insert / delete mutes, blocks (own rows; block trigger removes follows both ways)"| DB
   ProfileQ -->|"select profiles / follows / workouts / personal_records, rpc follow_counts, update my profile (RLS decides)"| DB
   Home --> FeedQ
   FindScr --> FollowQ
@@ -75,7 +83,7 @@ flowchart TD
   Home -->|"card author tap (B25): router.push('/profile/[id]')"| ProfileScr["Profile (app/profile/[id].tsx, B25)<br/>ProfileView for the route id (my own id → my own view); Back"]
   FindScr -->|"card tap (B25): router.push('/profile/[id]')"| ProfileScr
   ProfileScr --> ProfileView
-  ProfileView["ProfileView (components/profile, B25)<br/>header: Avatar (public avatars URL, else letter) · display name · @username · bio<br/>(own null → 'Add a bio…', other null → 'No bio yet.') · Followers / Following counts ('—' while unknown);<br/>own: Edit profile · other: FollowButton (optimistic; refusal flips back + line) → header re-read so counts match;<br/>header offline → 'Counts and posts need a connection.' + Retry; no profile row → 'This lifter isn't available.';<br/>tabs Posts | History | PRs (ChoiceChips), reloaded on focus, Posts / History page at the list end:<br/>Posts = PostCards (vote, comments; own: the B26 visibility chip, success rewrites the tab's list) · History own = WorkoutListItem → workout/[id], other = not tappable rows<br/>· PRs = one card per exercise, formatPrLine in the viewer's unit"]
+  ProfileView["ProfileView (components/profile, B25)<br/>header: Avatar (public avatars URL, else letter) · display name · @username · bio<br/>(own null → 'Add a bio…', other null → 'No bio yet.') · Followers / Following counts ('—' while unknown);<br/>own: Edit profile · other: FollowButton (optimistic; refusal flips back + line) → header re-read so counts match;<br/>header offline → 'Counts and posts need a connection.' + Retry; no profile row → 'This lifter isn't available.';<br/>tabs Posts | History | PRs (ChoiceChips), reloaded on focus, Posts / History page at the list end:<br/>B27, others only: Mute / Unmute and Block / Unblock under Follow (Follow + Mute hidden while blocking);<br/>'You muted this lifter…' / 'You blocked this lifter…' line; refusal → calm line;<br/>Posts = PostCards (vote, comments, others' ⋯ report; own: the B26 visibility chip, success rewrites the tab's list) · History own = WorkoutListItem → workout/[id], other = not tappable rows<br/>· PRs = one card per exercise, formatPrLine in the viewer's unit"]
   ProfileView -->|"own header: saveOwnProfile on load; read first at mount (offline identity)"| OwnProfileStore[("kv-store key astra.social.ownProfile.userId<br/>JSON v1: username, displayName, bio, avatarPath<br/>(no counts); per account, not synced")]
   ProfileView -->|"own History: listPastWorkouts(db, me, 20, before-cursor) · own PRs: allCurrentPrs (workout/prs.ts + prList.groupPrs)"| LocalDB
   ProfileView --> ProfileQ
@@ -275,11 +283,14 @@ flowchart TD
   subgraph Backend["Supabase project (live)"]
     AuthAPI["Supabase Auth<br/>email + password accounts"]
     Trigger{"signup trigger handle_new_user<br/>refuses missing / under-18 birthdate;<br/>creates profile, settings, body data"}
-    DB[("Postgres<br/>profiles, settings, body data, follows, blocks,<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records (owner-only RLS; keep-best trigger<br/>never lets an UPDATE lower a record; delete+insert can),<br/>sync_tombstones (B14: written by delete triggers, owner-only read),<br/>workout_analyses (B18: owner read only; NO write policies),<br/>flairs + posts (B20: posts read per workout_visible; write only own post of own workout;<br/>B22: kind / image_path, own-folder CHECK; B26: progress-pic-private CHECK dropped, the author picks;<br/>trigger sync_workout_visibility: a post's visibility change moves its workout, invoker rights)<br/>see database-erd.md")]
+    DB[("Postgres<br/>profiles, settings, body data, follows, blocks,<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records (owner-only RLS; keep-best trigger<br/>never lets an UPDATE lower a record; delete+insert can),<br/>sync_tombstones (B14: written by delete triggers, owner-only read),<br/>workout_analyses (B18: owner read only; NO write policies),<br/>flairs + posts (B20: posts read per workout_visible; write only own post of own workout;<br/>B22: kind / image_path, own-folder CHECK; B26: progress-pic-private CHECK dropped, the author picks;<br/>trigger sync_workout_visibility: a post's visibility change moves its workout, invoker rights;<br/>B27: mutes, moderators, reports (queue, founder reads in the dashboard); workout_visible hides muted lifters;<br/>votes / comments also filtered by their author (block either way / muted))<br/>see database-erd.md")]
     Bucket[("Storage bucket post-images (B22, private)<br/>10 MiB cap, jpeg / png / webp only;<br/>write only in your own userId/ folder;<br/>read own folder, or any object a visible post cites (workout_visible)")]
     AnalyzeFn["Edge function analyze-workout (B18, deployed, verify_jwt on)<br/>POST {workoutId} with the user's token → getUser;<br/>reads AS THE CALLER (RLS); 404 unless the caller OWNS the workout;<br/>422 if unfinished; buildAnalysis (no model); upsert by id<br/>with the SERVICE ROLE (one statement); returns the stored row"]
     AuthAPI --> Trigger --> DB
     AnalyzeFn -->|"select as caller; upsert workout_analyses as service role"| DB
+    ModerateFn["Edge function moderate (B27, NFR-7, deployed v2, verify_jwt on)<br/>POST {action: remove-post | remove-comment | remove-account, targetId}<br/>with the founder's token → getUser; 403 unless in moderators (read as service role);<br/>remove-post: delete post (votes/comments cascade) → delete its post-images object → resolve open reports;<br/>remove-comment: delete → resolve; remove-account: 409 for a moderator, else auth.admin.deleteUser<br/>(cascade) → sweep post-images/id/ + avatars/id/. No app screen calls it — the founder, by hand"]
+    ModerateFn -->|"service role: moderators check, deletes, reports status"| DB
+    ModerateFn -->|"service role: remove objects"| Bucket
   end
   ReqPass -->|"supabase.functions.invoke('analyze-workout')"| AnalyzeFn
 
@@ -504,7 +515,18 @@ flowchart TD
    through the API, not just hidden. Other people's cards have no chip. **Settings → Privacy**
    chooses who *new* progress pics are shown to (Only you by default; works offline, synced
    like the unit) and states that body data is only ever visible to the lifter.
-20. Everything else is a placeholder that renders its final layout with inert controls (Start
+20. **Report, mute and block (B27, SOC-8, NFR-7) — needs a connection.** Other people's post
+   cards (Home, profiles) and comments have a **⋯** button that opens **Report**: pick one of six
+   reasons — the same six as `docs/CONTENT_POLICY.md` — add details if wanted, and send. The
+   report goes to the founder's queue (read in the Supabase dashboard); the reported lifter isn't
+   told. Reporting the same thing twice just says thanks again. Another lifter's profile has
+   **Mute** (their posts, workouts, PRs, comments and votes disappear for you everywhere; they
+   aren't told; you keep following) and **Block** (asked first: hidden both ways, follows removed
+   both ways; no Follow button while blocking). Both undo from the same profile, and the profile
+   says when you've muted or blocked someone. The founder removes posts, comments or whole
+   accounts by calling the `moderate` server function with their own sign-in — there is no
+   in-app founder screen.
+21. Everything else is a placeholder that renders its final layout with inert controls (Start
    from a program, Marketplace, Communities).
 
 ## Data path today
@@ -808,7 +830,7 @@ flowchart TD
   (red alert line) and (moved from the Tool Kit at B26) ChoiceChips (a radio-group chip row, can
   be locked with `disabled` — Tool Kit, Home, profile tabs, Settings, the post visibility
   chooser), all styled from `theme/tokens.ts`.
-- `components/social/` (B20) holds PostCard (one feed post — a workout, or since B22 a photo; since B23 with the vote / comments footer; since B25 a tappable author; since B26 the owner-only visibility chip), UserCard (a person + FollowButton; since B25 tappable to their profile),
+- `components/social/` (B20) holds PostCard (one feed post — a workout, or since B22 a photo; since B23 with the vote / comments footer; since B25 a tappable author; since B26 the owner-only visibility chip; since B27 a ⋯ report button on other people's cards), ReportSheet (B27: the report panel for a post or comment), UserCard (a person + FollowButton; since B25 tappable to their profile),
   FollowButton (B25: Follow / Following, optimistic with revert, `onSettled` after an accepted
   change), Avatar (B25: the public-bucket photo, else LetterAvatar — the initial badge),
   and `usePostPhotoSource` (B25: the viewer-token photo fetch Home and profiles share).

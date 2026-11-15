@@ -373,6 +373,34 @@ new body — do not drop the function (policies depend on it; drop would cascade
    reports), but only the live probe proves the cascade graph and that nothing orphans in
    storage or `sync_tombstones`.
 
+## Build deviations (builder run, recorded at build time)
+
+- **Self-reports refused server-side.** Review caught that the insert policy only checks
+  visibility, and your own posts are always visible — so the API took a self-report. Second
+  migration `20261115151850_reports_not_self.sql` adds `check (reporter_id <> reported_user_id)`
+  (checked after the stamping trigger, so it can't be dodged). Probed live: refused.
+- **App API:** `report(client, me, target, reason, details)` is the one insert; `reportPost` /
+  `reportComment` are thin wrappers taking a nullable `me` so the feed, profile and comments
+  screen share one spelling.
+- **`moderate` answers 409** for a remove-account whose target is a moderator (the plan's G8
+  refusal; the status list didn't name it).
+- **remove-account is retry-safe:** the storage sweep runs even when the login is already gone,
+  and answers 404 only if there was neither a login nor any files. Order is login delete →
+  sweep, as planned.
+- **Report sheet ends on a thank-you with Done**, not an auto-close — so the "mute or block from
+  their profile" pointer (G13) can be read.
+- **Profile extras:** a "You blocked this lifter" line beside the planned muted line; Follow and
+  Mute are hidden while blocking (the server would refuse a follow; mute is moot); the profile
+  re-reads after mute/unmute as well as block/unblock.
+- **`ChoiceChips.selected` accepts null** (the report sheet starts with no reason chosen).
+- **Live HTTP probe of `moderate` not run by the builder:** the permission layer declined
+  outbound `curl` from the session. The function is deployed (v2, `verify_jwt` on, from the repo
+  files); the database effects of all three removals were proven in SQL (rolled back) and the
+  handler's decisions in Jest. The HTTP 401/403 path and the real storage delete need Gate 2 /
+  Tristen.
+- **Appeal address:** the policy says plainly that the appeal email isn't published yet
+  (DEFERRED) rather than pointing at a store page that doesn't exist.
+
 ## Grilling decisions (settled)
 
 Grilled in the planner session at full severity (the `mattpocock-skills:grilling` posture);
