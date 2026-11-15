@@ -16,6 +16,12 @@ and report the mismatch instead of working.
 Do CLAUDE.md workflow steps 4–7:
 
 4. **Code** — implement the plan, following CLAUDE.md rules and any folder-level CLAUDE.md.
+   Migrations: write the file under `backend/supabase/migrations/`, apply it live with the
+   Supabase MCP `apply_migration` (name = the file's snake_case suffix), then run
+   `list_migrations` and **rename the file so its version prefix equals the version Supabase
+   recorded** (the MCP assigns its own timestamp). A mismatched prefix breaks a later
+   `supabase db push`. Probe the change live; update `@training-math/limits.ts` in the same
+   commit if the migration touches a `sets` CHECK or column type.
 5. **Test** — Jest unit tests per the Testing rules; all relevant tests and lint must pass.
    Known footgun: running Jest rewrites the gitignored `.expo/types/router.d.ts` with a stale
    route list, so `npx tsc --noEmit` then fails on `router.push` paths in route files you did not

@@ -63,6 +63,37 @@ describe('Saved workout screen', () => {
     expect(screen.getByText('10 reps')).toBeTruthy();
   });
 
+  it('B11: shows a superset as one unit, a drop set as one numbered row, and timed / scored sets', async () => {
+    const store = await startActiveWorkout(db, SIGNED_IN_USER_ID, steadyOptions(START));
+    const bench = await store.addExercise(libraryExerciseId('bench_press'));
+    const pullups = await store.addExercise(libraryExerciseId('pullups'));
+    const deadlift = await store.addExercise(libraryExerciseId('deadlift'));
+    await store.linkWithPrevious(pullups.id);
+    await store.logSet(bench.id, { reps: 8, weight: { value: 225, unit: 'lb' } });
+    await store.logSet(bench.id, { reps: 8, weight: { value: 185, unit: 'lb' }, dropSetPosition: 1 });
+    await store.logSet(bench.id, { reps: 10, weight: { value: 155, unit: 'lb' }, dropSetPosition: 2 });
+    await store.logSet(bench.id, { reps: 5, weight: { value: 225, unit: 'lb' } });
+    await store.logSet(pullups.id, { reps: 8 });
+    await store.logSet(deadlift.id, { reps: 100, durationSeconds: 452 });
+    await store.logSet(deadlift.id, { score: '7 rounds + 12 reps' });
+    await store.finish();
+    mockParams = { id: store.getSnapshot().workout.id };
+
+    await renderSignedIn(<SavedWorkoutScreen />);
+    await screen.findByText('Bench Press');
+    // One "Superset" unit holding bench and pull-ups; the deadlift stands alone.
+    expect(screen.getAllByText('Superset')).toHaveLength(1);
+    expect(screen.getByText('Pullups')).toBeTruthy();
+    // The drop set: one row, numbered as one set; the next set is Set 2.
+    expect(screen.getByText('8 × 225 lb → 8 × 185 lb → 10 × 155 lb')).toBeTruthy();
+    expect(screen.getByText('5 × 225 lb')).toBeTruthy();
+    expect(screen.getAllByText('Set 2')).toHaveLength(2); // bench's second set, deadlift's second
+    expect(screen.queryByText('Set 3')).toBeNull();
+    // Timed and scored work.
+    expect(screen.getByText('100 reps · 7:32')).toBeTruthy();
+    expect(screen.getByText('7 rounds + 12 reps')).toBeTruthy();
+  });
+
   it('never shows another user’s workout', async () => {
     mockParams = { id: await seedWorkout(OTHER_USER_ID) };
     await renderSignedIn(<SavedWorkoutScreen />);

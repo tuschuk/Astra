@@ -266,7 +266,7 @@ What shipped differs from the plan above in these ways. Each is deliberate.
   `list_migrations` and `apply_migration` were declined by the headless run's permission layer.
   Consequences:
   - `frontend/.env` was **not created**. Tristen fills it from `.env.example`.
-  - The migration `20261114130000_signup_birthdate_gate.sql` is **in the repo but not applied
+  - The migration `20261114224613_signup_birthdate_gate.sql` is **in the repo but not applied
     live**. Until it is, live signups are not 18+-enforced server-side and the birthdate isn't
     stamped. Only the client gate holds.
   - The §7 live probe (under-18 refused, 18+ creates three rows with birthdate) **did not run**.

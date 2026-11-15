@@ -3,7 +3,9 @@
  *
  * What it is: a workout row, its exercises in order, and each exercise's sets in order. Screens
  * (from B09) read it and call its operations: add an exercise, log a set, repeat the last set,
- * fix or remove a set, reorder or remove an exercise, finish, or throw the whole thing away.
+ * fix or remove a set, reorder or remove an exercise, link exercises into a superset or unlink
+ * them (B11), finish, or throw the whole thing away. A drop set needs no operation of its own:
+ * each drop is an ordinary logged set carrying its drop number (see `nextDropPosition`).
  *
  * The rule that makes it survive a killed app (NFR-3): every operation is saved to the phone's
  * SQLite database FIRST, in one all-or-nothing transaction, and only then is the in-memory copy
@@ -26,6 +28,7 @@
  */
 import {
   assertValidSetFields,
+  assertValidSupersetGroup,
   lbToKg,
   roundRpeForStorage,
   roundWeightKgForStorage,
@@ -68,7 +71,24 @@ export interface SetInput {
   isWarmup?: boolean;
   /** Segment of a drop set: the top set leaves this empty, the drops are 1, 2, … */
   dropSetPosition?: number | null;
+  /** Timed work: how long it took or lasted, in seconds. */
   durationSeconds?: number | null;
+  /** Scored WOD work, as the lifter wrote it ("7 rounds + 12 reps"). Blank counts as none. */
+  score?: string | null;
+}
+
+/**
+ * The drop number the next drop of an exercise's latest set gets (LOG-12). A drop set is saved
+ * as separate rows: the top set has no drop number, the drops after it are 1, 2, 3 … So the
+ * next drop is "one more than the last set's number", treating the top set as 0. Returns null
+ * when the exercise has no set yet — there is nothing to drop from.
+ *
+ * Example: sets [8 × 225 (none), 8 × 185 (1)] → the next drop is 2.
+ */
+export function nextDropPosition(sets: readonly SetRow[]): number | null {
+  const last = sets[sets.length - 1];
+  if (!last) return null;
+  return (last.drop_set_position ?? 0) + 1;
 }
 
 /**
@@ -88,6 +108,7 @@ export function setInputFromRow(set: SetRow): SetInput {
     isWarmup: set.is_warmup,
     dropSetPosition: set.drop_set_position,
     durationSeconds: set.duration_seconds,
+    score: set.score,
   };
 }
 
@@ -120,10 +141,34 @@ export interface ActiveWorkoutStore {
   logSet(entryId: string, input: SetInput): Promise<SetRow>;
   /** Replaces what a set says (fixing a typo); its place in the list is kept. */
   updateSet(setId: string, input: SetInput): Promise<SetRow>;
+  /**
+   * Replaces what several sets say, all in one transaction — e.g. marking every segment of a
+   * drop set as a warm-up, so the drop set is never left half warm-up and half work.
+   */
+  updateSets(changes: readonly { setId: string; input: SetInput }[]): Promise<void>;
   /** Removes a set; the sets after it move up. */
   removeSet(setId: string): Promise<void>;
+  /**
+   * Removes several sets in one transaction (a whole drop set: its top set and every drop), so
+   * a drop never outlives its top set and gets mistaken for part of the set before it.
+   */
+  removeSets(setIds: readonly string[]): Promise<void>;
   /** Logs a copy of the exercise's last set — the one-tap "same again" (NFR-2). */
   repeatLastSet(entryId: string): Promise<SetRow>;
+  /**
+   * Makes this exercise part of a superset with the exercise just above it (LOG-11): done
+   * back-to-back, shown as one unit. If either is already in a superset, the other joins it (so
+   * linking three in a row makes a tri-set). Refused for the first exercise, which has nothing
+   * above it; does nothing if the two are already linked.
+   */
+  linkWithPrevious(entryId: string): Promise<void>;
+  /**
+   * Undoes the link between this exercise and the one just above it, splitting the superset
+   * there: the exercises above stay together, this one and those below it stay together, and
+   * whichever side is left with a single exercise stops being a superset. Does nothing if the
+   * two weren't linked.
+   */
+  unlinkFromPrevious(entryId: string): Promise<void>;
   /** Ends the workout and hands it to sync. Returns the finished workout row. */
   finish(): Promise<WorkoutRow>;
   /** Deletes the in-progress workout from the phone entirely (never uploaded). */
@@ -191,6 +236,7 @@ function setColumns(input: SetInput, position: number) {
       ? null
       : roundWeightKgForStorage(input.weight.unit === 'lb' ? lbToKg(input.weight.value) : input.weight.value);
   const rpe = input.rpe == null ? null : roundRpeForStorage(input.rpe);
+  const score = input.score?.trim() || null;
   const columns = {
     position,
     reps: input.reps ?? null,
@@ -199,6 +245,7 @@ function setColumns(input: SetInput, position: number) {
     is_warmup: input.isWarmup ?? false,
     drop_set_position: input.dropSetPosition ?? null,
     duration_seconds: input.durationSeconds ?? null,
+    score,
   };
   assertValidSetFields({
     position,
@@ -207,8 +254,83 @@ function setColumns(input: SetInput, position: number) {
     rpe: columns.rpe,
     dropSetPosition: columns.drop_set_position,
     durationSeconds: columns.duration_seconds,
+    score: columns.score,
   });
   return columns;
+}
+
+/**
+ * The superset numbers rewritten to say exactly what the screen shows (the screen merges only
+ * neighbours — see `supersetRuns` in format.ts): each run of two or more neighbours sharing a
+ * number keeps it; an exercise not in such a run has none; and if one number is shared by two
+ * separate runs (members moved apart), the later run gets a fresh number so they stay separate.
+ *
+ * Example: [1, null, 1] (a pair split by a move) → [null, null, null];
+ *          [1, 1, null, 1, 1] → [1, 1, null, 2, 2].
+ */
+function asShown(groups: readonly (number | null)[]): (number | null)[] {
+  const out: (number | null)[] = groups.map(() => null);
+  const used = new Set<number>();
+  let max = Math.max(0, ...groups.map((g) => g ?? 0));
+  for (let start = 0; start < groups.length; ) {
+    let end = start + 1;
+    while (groups[start] != null && end < groups.length && groups[end] === groups[start]) end++;
+    const group = groups[start];
+    if (group != null && end - start > 1) {
+      const number = used.has(group) ? ++max : group;
+      used.add(number);
+      for (let i = start; i < end; i++) out[i] = number;
+    }
+    start = end;
+  }
+  return out;
+}
+
+/**
+ * Superset bookkeeping, as a pure function so it can be reasoned about (and tested through the
+ * store) without a database: given each exercise's superset number in workout order, returns
+ * the numbers after either linking exercise `index` to the one above it (`link`) or cutting
+ * that link (`unlink`).
+ *
+ * The model: the link toggle on a card is a hinge between that card and the one above it.
+ *   - Linking merges the run above the hinge with the run starting at it. The run keeps the
+ *     number the one above already has; if it has none, this exercise's own; if neither has
+ *     one, a fresh number (the biggest number in the workout + 1, so it can't collide).
+ *   - Unlinking gives the exercises from the hinge down to the end of that run a fresh number,
+ *     leaving the ones above it with the old number.
+ *   - Afterwards any number held by only one exercise is cleared — a superset of one isn't a
+ *     superset, and leaving it would make a later link re-join a stranger.
+ *
+ * "Run" means consecutive exercises sharing a number. Before either action the numbers are
+ * first made to match what the screen shows (`asShown`): reordering never rewrites groups, so
+ * an exercise moved away from its superset still carries the number; left in place, a later
+ * link could pull a far-away stray back in and make a tri-set the lifter never built.
+ */
+function relinkSupersets(stored: readonly (number | null)[], index: number, action: 'link' | 'unlink'): (number | null)[] {
+  const groups = asShown(stored);
+  const next = [...groups];
+  const fresh = (): number => {
+    const group = Math.max(0, ...next.map((g) => g ?? 0)) + 1;
+    assertValidSupersetGroup(group);
+    return group;
+  };
+  // Indexes of the run that starts at `index` (just `index` when it has no group).
+  const runFromHinge: number[] = [index];
+  for (let i = index + 1; groups[index] != null && i < groups.length && groups[i] === groups[index]; i++) {
+    runFromHinge.push(i);
+  }
+  if (action === 'link') {
+    const target = groups[index - 1] ?? groups[index] ?? fresh();
+    next[index - 1] = target;
+    for (const i of runFromHinge) next[i] = target;
+  } else {
+    const group = fresh();
+    for (const i of runFromHinge) next[i] = group;
+  }
+  // Clear any number only one exercise still holds.
+  const counts = new Map<number, number>();
+  for (const g of next) if (g != null) counts.set(g, (counts.get(g) ?? 0) + 1);
+  return next.map((g) => (g != null && counts.get(g) === 1 ? null : g));
 }
 
 /**
@@ -367,6 +489,43 @@ function createStore(
     return set;
   }
 
+  /**
+   * Deletes the given sets (from any exercises of this workout) and closes the gaps in each
+   * affected exercise's set numbers — all in one transaction.
+   */
+  async function deleteSets(setIds: readonly string[]): Promise<void> {
+    const doomed = new Set(setIds.map((id) => setById(id).set.id));
+    const affected = snapshot.entries.filter((e) => e.sets.some((s) => doomed.has(s.id)));
+    const now = clock();
+    await db.withTransactionAsync(async (tx) => {
+      await deleteDraftRowsTx(tx, 'sets', [...doomed]);
+      for (const entry of affected) {
+        await renumberSetsTx(
+          tx,
+          entry.sets.filter((s) => !doomed.has(s.id)),
+          now,
+        );
+      }
+    });
+  }
+
+  /** Each exercise's superset number, in workout order. */
+  function supersetGroups(): (number | null)[] {
+    return snapshot.entries.map((e) => e.superset_group);
+  }
+
+  /**
+   * Saves new superset numbers (one per exercise, in workout order), writing only the exercises
+   * whose number changed — all in one transaction, so a superset is never half-linked.
+   */
+  async function saveSupersetGroups(groups: readonly (number | null)[]): Promise<void> {
+    const now = clock();
+    const changed = snapshot.entries.flatMap(({ sets: _nested, ...entry }, i) =>
+      entry.superset_group === groups[i] ? [] : [{ ...entry, superset_group: groups[i] }],
+    );
+    await db.withTransactionAsync((tx) => writeDraftRowsTx(tx, 'workout_exercises', changed, now));
+  }
+
   /** The saved copy of a set (used after `refresh`), so callers get exactly what SQLite holds. */
   function savedSet(setId: string): SetRow {
     return setById(setId).set;
@@ -449,16 +608,20 @@ function createStore(
         return set.id;
       }, { pick: savedSet }),
 
-    removeSet: (setId) =>
+    updateSets: (changes) =>
       mutate(async () => {
-        const { entry, set } = setById(setId);
-        const rest = entry.sets.filter((s) => s.id !== set.id);
         const now = clock();
-        await db.withTransactionAsync(async (tx) => {
-          await deleteDraftRowsTx(tx, 'sets', [set.id]);
-          await renumberSetsTx(tx, rest, now);
+        // Every value is checked before anything is written; one bad value saves none.
+        const updated = changes.map(({ setId, input }) => {
+          const { set } = setById(setId);
+          return { ...set, ...setColumns(input, set.position) };
         });
+        await db.withTransactionAsync((tx) => writeDraftRowsTx(tx, 'sets', updated, now));
       }),
+
+    removeSet: (setId) => mutate(() => deleteSets([setId])),
+
+    removeSets: (setIds) => mutate(() => deleteSets(setIds)),
 
     repeatLastSet: (entryId) =>
       mutate(async () => {
@@ -474,10 +637,28 @@ function createStore(
           is_warmup: previous.is_warmup,
           drop_set_position: previous.drop_set_position,
           duration_seconds: previous.duration_seconds,
+          score: previous.score,
         };
         assertValidSetFields({ position: columns.position });
         return (await appendSet(entry, columns)).id;
       }, { pick: savedSet }),
+
+    linkWithPrevious: (entryId) =>
+      mutate(async () => {
+        const entry = entryById(entryId);
+        if (entry.position === 0) throw new Error('The first exercise has no exercise above it to superset with');
+        const above = snapshot.entries[entry.position - 1];
+        if (above.superset_group != null && above.superset_group === entry.superset_group) return;
+        await saveSupersetGroups(relinkSupersets(supersetGroups(), entry.position, 'link'));
+      }),
+
+    unlinkFromPrevious: (entryId) =>
+      mutate(async () => {
+        const entry = entryById(entryId);
+        const above = snapshot.entries[entry.position - 1];
+        if (!above || entry.superset_group == null || above.superset_group !== entry.superset_group) return;
+        await saveSupersetGroups(relinkSupersets(supersetGroups(), entry.position, 'unlink'));
+      }),
 
     finish: () =>
       mutate(async () => {

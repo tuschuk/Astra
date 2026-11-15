@@ -6,7 +6,9 @@
  *
  * What the lifter can do:
  *   - **Add exercise**: search the library and add the exercise at the end;
- *   - everything on each card: log, repeat, remove sets; move or remove the exercise;
+ *   - everything on each card: log sets (plain, warm-up, timed or scored), log a drop, repeat,
+ *     remove sets; move or remove the exercise; link it into a superset with the card above
+ *     (B11 — linked cards wear a "Superset" badge, worked out here from the snapshot);
  *   - **Finish**: save the workout for good (it is handed to sync, which uploads it when there
  *     is signal) and open the saved workout. Finishing with no sets logged instead asks
  *     "Nothing logged yet" with two choices — discard the workout, or keep lifting;
@@ -35,7 +37,7 @@ import type { ExerciseDef } from '@/library/catalog';
 import { libraryExerciseId } from '@/library/uuidv5';
 import { useDisplayUnit } from '@/settings/displayUnit';
 import { clearSessionWorkout, resumeSessionWorkout } from '@/workout/activeWorkoutSession';
-import { totalSets, workoutDateLabel } from '@/workout/format';
+import { supersetPlacement, totalSets, workoutDateLabel } from '@/workout/format';
 import { useSessionWorkout, useWorkoutSnapshot } from '@/workout/useActiveWorkout';
 import { spacing } from '@/theme';
 
@@ -155,6 +157,9 @@ export default function ActiveWorkoutScreen() {
     );
   }
 
+  // Which cards are supersetted with the card above, and which wear the Superset badge.
+  const placement = supersetPlacement(snapshot.entries);
+
   const header = (
     <View style={styles.header}>
       <Heading>Workout</Heading>
@@ -175,7 +180,7 @@ export default function ActiveWorkoutScreen() {
       <FlatList
         data={snapshot.entries}
         keyExtractor={(entry) => entry.id}
-        renderItem={({ item }) => (
+        renderItem={({ item, index }) => (
           <EntryCard
             store={store}
             entry={item}
@@ -183,6 +188,8 @@ export default function ActiveWorkoutScreen() {
             db={db}
             userId={userId}
             unit={unit}
+            linkedToPrevious={placement[index]?.linkedToPrevious}
+            inSuperset={placement[index]?.inSuperset}
           />
         )}
         ListHeaderComponent={header}

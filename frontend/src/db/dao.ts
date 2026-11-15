@@ -78,6 +78,10 @@ export interface WorkoutExerciseRow {
   exercise_id: string | null;
   position: number;
   notes: string | null;
+  /**
+   * Exercises of one workout sharing this number form a superset (done back-to-back, LOG-11);
+   * null when the exercise stands alone.
+   */
   superset_group: number | null;
   created_at: string;
   updated_at: string;
@@ -92,8 +96,12 @@ export interface SetRow {
   weight_kg: number | null;
   rpe: number | null;
   is_warmup: boolean;
+  /** Drop sets (LOG-12): the top set is null, each drop after it is 1, 2, … */
   drop_set_position: number | null;
+  /** Timed work (LOG-13): how long it took or lasted, in seconds. */
   duration_seconds: number | null;
+  /** Scored WOD work (LOG-13): free text like "7 rounds + 12 reps". Display only. */
+  score: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -139,6 +147,7 @@ export const TABLE_COLUMNS: { readonly [T in SyncedTable]: readonly (keyof RowBy
     'is_warmup',
     'drop_set_position',
     'duration_seconds',
+    'score',
     'created_at',
     'updated_at',
   ],

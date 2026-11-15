@@ -25,7 +25,13 @@ import { FakeServer } from '@/test-utils/fakeTransport';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { OTHER_USER_ID, USER_ID } from '@/test-utils/workoutFixtures';
 
-import { loadActiveWorkout, setInputFromRow, startActiveWorkout, type ActiveWorkoutOptions } from './activeWorkout';
+import {
+  loadActiveWorkout,
+  nextDropPosition,
+  setInputFromRow,
+  startActiveWorkout,
+  type ActiveWorkoutOptions,
+} from './activeWorkout';
 
 const BENCH = libraryExerciseId('bench_press');
 const SQUAT = libraryExerciseId('squat');
@@ -442,6 +448,7 @@ describe('operations', () => {
       is_warmup: false,
       drop_set_position: null,
       duration_seconds: null,
+      score: null,
       created_at: '',
       updated_at: '',
     };
@@ -452,6 +459,7 @@ describe('operations', () => {
       isWarmup: false,
       dropSetPosition: null,
       durationSeconds: null,
+      score: null,
     });
   });
 
@@ -589,6 +597,224 @@ describe('operations', () => {
     expect(await dumpTables(db)).toEqual({ workouts: [], workout_exercises: [], sets: [], outbox: 0 });
     expect(await loadActiveWorkout(db, USER_ID)).toBeNull();
     await expect(store.logSet(bench.id, { reps: 1 })).rejects.toThrow('discarded');
+  });
+});
+
+describe('supersets, drop sets and timed work (B11)', () => {
+  const PULLUP = libraryExerciseId('pullups');
+
+  /** A workout with `n` exercises (bench, squat, deadlift, …) and its store. */
+  async function workoutWith(n: number) {
+    const db = faultyDriver(await freshDb());
+    const store = await startActiveWorkout(db, USER_ID, options());
+    const ids = [BENCH, SQUAT, DEADLIFT, PULLUP].slice(0, n);
+    const entries = [];
+    for (const id of ids) entries.push(await store.addExercise(id));
+    return { db, store, entries };
+  }
+
+  /** Each exercise's superset number, in workout order. */
+  const groupsOf = (store: { getSnapshot(): { entries: { superset_group: number | null }[] } }) =>
+    store.getSnapshot().entries.map((e) => e.superset_group);
+
+  it('links two exercises with one fresh number, saved to both rows (LOG-11)', async () => {
+    const { db, store, entries } = await workoutWith(3);
+    await store.linkWithPrevious(entries[1].id);
+    expect(groupsOf(store)).toEqual([1, 1, null]);
+    // Saved to the device, not just the snapshot.
+    const rows = await getRowsByIds(db, 'workout_exercises', [entries[0].id, entries[1].id]);
+    expect(rows.map((r) => r.superset_group)).toEqual([1, 1]);
+  });
+
+  it('chains a third exercise into the existing superset (a tri-set)', async () => {
+    const { store, entries } = await workoutWith(3);
+    await store.linkWithPrevious(entries[1].id);
+    await store.linkWithPrevious(entries[2].id);
+    expect(groupsOf(store)).toEqual([1, 1, 1]);
+  });
+
+  it('linking upward joins the superset the exercise is already in', async () => {
+    const { store, entries } = await workoutWith(3);
+    await store.linkWithPrevious(entries[2].id); // 2–3 linked
+    await store.linkWithPrevious(entries[1].id); // 1 joins them
+    expect(groupsOf(store)).toEqual([1, 1, 1]);
+  });
+
+  it('linking two supersets together merges them', async () => {
+    const { store, entries } = await workoutWith(4);
+    await store.linkWithPrevious(entries[1].id);
+    await store.linkWithPrevious(entries[3].id);
+    expect(groupsOf(store)).toEqual([1, 1, 2, 2]);
+    await store.linkWithPrevious(entries[2].id);
+    expect(groupsOf(store)).toEqual([1, 1, 1, 1]);
+  });
+
+  it('unlinking a pair clears both (a superset of one is no superset)', async () => {
+    const { store, entries } = await workoutWith(2);
+    await store.linkWithPrevious(entries[1].id);
+    await store.unlinkFromPrevious(entries[1].id);
+    expect(groupsOf(store)).toEqual([null, null]);
+  });
+
+  it('unlinking inside a tri-set splits it at that point', async () => {
+    const { store, entries } = await workoutWith(4);
+    await store.linkWithPrevious(entries[1].id);
+    await store.linkWithPrevious(entries[2].id);
+    await store.linkWithPrevious(entries[3].id);
+    await store.unlinkFromPrevious(entries[2].id);
+    // 1–2 keep their number; 3–4 get a fresh one.
+    expect(groupsOf(store)).toEqual([1, 1, 2, 2]);
+    await store.unlinkFromPrevious(entries[1].id);
+    expect(groupsOf(store)).toEqual([null, null, 2, 2]);
+  });
+
+  it('allocates a number no other superset holds, even after unlink churn', async () => {
+    const { store, entries } = await workoutWith(4);
+    await store.linkWithPrevious(entries[1].id); // [1, 1, -, -]
+    await store.linkWithPrevious(entries[3].id); // [1, 1, 2, 2]
+    await store.unlinkFromPrevious(entries[1].id); // [-, -, 2, 2]
+    await store.linkWithPrevious(entries[1].id); // fresh: max(2) + 1
+    expect(groupsOf(store)).toEqual([3, 3, 2, 2]);
+  });
+
+  it('refuses the first exercise, and does nothing for a link that is already there or absent', async () => {
+    const { db, store, entries } = await workoutWith(2);
+    await expect(store.linkWithPrevious(entries[0].id)).rejects.toThrow('first exercise');
+    await store.unlinkFromPrevious(entries[1].id);
+    await store.unlinkFromPrevious(entries[0].id);
+    expect(groupsOf(store)).toEqual([null, null]);
+    await store.linkWithPrevious(entries[1].id);
+    const tables = await dumpTables(db);
+    await store.linkWithPrevious(entries[1].id);
+    expect(await dumpTables(db)).toEqual(tables);
+  });
+
+  it('is all or nothing: a failure part-way through a link writes neither row', async () => {
+    const { db, store, entries } = await workoutWith(2);
+    const before = store.getSnapshot();
+    const tables = await dumpTables(db);
+    db.failNext(/insert into workout_exercises/);
+    await expect(store.linkWithPrevious(entries[1].id)).rejects.toThrow('simulated failure');
+    expect(await dumpTables(db)).toEqual(tables);
+    expect(store.getSnapshot()).toBe(before);
+  });
+
+  it('keeps superset numbers through reorder (display merges only neighbours)', async () => {
+    const { store, entries } = await workoutWith(3);
+    await store.linkWithPrevious(entries[1].id);
+    await store.reorderExercise(entries[0].id, 2);
+    expect(store.getSnapshot().entries.map((e) => [e.id, e.superset_group])).toEqual([
+      [entries[1].id, 1],
+      [entries[2].id, null],
+      [entries[0].id, 1],
+    ]);
+  });
+
+  it('links by what the screen shows: a member moved away is not pulled back in', async () => {
+    const { store, entries } = await workoutWith(3);
+    const [a, b, c] = entries;
+    await store.linkWithPrevious(b.id); // [A, B] superset
+    await store.reorderExercise(b.id, 2); // [A(1), C, B(1)] — nothing shown as a superset
+    await store.linkWithPrevious(b.id); // the lifter links C and B only
+    expect(store.getSnapshot().entries.map((e) => [e.id, e.superset_group])).toEqual([
+      [a.id, null], // the stray lost its number: it no longer shows as part of anything
+      [c.id, 1],
+      [b.id, 1],
+    ]);
+  });
+
+  it('removes a whole drop set in one transaction, renumbering the rest', async () => {
+    const { db, store, entries } = await workoutWith(1);
+    const bench = entries[0].id;
+    const first = await store.logSet(bench, { reps: 5 });
+    const top = await store.logSet(bench, { reps: 8 });
+    const drop = await store.logSet(bench, { reps: 8, dropSetPosition: 1 });
+    const last = await store.logSet(bench, { reps: 3 });
+
+    const before = store.getSnapshot();
+    const tables = await dumpTables(db);
+    db.failNext(/insert into sets/); // the renumbering after the delete fails
+    await expect(store.removeSets([top.id, drop.id])).rejects.toThrow('simulated failure');
+    expect(await dumpTables(db)).toEqual(tables);
+    expect(store.getSnapshot()).toBe(before);
+
+    await store.removeSets([top.id, drop.id]);
+    expect(store.getSnapshot().entries[0].sets.map((s) => [s.id, s.position])).toEqual([
+      [first.id, 0],
+      [last.id, 1],
+    ]);
+    await expect(store.removeSets(['nope'])).rejects.toThrow('No set');
+  });
+
+  it('updates several sets in one transaction, or none if one value is refused', async () => {
+    const { db, store, entries } = await workoutWith(1);
+    const top = await store.logSet(entries[0].id, { reps: 8 });
+    const drop = await store.logSet(entries[0].id, { reps: 8, dropSetPosition: 1 });
+    const tables = await dumpTables(db);
+    await expect(
+      store.updateSets([
+        { setId: top.id, input: { ...setInputFromRow(top), isWarmup: true } },
+        { setId: drop.id, input: { ...setInputFromRow(drop), rpe: 11 } },
+      ]),
+    ).rejects.toThrow(RangeError);
+    expect(await dumpTables(db)).toEqual(tables);
+
+    await store.updateSets(
+      [top, drop].map((set) => ({ setId: set.id, input: { ...setInputFromRow(set), isWarmup: true } })),
+    );
+    expect(store.getSnapshot().entries[0].sets.map((s) => [s.is_warmup, s.drop_set_position])).toEqual([
+      [true, null],
+      [true, 1],
+    ]);
+  });
+
+  it('logs a drop set as a top set plus numbered drops (LOG-12)', async () => {
+    const { store, entries } = await workoutWith(1);
+    const bench = entries[0].id;
+    expect(nextDropPosition(store.getSnapshot().entries[0].sets)).toBeNull();
+    await store.logSet(bench, { reps: 8, weight: { value: 225, unit: 'lb' } });
+    for (const lb of [185, 155]) {
+      const dropSetPosition = nextDropPosition(store.getSnapshot().entries[0].sets);
+      await store.logSet(bench, { reps: 8, weight: { value: lb, unit: 'lb' }, dropSetPosition });
+    }
+    expect(store.getSnapshot().entries[0].sets.map((s) => s.drop_set_position)).toEqual([null, 1, 2]);
+    expect(nextDropPosition(store.getSnapshot().entries[0].sets)).toBe(3);
+  });
+
+  it('saves a score trimmed, a blank score as none, and refuses one over 100 characters (LOG-13)', async () => {
+    const { store, entries } = await workoutWith(1);
+    const scored = await store.logSet(entries[0].id, { durationSeconds: 1200, score: '  7 rounds + 12 reps ' });
+    expect(scored).toMatchObject({ duration_seconds: 1200, score: '7 rounds + 12 reps', reps: null });
+    const blank = await store.logSet(entries[0].id, { reps: 5, score: '   ' });
+    expect(blank.score).toBeNull();
+    await expect(store.logSet(entries[0].id, { score: 'x'.repeat(101) })).rejects.toThrow(/score/);
+    // The score round-trips through a correction and a repeat.
+    const fixed = await store.updateSet(scored.id, { ...setInputFromRow(scored), isWarmup: true });
+    expect(fixed.score).toBe('7 rounds + 12 reps');
+    const copy = await store.repeatLastSet(entries[0].id);
+    expect(copy.score).toBeNull();
+    await store.logSet(entries[0].id, { score: 'AMRAP 9' });
+    expect((await store.repeatLastSet(entries[0].id)).score).toBe('AMRAP 9');
+  });
+
+  it('uploads supersets, drops, times and scores intact on finish (the "syncs" half)', async () => {
+    const { db, store, entries } = await workoutWith(3);
+    await store.linkWithPrevious(entries[1].id);
+    const top = await store.logSet(entries[0].id, { reps: 8, weight: { value: 100, unit: 'kg' } });
+    const drop = await store.logSet(entries[0].id, { reps: 8, weight: { value: 80, unit: 'kg' }, dropSetPosition: 1 });
+    const timed = await store.logSet(entries[2].id, { durationSeconds: 452, reps: 100 });
+    const scored = await store.logSet(entries[2].id, { score: '7 rounds + 12 reps' });
+    await store.finish();
+
+    const server = new FakeServer();
+    await pushOutbox(db, server);
+    expect(server.tables.workout_exercises.get(entries[0].id)?.superset_group).toBe(1);
+    expect(server.tables.workout_exercises.get(entries[1].id)?.superset_group).toBe(1);
+    expect(server.tables.workout_exercises.get(entries[2].id)?.superset_group).toBeNull();
+    expect(server.tables.sets.get(top.id)).toMatchObject({ drop_set_position: null });
+    expect(server.tables.sets.get(drop.id)).toMatchObject({ drop_set_position: 1, weight_kg: 80 });
+    expect(server.tables.sets.get(timed.id)).toMatchObject({ duration_seconds: 452, reps: 100 });
+    expect(server.tables.sets.get(scored.id)).toMatchObject({ score: '7 rounds + 12 reps' });
   });
 });
 

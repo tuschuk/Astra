@@ -3,7 +3,9 @@ import { describe, expect, it } from '@jest/globals';
 
 import {
   assertValidSetFields,
+  assertValidSupersetGroup,
   MAX_INTEGER,
+  MAX_SET_SCORE_LENGTH,
   MAX_SMALLINT,
   roundRpeForStorage,
   roundWeightKgForStorage,
@@ -51,6 +53,7 @@ describe('assertValidSetFields', () => {
         rpe: 1,
         dropSetPosition: MAX_SMALLINT,
         durationSeconds: MAX_INTEGER,
+        score: 'x'.repeat(MAX_SET_SCORE_LENGTH),
       }),
     ).not.toThrow();
     expect(() => assertValidSetFields({ position: 0, weightKg: 9999.99, rpe: 10 })).not.toThrow();
@@ -71,8 +74,33 @@ describe('assertValidSetFields', () => {
     [{ position: 0, dropSetPosition: 0 }, /dropSetPosition/],
     [{ position: 0, durationSeconds: -5 }, /durationSeconds/],
     [{ position: 0, durationSeconds: 1.2 }, /durationSeconds/],
+    [{ position: 0, score: 'x'.repeat(MAX_SET_SCORE_LENGTH + 1) }, /score/],
   ])('refuses %o, naming the field', (fields, name) => {
     expect(() => assertValidSetFields(fields)).toThrow(RangeError);
     expect(() => assertValidSetFields(fields)).toThrow(name);
+  });
+
+  it('counts score characters the way Postgres char_length does (an emoji is one)', () => {
+    const score = '🔥'.repeat(MAX_SET_SCORE_LENGTH);
+    expect(score.length).toBe(MAX_SET_SCORE_LENGTH * 2);
+    expect(() => assertValidSetFields({ position: 0, score })).not.toThrow();
+    expect(() => assertValidSetFields({ position: 0, score: `${score}!` })).toThrow(/score/);
+  });
+
+  it('allows an empty or missing score', () => {
+    expect(() => assertValidSetFields({ position: 0, score: null })).not.toThrow();
+    expect(() => assertValidSetFields({ position: 0, score: '' })).not.toThrow();
+  });
+});
+
+describe('assertValidSupersetGroup', () => {
+  it('accepts 1 through the smallint limit', () => {
+    expect(() => assertValidSupersetGroup(1)).not.toThrow();
+    expect(() => assertValidSupersetGroup(MAX_SMALLINT)).not.toThrow();
+  });
+
+  it.each([0, -1, 1.5, MAX_SMALLINT + 1, NaN])('refuses %p, naming the field', (group) => {
+    expect(() => assertValidSupersetGroup(group)).toThrow(RangeError);
+    expect(() => assertValidSupersetGroup(group)).toThrow(/supersetGroup/);
   });
 });

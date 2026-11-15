@@ -95,8 +95,16 @@ create table sync_state (
 );
 `;
 
+/**
+ * Version 2 (B11): a free-text `score` on each set, for WOD-style work that ends in a result
+ * rather than reps ("7 rounds + 12 reps"). Mirrors the server's `…_sets_score.sql`.
+ */
+const V2 = `
+alter table sets add column score text;
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1];
+export const MIGRATIONS: readonly string[] = [V1, V2];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

@@ -61,10 +61,10 @@ flowchart TD
   end
 
   subgraph LoggerUI["Logger screens (signed-in stack, above the tab bar)"]
-    Logger["Active workout (app/active-workout.tsx)<br/>EntryCard per exercise: sets, reps + weight in lb (displayUnit.ts) + optional RPE,<br/>Warm-up chip (next sets are warm-ups), W toggle per logged set (B10),<br/>Bodyweight exercise: weight box = '+ lb' added load, reps alone logs,<br/>Log set, Repeat last set (ONE tap, NFR-2), remove set,<br/>move up / down, remove exercise, 'Last time' line (LOG-5, work sets only)<br/>one store call per card at a time<br/>empty slot on open: resume from astra.db or go back"]
+    Logger["Active workout (app/active-workout.tsx)<br/>EntryCard per exercise: sets, reps + weight in lb (displayUnit.ts) + optional RPE,<br/>Warm-up chip (next sets are warm-ups), W toggle per logged set (B10),<br/>Bodyweight exercise: weight box = '+ lb' added load, reps alone logs,<br/>Timed chip (B11): reveals Time (s or m:ss) + Score boxes, closing clears them,<br/>Log set (reps, weight, time or score), Drop = next drop of the latest set (B11),<br/>Repeat last set (ONE tap, NFR-2), remove set (a drop set's top row removes all of it),<br/>link toggle (B11): superset with the card above, 'Superset' badge,<br/>drops shown as ↳ rows under one 'Set n' (sets numbered as the lifter counts),<br/>move up / down, remove exercise, 'Last time' line (LOG-5, work sets only)<br/>one store call per card at a time<br/>empty slot on open: resume from astra.db or go back"]
     Picker["Add exercise panel (ExercisePicker, a Modal)<br/>alias-aware searchExercises over the catalog;<br/>slug → libraryExerciseId → store.addExercise"]
     EmptyQ{"Finish with zero sets?"}
-    Saved["Saved workout (app/workout/[id].tsx), read-only<br/>date, duration, every exercise + set in lb<br/>(another user's / unfinished id: 'not on this phone')"]
+    Saved["Saved workout (app/workout/[id].tsx), read-only<br/>date, duration, every exercise + set in lb<br/>superset = ONE card labelled 'Superset' (B11);<br/>drop set = ONE row 'a → b → c'; time and score shown (B11)<br/>(another user's / unfinished id: 'not on this phone')"]
     Logger -->|Add exercise| Picker
     Picker -->|tap an exercise| Logger
     Logger -->|Finish| EmptyQ
@@ -87,7 +87,7 @@ flowchart TD
   subgraph ActiveWO["Active-workout store (src/workout/activeWorkout.ts)<br/>driven by the logger screens through the session slot + useActiveWorkout hooks"]
     StartWO["startActiveWorkout: blank public workout<br/>(refused while one is in progress)"]
     ResumeWO["loadActiveWorkout: on launch, rebuild the<br/>signed-in user's unfinished workout from astra.db"]
-    MutWO["add / remove / reorder exercise; log / fix / remove set;<br/>repeat last set: check server limits, convert lb→kg,<br/>commit to SQLite, then re-read the snapshot"]
+    MutWO["add / remove / reorder exercise; log / fix / remove set;<br/>repeat last set; updateSets / removeSets (several sets, one transaction, B11);<br/>linkWithPrevious / unlinkFromPrevious (superset_group, B11):<br/>check server limits, convert lb→kg,<br/>commit to SQLite, then re-read the snapshot"]
     FinishWO["finish: ended_at = max(now, started_at),<br/>queue workout + entries + sets in ONE transaction; store sealed"]
     DiscardWO["discard: delete the draft (cascades), nothing to sync"]
   end
@@ -138,7 +138,7 @@ flowchart TD
   subgraph Shared["Shared training math (backend/supabase/functions/_shared/training-math)<br/>import name in the app: @training-math"]
     MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification,<br/>session volume (volume.ts: warm-ups and weightless sets add 0),<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store and the logger's<br/>display (displayWeight); no server function yet"]
   end
-  MathMod -->|"lbToKg, assertValidSetFields,<br/>round weight / RPE for storage"| MutWO
+  MathMod -->|"lbToKg, assertValidSetFields (incl. score length),<br/>assertValidSupersetGroup, round weight / RPE for storage"| MutWO
   MathMod -->|"displayWeight (format.ts)"| Logger
   MathMod -.->|"not wired yet: Tool Kit calculators (B16),<br/>logger PR badges + volume (B13), unit setting (B15)"| Workout
   MathMod -.->|"not wired yet: post-workout analysis<br/>server function (B18)"| Backend
@@ -171,6 +171,14 @@ flowchart TD
    "W · 8 × 135 lb" or "5 × 225 lb @ RPE 8" on the logger and the saved workout. A bodyweight
    exercise (pull-ups, dips) logs with reps alone ("8 reps"); its weight box reads "+ lb" for
    added load on a weighted set.
+   **Supersets, drop sets, timed work (B11):** every card but the first has a **link** toggle
+   that supersets it with the card above (linked cards wear a **Superset** badge; tapping it
+   again unlinks, splitting the superset there). **Drop** logs what the boxes say as the next
+   drop of the latest set; drops show as "↳ 8 × 185 lb" rows under one "Set n", and the saved
+   workout prints the whole drop set as one row ("8 × 225 lb → 8 × 185 lb → 10 × 155 lb"). The
+   **Timed** chip opens a **Time** box ("90" or "4:32") and a **Score** box ("7 rounds + 12
+   reps"); either logs alone or with reps / weight ("100 reps · 7:32"). The saved workout shows
+   a superset as one card holding its exercises.
    **Finish** saves it and opens the read-only saved workout (finishing with no sets offers only
    "Discard workout" or "Keep lifting"). **Discard** asks, then deletes the draft. Leaving the
    logger or killing the app loses nothing: the Workout tab then offers **Resume workout** /
@@ -209,6 +217,15 @@ flowchart TD
   Toggling a logged set's warm-up flag calls the store's `updateSet` with
   `setInputFromRow(set)` (`workout/activeWorkout.ts`) plus the flipped flag — the one write path
   for a set; `rpe` and `is_warmup` ride the existing `sets` columns through finish and push.
+  **B11:** a drop is an ordinary `logSet` with `dropSetPosition` = `nextDropPosition(sets)` (the
+  last set's drop number, 0 for a top set, + 1). The W on a drop set and its top row's remove act
+  on every segment at once through `updateSets` / `removeSets` (one transaction each). The link
+  toggle calls `linkWithPrevious` / `unlinkFromPrevious`, which first rewrite `superset_group`
+  to match what the screen shows, then link or split, saving only the changed entries in one
+  transaction. Display grouping is pure and shared by the logger and the saved screen
+  (`groupDropSets`, `formatDropSet`, `supersetRuns` / `supersetPlacement` in `workout/format.ts`).
+  `sets.score` (device schema V2) and the older `superset_group` / `drop_set_position` /
+  `duration_seconds` columns ride `TABLE_COLUMNS` through finish, push and pull — no sync changes.
 - **On-device store and sync (B07).**
   `src/sync/useSync.ts` runs in the root layout. On launch it opens `astra.db`
   (`src/db/database.ts`: foreign keys on, WAL, migrations by `PRAGMA user_version`). It then seeds

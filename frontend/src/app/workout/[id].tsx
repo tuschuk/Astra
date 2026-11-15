@@ -2,9 +2,12 @@
  * Saved workout — a finished workout, read-only.
  *
  * What it shows: the workout's date and duration, then every exercise in the order it was
- * logged, each with every set (reps and weight in the lifter's unit). This is what Finish opens,
- * and what each row of the Workout tab's history opens — the "reopens with every set intact"
- * half of LOG-2. It reads straight from the phone's database, so it works offline.
+ * logged, each with every set (reps and weight in the lifter's unit; time and score for timed
+ * or WOD-style work). A superset is shown as one card labelled "Superset" holding its
+ * exercises (LOG-11); a drop set is one numbered row with its drops joined by arrows (LOG-12).
+ *
+ * This is what Finish opens, and what each row of the Workout tab's history opens — the
+ * "reopens with every set intact" half of LOG-2. It reads straight from the phone's database, so it works offline.
  *
  * What the lifter can do: read it, and go back. Editing a finished workout arrives with B14;
  * the post-workout analysis with B18/B21.
@@ -21,9 +24,17 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
 import { useAppDatabase } from '@/db/useAppDatabase';
 import { useDisplayUnit } from '@/settings/displayUnit';
-import { formatSet, totalSets, workoutDateLabel, workoutDetailsLabel } from '@/workout/format';
-import { readWorkout, type SavedWorkout } from '@/workout/history';
-import { spacing, type } from '@/theme';
+import type { WeightUnit } from '@training-math';
+import {
+  formatDropSet,
+  groupDropSets,
+  supersetRuns,
+  totalSets,
+  workoutDateLabel,
+  workoutDetailsLabel,
+} from '@/workout/format';
+import { readWorkout, type SavedEntry, type SavedWorkout } from '@/workout/history';
+import { colors, spacing, type } from '@/theme';
 
 /** Where the screen is: reading, found, or not on this phone (or not this user's). */
 type LoadState = { status: 'loading' } | { status: 'found'; workout: SavedWorkout } | { status: 'missing' };
@@ -88,24 +99,45 @@ export default function SavedWorkoutScreen() {
         {details}
       </Body>
 
-      {entries.map((entry) => (
-        <Card key={entry.id} style={styles.card}>
-          <Body style={styles.name}>{entry.exerciseName ?? 'Deleted exercise'}</Body>
-          {entry.sets.length === 0 ? (
-            <Body variant="small">No sets logged</Body>
-          ) : (
-            entry.sets.map((set) => (
-              <View key={set.id} style={styles.setRow}>
-                <SectionLabel size="small" style={styles.setNumber}>
-                  Set {set.position + 1}
-                </SectionLabel>
-                <Body>{formatSet(set, unit)}</Body>
-              </View>
-            ))
-          )}
+      {/* One Card per unit: a lone exercise, or a whole superset with its exercises inside. */}
+      {supersetRuns(entries).map(({ superset, entries: run }) => (
+        <Card key={run[0].id} style={styles.card}>
+          {superset ? (
+            <SectionLabel size="small" style={styles.supersetLabel}>
+              Superset
+            </SectionLabel>
+          ) : null}
+          {run.map((entry) => (
+            <SavedExercise key={entry.id} entry={entry} unit={unit} />
+          ))}
         </Card>
       ))}
     </Screen>
+  );
+}
+
+/**
+ * One exercise of the saved workout: its name, then one row per set as the lifter thinks of
+ * it — a drop set is a single row with its drops joined by arrows ("Set 2 · 8 × 225 lb →
+ * 8 × 185 lb"), numbered with the other sets (LOG-12).
+ */
+function SavedExercise({ entry, unit }: { entry: SavedEntry; unit: WeightUnit }) {
+  return (
+    <View style={styles.exercise}>
+      <Body style={styles.name}>{entry.exerciseName ?? 'Deleted exercise'}</Body>
+      {entry.sets.length === 0 ? (
+        <Body variant="small">No sets logged</Body>
+      ) : (
+        groupDropSets(entry.sets).map((segments, index) => (
+          <View key={segments[0].id} style={styles.setRow}>
+            <SectionLabel size="small" style={styles.setNumber}>
+              Set {index + 1}
+            </SectionLabel>
+            <Body style={styles.setText}>{formatDropSet(segments, unit)}</Body>
+          </View>
+        ))
+      )}
+    </View>
   );
 }
 
@@ -125,10 +157,19 @@ const styles = StyleSheet.create({
   name: {
     ...type.cardTitle,
   },
+  exercise: {
+    gap: spacing.sm,
+  },
+  supersetLabel: {
+    color: colors.accent,
+  },
   setRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
+  },
+  setText: {
+    flex: 1,
   },
   setNumber: {
     width: 48,

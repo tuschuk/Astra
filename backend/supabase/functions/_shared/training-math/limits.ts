@@ -18,6 +18,12 @@
  *   rpe               numeric(3, 1) check (rpe between 1 and 10)   → 1 … 10, 1 decimal
  *   drop_set_position smallint  check (drop_set_position >= 1)     → whole, 1 … 32767
  *   duration_seconds  integer   check (duration_seconds >= 0)      → whole, 0 … 2147483647
+ *   score             text      check (char_length(score) <= 100)  → at most 100 characters
+ *                     (added by 20261115024010_sets_score.sql)
+ *
+ * And one rule from the `workout_exercises` table in the same training migration:
+ *
+ *   superset_group    smallint  (no CHECK)                         → whole, 1 … 32767
  *
  * The upper bounds come from the column types (a value bigger than the column holds is refused
  * just like a broken CHECK). Weight and RPE are checked after rounding to their column's
@@ -36,6 +42,8 @@ export const MAX_WEIGHT_KG_EXCLUSIVE = 10000;
 export const MIN_SET_RPE = 1;
 /** Highest RPE the server accepts on a set (same CHECK). */
 export const MAX_SET_RPE = 10;
+/** Longest WOD score text the server accepts (CHECK `char_length(score) <= 100`). */
+export const MAX_SET_SCORE_LENGTH = 100;
 
 /**
  * Rounds a kg weight to the 2 decimals its server column keeps (numeric(6, 2)).
@@ -65,6 +73,8 @@ export interface SetFieldsToCheck {
   rpe?: number | null;
   dropSetPosition?: number | null;
   durationSeconds?: number | null;
+  /** Free-text WOD score ("7 rounds + 12 reps"), already trimmed. */
+  score?: string | null;
 }
 
 /**
@@ -94,4 +104,28 @@ export function assertValidSetFields(fields: SetFieldsToCheck): void {
   if (fields.durationSeconds != null) {
     assertWholeInRange(fields.durationSeconds, 0, MAX_INTEGER, 'durationSeconds');
   }
+  if (fields.score != null && scoreLength(fields.score) > MAX_SET_SCORE_LENGTH) {
+    throw new RangeError(
+      `score must be at most ${MAX_SET_SCORE_LENGTH} characters, got ${scoreLength(fields.score)}`,
+    );
+  }
+}
+
+/**
+ * How Postgres's `char_length` counts a text: one per character (code point), so an emoji
+ * counts once — whereas JavaScript's `.length` counts it twice. Counting the server's way keeps
+ * a 100-character score with an emoji in it from being refused here but accepted there.
+ */
+function scoreLength(text: string): number {
+  return Array.from(text).length;
+}
+
+/**
+ * Throws a `RangeError` if `group` can't be stored as a superset number — the label that ties
+ * exercises done back-to-back together (`workout_exercises.superset_group`). The server column
+ * is a smallint with no other rule; groups start at 1 so "no superset" stays plainly `null`.
+ * Call it before saving a superset number.
+ */
+export function assertValidSupersetGroup(group: number): void {
+  assertWholeInRange(group, 1, MAX_SMALLINT, 'supersetGroup');
 }

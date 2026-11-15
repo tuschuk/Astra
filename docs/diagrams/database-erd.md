@@ -7,7 +7,7 @@ the rules a diagram cannot draw (who can see what, what happens automatically, w
 
 Source migrations: `20261114100000_identity.sql`, `20261114100100_training.sql`,
 `20261114110000_fix_exercise_delete.sql`, `20261114120000_exercises_slug.sql`,
-`20261114120100_library_seed.sql` (generated — see below), `20261114130000_signup_birthdate_gate.sql`
+`20261114120100_library_seed.sql` (generated — see below), `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
 not stamp the birthdate).
@@ -98,7 +98,7 @@ erDiagram
     uuid exercise_id FK "set null when the exercise is deleted"
     smallint position "0-based display order; not unique so offline reorders sync row by row"
     text notes "max 1000"
-    smallint superset_group "same number = performed as a superset"
+    smallint superset_group "null = alone; neighbours sharing a number = one superset"
     timestamptz created_at
     timestamptz updated_at
   }
@@ -111,8 +111,9 @@ erDiagram
     numeric weight_kg "0 or more; stored in kg, displayed per user unit"
     numeric rpe "1 to 10"
     boolean is_warmup "default false"
-    smallint drop_set_position "1-based; null when not part of a drop set"
-    integer duration_seconds "for timed work"
+    smallint drop_set_position "null on plain and top sets; drops are 1, 2, ..."
+    integer duration_seconds "for timed work, at least 0"
+    text score "WOD result, max 100 chars; display only"
     timestamptz created_at
     timestamptz updated_at
   }
@@ -130,6 +131,23 @@ index (`slug` where `owner_id is null`) makes re-seeding idempotent. Seeds only 
 leaving the catalog never deletes or re-identifies a row (renames are a deliberate content
 migration, because workout history references these ids).
 
+## Supersets, drop sets and timed / WOD work (B11)
+
+- **Superset** (`workout_exercises.superset_group`): exercises of one workout that sit next to
+  each other (by `position`) and share a number are one superset; null means the exercise stands
+  alone. The number has no meaning beyond "same group" and no CHECK on the server (the app keeps it
+  1…32767). The app only writes it through two operations (link with the exercise above / unlink),
+  which first rewrite the numbers to match what is shown, so a group never has one member.
+  Reordering does not rewrite groups; a member moved away from its neighbours just shows alone.
+- **Drop set** (`sets.drop_set_position`): saved as separate `sets` rows. The top set is null, each
+  drop after it is 1, 2, … (CHECK ≥ 1). Displays group a set with the one before it when its drop
+  number is higher than that set's (null counts as 0), so a drop set reads as one set.
+- **Timed or scored work**: `sets.duration_seconds` (CHECK ≥ 0) holds a time; `sets.score` (added
+  by `20261115024010_sets_score.sql`; CHECK
+  `char_length(score) <= 100`) holds free text such as "7 rounds + 12 reps". Either can sit
+  alongside reps and weight, or stand alone. Nothing parses `score`; timed or scored sets without
+  reps and weight add no volume and set no PRs.
+
 ## Enums
 
 - `workout_visibility`: `public` (any signed-in user), `followers` (people who follow the owner),
@@ -139,7 +157,7 @@ migration, because workout history references these ids).
 ## What happens automatically (triggers)
 
 - **Signup creates the identity rows — and enforces 18+.** Inserting into `auth.users` fires
-  `handle_new_user` (migration `20261114130000_signup_birthdate_gate.sql`). It first reads
+  `handle_new_user` (migration `20261114224613_signup_birthdate_gate.sql`). It first reads
   `birthdate` (`YYYY-MM-DD`) from the signup's user metadata (`raw_user_meta_data`) and **refuses
   the signup** (raises, rolling the whole account creation back) if it is missing, not a real date,
   or later than `current_date - 18 years`. Otherwise it inserts a `profiles` row (display name taken
@@ -192,7 +210,8 @@ the rows as they are, with no id remapping.
 ## The device mirror (not part of this database)
 
 This diagram draws the server. The phone keeps its own SQLite copy (`frontend/src/db/schema.ts`)
-of `exercises`, `workouts`, `workout_exercises` and `sets`. It has the same column names, but
+of `exercises`, `workouts`, `workout_exercises` and `sets` (schema version 2 since B11, which
+added `sets.score`; versions are append-only, upgraded on launch). It has the same column names, but
 uses text for uuids and timestamps and 0/1 for booleans, and it does not repeat the server's
 CHECK rules as SQL (instead the app checks every set against them before saving, through the
 shared `@training-math` `limits.ts`). It also has two tables of its own: `outbox`, the local changes waiting to upload,

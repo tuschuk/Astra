@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from '@jest/globals';
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react-native';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react-native';
 import { lbToKg, roundWeightKgForStorage } from '@training-math';
 
 import type { SqlDriver } from '@/db/driver';
@@ -14,6 +14,7 @@ import { libraryExerciseId } from '@/library/uuidv5';
 import { createPreparedDb, steadyOptions } from '@/test-utils/loggerTestKit';
 import { USER_ID } from '@/test-utils/workoutFixtures';
 import { startActiveWorkout, type ActiveWorkoutStore } from '@/workout/activeWorkout';
+import { supersetPlacement } from '@/workout/format';
 import { useWorkoutSnapshot } from '@/workout/useActiveWorkout';
 
 import { EntryCard } from './EntryCard';
@@ -24,9 +25,10 @@ const SQUAT = libraryExerciseId('squat');
 /** Renders one card per exercise in `store`, redrawing on every change, as the logger does. */
 function Cards({ store, db }: { store: ActiveWorkoutStore; db: SqlDriver }) {
   const snapshot = useWorkoutSnapshot(store);
+  const placement = supersetPlacement(snapshot?.entries ?? []);
   return (
     <>
-      {snapshot?.entries.map((entry) => (
+      {snapshot?.entries.map((entry, i) => (
         <EntryCard
           key={entry.id}
           store={store}
@@ -35,6 +37,8 @@ function Cards({ store, db }: { store: ActiveWorkoutStore; db: SqlDriver }) {
           db={db}
           userId={USER_ID}
           unit="lb"
+          linkedToPrevious={placement[i].linkedToPrevious}
+          inSuperset={placement[i].inSuperset}
         />
       ))}
     </>
@@ -300,6 +304,167 @@ describe('EntryCard', () => {
     expect(await screen.findByText('Last time: 3 × 5 @ 225 lb')).toBeTruthy();
     await screen.findByText('Squat');
     expect(screen.getAllByText(/^Last time:/)).toHaveLength(1);
+  });
+
+  describe('drop sets (LOG-12)', () => {
+    /** Types reps and weight into the bench card and presses `button` ("Log set" or "Drop"). */
+    async function log(reps: string, lb: string, button: 'Log set' | 'Drop') {
+      await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), reps);
+      await fireEvent.changeText(screen.getByLabelText('Weight in lb for Bench Press'), lb);
+      await fireEvent.press(screen.getByLabelText(button));
+    }
+
+    it('keeps Drop disabled until there is a set to drop from and something typed', async () => {
+      await setup();
+      expect(screen.getByLabelText('Drop').props.accessibilityState).toMatchObject({ disabled: true });
+      await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), '8');
+      expect(screen.getByLabelText('Drop').props.accessibilityState).toMatchObject({ disabled: true });
+      await fireEvent.press(screen.getByLabelText('Log set'));
+      await screen.findByText('8 reps');
+      expect(screen.getByLabelText('Drop').props.accessibilityState).toMatchObject({ disabled: false });
+    });
+
+    it('logs each drop under its top set, numbered as one set', async () => {
+      const { store } = await setup();
+      await log('8', '225', 'Log set');
+      await screen.findByText('8 × 225 lb');
+      await log('8', '185', 'Drop');
+      await screen.findByText('↳ 8 × 185 lb');
+      await log('10', '155', 'Drop');
+      await screen.findByText('↳ 10 × 155 lb');
+      await log('5', '225', 'Log set');
+      await screen.findByText('5 × 225 lb');
+
+      expect(store.getSnapshot().entries[0].sets.map((s) => s.drop_set_position)).toEqual([null, 1, 2, null]);
+      // Four rows saved, two sets as the lifter counts them.
+      expect(screen.getByText('Set 1')).toBeTruthy();
+      expect(screen.getByText('Set 2')).toBeTruthy();
+      expect(screen.queryByText('Set 3')).toBeNull();
+      expect(screen.getByLabelText('Remove drop 2 of set 1 of Bench Press')).toBeTruthy();
+    });
+
+    it('marks a whole drop set as warm-up with one W', async () => {
+      const { store } = await setup();
+      await log('8', '135', 'Log set');
+      await screen.findByText('8 × 135 lb');
+      await log('8', '95', 'Drop');
+      await screen.findByText('↳ 8 × 95 lb');
+      await fireEvent.press(screen.getByLabelText('Warm-up: set 1 of Bench Press'));
+      await screen.findByText('W · 8 × 135 lb');
+      expect(store.getSnapshot().entries[0].sets.map((s) => s.is_warmup)).toEqual([true, true]);
+      // The drop row does not repeat the W.
+      expect(screen.getByText('↳ 8 × 95 lb')).toBeTruthy();
+    });
+
+    it('removing a drop set’s top row removes the whole drop set, never orphaning its drops', async () => {
+      const { store } = await setup();
+      await log('5', '135', 'Log set');
+      await screen.findByText('5 × 135 lb');
+      await log('8', '225', 'Log set');
+      await screen.findByText('8 × 225 lb');
+      await log('8', '185', 'Drop');
+      await screen.findByText('↳ 8 × 185 lb');
+      await fireEvent.press(screen.getByLabelText('Remove set 2 of Bench Press'));
+      await waitFor(() => expect(screen.queryByText('↳ 8 × 185 lb')).toBeNull());
+      expect(store.getSnapshot().entries[0].sets.map((s) => s.reps)).toEqual([5]);
+    });
+
+    it('removes one drop, leaving the rest of the set', async () => {
+      const { store } = await setup();
+      await log('8', '225', 'Log set');
+      await screen.findByText('8 × 225 lb');
+      await log('8', '185', 'Drop');
+      await screen.findByText('↳ 8 × 185 lb');
+      await fireEvent.press(screen.getByLabelText('Remove drop 1 of set 1 of Bench Press'));
+      expect(await screen.findByText('8 × 225 lb')).toBeTruthy();
+      expect(screen.queryByText('↳ 8 × 185 lb')).toBeNull();
+      expect(store.getSnapshot().entries[0].sets).toHaveLength(1);
+    });
+  });
+
+  describe('timed and scored work (LOG-13)', () => {
+    it('opens Time and Score boxes, and logs a time alone', async () => {
+      const { store } = await setup();
+      expect(screen.queryByLabelText('Time for Bench Press')).toBeNull();
+      await fireEvent.press(screen.getByLabelText('Timed work for Bench Press'));
+      expect(screen.getByLabelText('Timed work for Bench Press').props.accessibilityState).toMatchObject({
+        checked: true,
+      });
+      await fireEvent.changeText(screen.getByLabelText('Time for Bench Press'), '4:32');
+      expect(screen.getByLabelText('Log set').props.accessibilityState).toMatchObject({ disabled: false });
+      await fireEvent.press(screen.getByLabelText('Log set'));
+      expect(await screen.findByText('4:32')).toBeTruthy();
+      expect(store.getSnapshot().entries[0].sets[0]).toMatchObject({ duration_seconds: 272, reps: null, score: null });
+    });
+
+    it('logs reps with a time, and a score alone', async () => {
+      const { store } = await setup();
+      await fireEvent.press(screen.getByLabelText('Timed work for Bench Press'));
+      await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), '100');
+      await fireEvent.changeText(screen.getByLabelText('Time for Bench Press'), '7:32');
+      await fireEvent.press(screen.getByLabelText('Log set'));
+      await screen.findByText('100 reps · 7:32');
+
+      await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), '');
+      await fireEvent.changeText(screen.getByLabelText('Time for Bench Press'), '');
+      await fireEvent.changeText(screen.getByLabelText('Score for Bench Press'), '7 rounds + 12 reps');
+      await fireEvent.press(screen.getByLabelText('Log set'));
+      expect(await screen.findByText('7 rounds + 12 reps')).toBeTruthy();
+      expect(store.getSnapshot().entries[0].sets.map((s) => [s.reps, s.duration_seconds, s.score])).toEqual([
+        [100, 452, null],
+        [null, null, '7 rounds + 12 reps'],
+      ]);
+    });
+
+    it('closing Timed empties its boxes, so nothing hidden is logged', async () => {
+      const { store } = await setup();
+      await fireEvent.press(screen.getByLabelText('Timed work for Bench Press'));
+      await fireEvent.changeText(screen.getByLabelText('Time for Bench Press'), '60');
+      await fireEvent.changeText(screen.getByLabelText('Score for Bench Press'), 'AMRAP');
+      await fireEvent.press(screen.getByLabelText('Timed work for Bench Press'));
+      expect(screen.queryByLabelText('Time for Bench Press')).toBeNull();
+      expect(screen.getByLabelText('Log set').props.accessibilityState).toMatchObject({ disabled: true });
+      await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), '5');
+      await fireEvent.press(screen.getByLabelText('Log set'));
+      await screen.findByText('5 reps');
+      expect(store.getSnapshot().entries[0].sets[0]).toMatchObject({ duration_seconds: null, score: null });
+      // Reopened, the boxes start empty.
+      await fireEvent.press(screen.getByLabelText('Timed work for Bench Press'));
+      expect(screen.getByLabelText('Time for Bench Press').props.value).toBe('');
+    });
+
+    it('refuses a time it cannot read, saving nothing', async () => {
+      const { store } = await setup();
+      await fireEvent.press(screen.getByLabelText('Timed work for Bench Press'));
+      await fireEvent.changeText(screen.getByLabelText('Time for Bench Press'), '4,32');
+      await fireEvent.press(screen.getByLabelText('Log set'));
+      expect(await screen.findByText('Enter the time as seconds or m:ss, like 90 or 4:32.')).toBeTruthy();
+      expect(store.getSnapshot().entries[0].sets).toEqual([]);
+    });
+  });
+
+  describe('supersets (LOG-11)', () => {
+    it('links a card with the one above, badges both, and unlinks again', async () => {
+      const { store } = await setup([BENCH, SQUAT]);
+      await screen.findByText('Squat');
+      // The first card has nothing above it to link to.
+      expect(screen.queryByLabelText('Superset Bench Press with the exercise above')).toBeNull();
+      const toggle = screen.getByLabelText('Superset Squat with the exercise above');
+      expect(toggle.props.accessibilityState).toMatchObject({ checked: false });
+      expect(screen.queryByText('Superset')).toBeNull();
+
+      await fireEvent.press(toggle);
+      expect(await screen.findAllByText('Superset')).toHaveLength(2);
+      expect(screen.getByLabelText('Superset Squat with the exercise above').props.accessibilityState).toMatchObject({
+        checked: true,
+      });
+      expect(store.getSnapshot().entries.map((e) => e.superset_group)).toEqual([1, 1]);
+
+      await fireEvent.press(screen.getByLabelText('Superset Squat with the exercise above'));
+      await screen.findByLabelText('Superset Squat with the exercise above');
+      expect(store.getSnapshot().entries.map((e) => e.superset_group)).toEqual([null, null]);
+      expect(screen.queryByText('Superset')).toBeNull();
+    });
   });
 
   it('shows the previous session’s sets as "Last time", never this workout’s', async () => {
