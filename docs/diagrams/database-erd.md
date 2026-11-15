@@ -7,7 +7,9 @@ the rules a diagram cannot draw (who can see what, what happens automatically, w
 
 Source migrations: `20261114100000_identity.sql`, `20261114100100_training.sql`,
 `20261114110000_fix_exercise_delete.sql`, `20261114120000_exercises_slug.sql`,
-`20261114120100_library_seed.sql` (generated — see below), `20261114224613_signup_birthdate_gate.sql`
+`20261114120100_library_seed.sql` (generated — see below), `20261115024010_sets_score.sql`,
+`20261115031049_sets_notes.sql`, `20261115035806_personal_records.sql`,
+`20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
 not stamp the birthdate).
@@ -26,6 +28,9 @@ erDiagram
   workouts ||--o{ workout_exercises : "contains, in position order"
   exercises |o--o{ workout_exercises : "exercise_id (null if exercise deleted)"
   workout_exercises ||--o{ sets : "contains, in position order"
+  profiles ||--o{ personal_records : "user_id holds"
+  exercises ||--o{ personal_records : "exercise_id (cascade)"
+  sets ||--o{ personal_records : "source_set_id proves (cascade)"
 
   auth_users {
     uuid id PK "managed by Supabase Auth"
@@ -118,6 +123,18 @@ erDiagram
     timestamptz created_at
     timestamptz updated_at
   }
+
+  personal_records {
+    uuid id PK "deterministic: uuidv5(PR namespace, user:exercise:kind:reps)"
+    uuid user_id FK
+    uuid exercise_id FK
+    pr_kind kind "true1rm, repMax or e1rm"
+    smallint reps "rep-max books only, 2 or more; null otherwise"
+    numeric value_kg "current best, more than 0, 3 decimals"
+    uuid source_set_id FK "the set holding the record"
+    timestamptz created_at
+    timestamptz updated_at
+  }
 ```
 
 ## The launch library inside `exercises`
@@ -159,11 +176,40 @@ Each level has its own column and cap (all `char_length` CHECKs, so an emoji cou
 `limits.ts`). Notes need no RLS of their own: they are columns on rows the policies below already
 cover, so a note is visible to exactly whoever may see its workout.
 
+## Personal records (B13)
+
+`personal_records` (migration `20261115035806_personal_records.sql`) holds **one row per record
+book**: user × exercise × kind, plus the rep count for rep maxes. It stores the current best and the
+set that proves it. It is not a log of every PR ever hit. The three kinds:
+
+- `true1rm`: the heaviest single.
+- `repMax`: the heaviest weight for exactly `reps` reps, one book per rep count.
+- `e1rm`: the best Epley estimate from any set.
+
+Volume is never a record. A CHECK ties `reps` to `repMax` (set exactly when the kind is
+`repMax`), and a unique index on (user, exercise, kind, `coalesce(reps, 0)`) allows only one row
+per book.
+
+- **The phone writes it.** At finish the app folds the full local history of each exercise in the
+  workout through `@training-math` (`recordBooks`) and writes only books that **improved**, in the
+  same transaction as the workout. The row ids are deterministic per book, so two devices that
+  improve the same book offline upsert one row (the last write wins) instead of colliding.
+- **Keep-best trigger** (`keep_best_record` → `private.keep_best_personal_record`, runs before
+  `set_updated_at`): if an update would **lower** `value_kg`, it keeps the stored value,
+  `source_set_id`, `kind`, `reps` and `exercise_id`, and lets the update succeed. It never raises.
+  The row still gets a fresh `updated_at`, so the next download repairs the device. This covers a
+  fresh device that finishes a lighter set before its first pull. A tie is not "lower", so it
+  replaces the source set (the value stays the same). **B14 must rework this trigger** when it
+  builds legitimate demotion (deleting a record-setting set).
+- **Cascades**: deleting the source set, or the exercise, deletes the record row.
+
 ## Enums
 
 - `workout_visibility`: `public` (any signed-in user), `followers` (people who follow the owner),
   `private` (owner only). Used by `workouts.visibility` and as the per-user default in
   `user_settings`.
+- `pr_kind`: `true1rm`, `repMax`, `e1rm`. These are exactly the app's `PrKind` names in
+  `@training-math`. Used by `personal_records.kind`.
 
 ## What happens automatically (triggers)
 
@@ -197,6 +243,7 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `exercises` | launch library (`owner_id` null) plus your own | create, update, delete only your own |
 | `workouts` | per the visibility rule below | insert, update, delete only your own |
 | `workout_exercises`, `sets` | visible when their workout is | only the workout's owner |
+| `personal_records` | only your own (B25 will widen this for public profiles) | only your own, and `source_set_id` must be a set in one of your workouts (`private.owns_set`) |
 
 **Workout visibility rule** (`private.workout_visible`): you always see your own; a block in either
 direction hides everything; otherwise `public` is open to any signed-in user, `followers` requires
@@ -210,7 +257,8 @@ they can see rows the caller's own RLS would hide.
   exercises, workouts, their entries and sets.
 - Deleting a workout cascades to its `workout_exercises` and their `sets`.
 - Deleting an exercise keeps the history: `workout_exercises.exercise_id` becomes null rather than
-  deleting the logged work.
+  deleting the logged work. Its `personal_records` rows are deleted.
+- Deleting a set (or the workout holding it) deletes any `personal_records` row that cites it.
 
 ## Why client-generated primary keys
 
@@ -221,8 +269,9 @@ the rows as they are, with no id remapping.
 ## The device mirror (not part of this database)
 
 This diagram draws the server. The phone keeps its own SQLite copy (`frontend/src/db/schema.ts`)
-of `exercises`, `workouts`, `workout_exercises` and `sets` (schema version 3 since B12: version 2 (B11)
-added `sets.score`, version 3 added `sets.notes`; versions are append-only, upgraded on launch). It has the same column names, but
+of `exercises`, `workouts`, `workout_exercises`, `sets` and `personal_records` (schema version 4
+since B13: version 2 (B11) added `sets.score`, version 3 added `sets.notes`, version 4 added
+`personal_records`; versions are append-only, upgraded on launch). It has the same column names, but
 uses text for uuids and timestamps and 0/1 for booleans, and it does not repeat the server's
 CHECK rules as SQL (instead the app checks every set against them before saving, through the
 shared `@training-math` `limits.ts`). It also has two tables of its own: `outbox`, the local changes waiting to upload,
@@ -243,5 +292,9 @@ and `sync_state`, the download bookmarks. What this means for the server:
   lives only in the device mirror and is never queued; finishing it stamps `ended_at` and queues
   the workout with all its entries and sets in one transaction (B08 active-workout store). So
   every workout the app uploads has an `ended_at`, though the column stays nullable.
-- **Weights and RPE arrive already rounded** to their column's decimals (`weight_kg` 2, `rpe` 1),
-  so the server's numeric rounding changes nothing and a download matches the device exactly.
+- **Weights and RPE arrive already rounded** to their column's decimals (`weight_kg` 2, `rpe` 1,
+  `personal_records.value_kg` 3), so the server's numeric rounding changes nothing and a download
+  matches the device exactly.
+- **Personal records upload after sets** (they cite them) and download on their own bookmark
+  (`pull_cursor:personal_records`), after the workout trees. A record row has no parent workout, so
+  it does not touch the root.

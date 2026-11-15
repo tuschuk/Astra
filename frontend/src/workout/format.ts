@@ -10,7 +10,7 @@
  */
 import { displayWeight, MAX_SET_SCORE_LENGTH, type WeightUnit } from '@training-math';
 
-import type { SetRow, WorkoutExerciseRow } from '@/db/dao';
+import type { PersonalRecordRow, SetRow, WorkoutExerciseRow } from '@/db/dao';
 
 /** The two parts of a set that make up its load: how many reps at what weight. */
 type RepsAndWeight = Pick<SetRow, 'reps' | 'weight_kg'>;
@@ -182,6 +182,37 @@ export function formatLastTime(sets: readonly LastTimeSet[], unit: WeightUnit): 
       return times(time ?? '—');
     })
     .join(', ');
+}
+
+/** The parts of a stored personal record the PR text reads. */
+type PrintableRecord = Pick<PersonalRecordRow, 'kind' | 'reps' | 'value_kg'>;
+
+/**
+ * The short name of a record book (LOG-4): "1RM" for the heaviest single, "e1RM" for the best
+ * estimated one-rep max, "5RM" for the heaviest weight for exactly 5 reps.
+ */
+export function prBookLabel(record: Pick<PersonalRecordRow, 'kind' | 'reps'>): string {
+  if (record.kind === 'true1rm') return '1RM';
+  if (record.kind === 'e1rm') return 'e1RM';
+  return `${record.reps ?? '?'}RM`;
+}
+
+/**
+ * A lifter's current records for one exercise as one line, in the order given (see
+ * `currentPrs`): "1RM 225 lb · e1RM 243.1 lb · 5RM 205 lb". The e1RM is an estimate (Epley) —
+ * the "e" says so. Returns "" when there are no records.
+ */
+export function formatPrLine(records: readonly PrintableRecord[], unit: WeightUnit): string {
+  return records.map((r) => `${prBookLabel(r)} ${formatWeight(r.value_kg, unit)}`).join(' · ');
+}
+
+/**
+ * The badge on a set that holds records: "PR · 5RM", or "PR · 1RM · e1RM" when one set holds
+ * several books. Returns "" when the set holds none.
+ */
+export function formatPrBadge(records: readonly Pick<PersonalRecordRow, 'kind' | 'reps'>[]): string {
+  if (records.length === 0) return '';
+  return ['PR', ...records.map(prBookLabel)].join(' · ');
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;

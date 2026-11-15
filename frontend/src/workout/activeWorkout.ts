@@ -16,7 +16,8 @@
  *
  * Sync: while the workout is in progress it lives only on the phone (written through the DAO's
  * draft path, never queued for upload). `finish` stamps the end time and queues the whole
- * workout for upload in a single transaction — the server only ever sees finished workouts.
+ * workout for upload in a single transaction — the server only ever sees finished workouts. The
+ * same transaction saves and queues the personal records the workout set (LOG-4, `prs.ts`).
  * See docs/feature_plans/active-workout-store.md for why.
  *
  * Every value is checked against the server's rules (`assertValidSetFields` in the shared
@@ -50,6 +51,8 @@ import {
 } from '@/db/dao';
 import { placeholders, type SqlDriver, type SqlExecutor } from '@/db/driver';
 import { newUuid } from '@/lib/ids';
+
+import { improvedRecords } from './prs';
 
 /** One exercise in the active workout, with its sets ordered by position. */
 export interface ActiveEntry extends WorkoutExerciseRow {
@@ -200,7 +203,11 @@ export interface ActiveWorkoutStore {
    * two weren't linked.
    */
   unlinkFromPrevious(entryId: string): Promise<void>;
-  /** Ends the workout and hands it to sync. Returns the finished workout row. */
+  /**
+   * Ends the workout and hands it to sync, together with any personal records it set (B13 —
+   * worked out on the phone from the lifter's full history; see `prs.ts`). Returns the
+   * finished workout row.
+   */
   finish(): Promise<WorkoutRow>;
   /** Deletes the in-progress workout from the phone entirely (never uploaded). */
   discard(): Promise<void>;
@@ -747,12 +754,17 @@ function createStore(
         // not turn into an upload the server refuses forever, so the end is never before the start.
         const endedAt = Date.parse(now) < Date.parse(snapshot.workout.started_at) ? snapshot.workout.started_at : now;
         const workout: WorkoutRow = { ...snapshot.workout, ended_at: endedAt };
+        // PR detection on finish (LOG-4): which record books this workout (or older history)
+        // improved. Read here, inside the store's one-at-a-time queue, then saved in the SAME
+        // transaction as the workout — a killed app can never sync the workout without its PRs.
+        const personalRecords = await improvedRecords(db, userId, snapshot.entries, now);
         await writeLocalTree(
           db,
           {
             workouts: [workout],
             workout_exercises: snapshot.entries.map(({ sets: _nested, ...entry }) => entry),
             sets: snapshot.entries.flatMap((e) => e.sets),
+            personal_records: personalRecords,
           },
           { now },
         );

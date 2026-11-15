@@ -483,6 +483,47 @@ describe('EntryCard', () => {
     await screen.findByText('Squat');
     expect(screen.getAllByText(/^Last time:/)).toHaveLength(1);
   });
+
+  it('B13: the last-time panel shows the previous sets AND the current PRs, and links to History', async () => {
+    const db = await createPreparedDb();
+    const past = await startActiveWorkout(db, USER_ID, steadyOptions('2026-11-10T09:00:00.000Z'));
+    const pastBench = await past.addExercise(BENCH);
+    await past.logSet(pastBench.id, { reps: 1, weight: { value: 225, unit: 'lb' } });
+    await past.logSet(pastBench.id, { reps: 5, weight: { value: 205, unit: 'lb' } });
+    await past.finish();
+
+    const store = await startActiveWorkout(db, USER_ID, steadyOptions('2026-11-14T09:00:00.000Z'));
+    await store.addExercise(BENCH);
+    await store.addExercise(SQUAT);
+    const opened: string[] = [];
+    const snapshot = store.getSnapshot();
+    await render(
+      <>
+        {snapshot.entries.map((entry) => (
+          <EntryCard
+            key={entry.id}
+            store={store}
+            entry={entry}
+            entryCount={snapshot.entries.length}
+            db={db}
+            userId={USER_ID}
+            unit="lb"
+            onOpenHistory={(id) => opened.push(id)}
+          />
+        ))}
+      </>,
+    );
+    expect(await screen.findByText('Last time: 1 @ 225 lb, 5 @ 205 lb')).toBeTruthy();
+    // 205 × 5 → e1RM 239.2 lb beats the single's 225; the 1RM and 5RM books are the real lifts.
+    expect(screen.getByText('PRs: 1RM 225 lb · e1RM 239.2 lb · 5RM 205 lb')).toBeTruthy();
+    // Squat has no records yet: no PR line for it, and no error.
+    await screen.findByText('Squat');
+    expect(screen.getAllByText(/^PRs:/)).toHaveLength(1);
+
+    await fireEvent.press(screen.getByLabelText('History of Bench Press'));
+    expect(opened).toEqual([BENCH]);
+    expect(screen.getByLabelText('History of Squat')).toBeTruthy();
+  });
 });
 
 describe('EntryCard notes (LOG-3)', () => {

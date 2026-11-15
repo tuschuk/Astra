@@ -231,6 +231,52 @@ describe('writeLocalTree', () => {
     await writeLocalTree(db, {});
     expect(await outboxSize(db)).toBe(0);
   });
+
+  it('B13: saves and queues personal records with the tree, last, without touching any root', async () => {
+    const db = await freshDb();
+    const listener = jest.fn();
+    onLocalWrite(db, listener);
+    const record = {
+      id: 'd0000000-0000-4000-8000-000000000001',
+      user_id: USER_ID,
+      exercise_id: ENTRIES[0].exercise_id as string,
+      kind: 'repMax' as const,
+      reps: 5,
+      value_kg: 105,
+      source_set_id: SETS[2].id,
+      created_at: WORKOUT.created_at,
+      updated_at: WORKOUT.created_at,
+    };
+    await writeLocalTree(
+      db,
+      { workouts: [WORKOUT], workout_exercises: ENTRIES, sets: SETS, personal_records: [record] },
+      { now: LATER },
+    );
+    expect(await getRowsByIds(db, 'personal_records', [record.id])).toEqual([{ ...record, updated_at: LATER }]);
+    expect((await pendingRows(db, 'personal_records')).map((p) => p.rowId)).toEqual([record.id]);
+    expect(listener.mock.calls).toEqual([['workouts'], ['workout_exercises'], ['sets'], ['personal_records']]);
+  });
+
+  it('B13: a record is rolled back with the rest when the tree fails', async () => {
+    const db = await freshDb();
+    const orphan = { ...makeSet(0, 7), workout_exercise_id: 'ffffffff-ffff-4fff-8fff-ffffffffffff' };
+    const record = {
+      id: 'd0000000-0000-4000-8000-000000000002',
+      user_id: USER_ID,
+      exercise_id: ENTRIES[0].exercise_id as string,
+      kind: 'e1rm' as const,
+      reps: null,
+      value_kg: 120,
+      source_set_id: SETS[1].id,
+      created_at: LATER,
+      updated_at: LATER,
+    };
+    await expect(
+      writeLocalTree(db, { workouts: [WORKOUT], workout_exercises: ENTRIES, sets: [...SETS, orphan], personal_records: [record] }),
+    ).rejects.toThrow();
+    expect(await getRowsByIds(db, 'personal_records', [record.id])).toEqual([]);
+    expect(await outboxSize(db)).toBe(0);
+  });
 });
 
 describe('upsertRows', () => {

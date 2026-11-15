@@ -1,9 +1,12 @@
 /**
  * EntryCard — one exercise in the workout being logged.
  *
- * What it shows: the exercise's name (with a "Superset" badge when it is part of one), a "Last
- * time" line with the work sets from the previous session of this exercise (LOG-5; warm-ups left
- * out, absent if it has never been logged), and every set logged so far in this workout
+ * What it shows: the exercise's name (with a "Superset" badge when it is part of one), then the
+ * "last time" panel (LOG-5): a "Last time" line with the work sets from the previous session of
+ * this exercise (warm-ups left out, absent if it has never been logged), a "PRs" line with the
+ * lifter's current records for it ("PRs: 1RM 225 lb · e1RM 243.1 lb · 5RM 205 lb"; absent until
+ * a record exists), and a **History** link to every past session of it (LOG-4). Then every set
+ * logged so far in this workout
  * ("Set 2 · W · 8 × 135 lb", "Set 3 · 5 × 225 lb @ RPE 8", "Set 4 · 4:32"). Sets are numbered
  * the way the lifter counts them: a drop set is one "Set n" with its drops on "↳" rows under it.
  *
@@ -50,7 +53,7 @@ import { Button } from '@/components/ui/Button';
 import { FormError } from '@/components/ui/FormError';
 import { Body, SectionLabel } from '@/components/ui/Text';
 import type { SqlExecutor } from '@/db/driver';
-import type { SetRow } from '@/db/dao';
+import type { PersonalRecordRow, SetRow } from '@/db/dao';
 import type { Equipment } from '@/library/exercises';
 import {
   nextDropPosition,
@@ -61,6 +64,7 @@ import {
 } from '@/workout/activeWorkout';
 import {
   formatLastTime,
+  formatPrLine,
   formatSet,
   groupDropSets,
   parseDurationInput,
@@ -69,6 +73,7 @@ import {
   textErrorMessage,
 } from '@/workout/format';
 import { exerciseInfo, lastSessionSets, type ExerciseInfo, type LastSession } from '@/workout/history';
+import { currentPrs } from '@/workout/prs';
 import { useAutosaveText } from '@/workout/useAutosaveText';
 import { colors, layout, radii, spacing, type } from '@/theme';
 
@@ -89,30 +94,39 @@ interface EntryCardProps {
   linkedToPrevious?: boolean;
   /** True when this exercise is part of any superset on screen (the card shows a badge). */
   inSuperset?: boolean;
+  /** Opens this exercise's history screen (LOG-4); the card's "History" link is hidden without it. */
+  onOpenHistory?: (exerciseId: string) => void;
 }
 
 /** What the card looks up once, when it first appears. */
 interface EntryHistory {
   info: ExerciseInfo | null;
   lastTime: LastSession | null;
+  /** The lifter's current records for this exercise (B13), best-first; empty when none yet. */
+  prs: PersonalRecordRow[];
 }
 
 /** The library's equipment kind for movements done with the lifter's own body (see library/exercises.ts). */
 const BODYWEIGHT_EQUIPMENT: Equipment = 'Bodyweight';
 
 /**
- * Looks up the exercise's name, equipment and previous session once, when the card appears.
- * The previous session is finished history, so it cannot change during this workout — there is
- * nothing to refresh later.
+ * Looks up the exercise's name, equipment, previous session and current records once, when the
+ * card appears. The previous session is finished history, and records only change when a
+ * workout is finished (never while this one is being logged), so there is nothing to refresh
+ * later.
  */
 function useEntryHistory(db: SqlExecutor, userId: string, exerciseId: string | null, workoutId: string): EntryHistory {
-  const [history, setHistory] = useState<EntryHistory>({ info: null, lastTime: null });
+  const [history, setHistory] = useState<EntryHistory>({ info: null, lastTime: null, prs: [] });
   useEffect(() => {
     if (!exerciseId) return;
     let cancelled = false;
-    Promise.all([exerciseInfo(db, userId, exerciseId), lastSessionSets(db, userId, exerciseId, workoutId)])
-      .then(([info, lastTime]) => {
-        if (!cancelled) setHistory({ info, lastTime });
+    Promise.all([
+      exerciseInfo(db, userId, exerciseId),
+      lastSessionSets(db, userId, exerciseId, workoutId),
+      currentPrs(db, userId, exerciseId),
+    ])
+      .then(([info, lastTime, prs]) => {
+        if (!cancelled) setHistory({ info, lastTime, prs });
       })
       .catch((error: unknown) => console.warn('Could not read this exercise’s history', error));
     return () => {
@@ -131,8 +145,9 @@ export function EntryCard({
   unit,
   linkedToPrevious = false,
   inSuperset = false,
+  onOpenHistory,
 }: EntryCardProps) {
-  const { info, lastTime } = useEntryHistory(db, userId, entry.exercise_id, entry.workout_id);
+  const { info, lastTime, prs } = useEntryHistory(db, userId, entry.exercise_id, entry.workout_id);
   const label = info?.name ?? 'Exercise';
   const bodyweight = info?.equipment === BODYWEIGHT_EQUIPMENT;
   const [reps, setReps] = useState('');
@@ -273,6 +288,7 @@ export function EntryCard({
   const hasSets = entry.sets.length > 0;
   const logicalSets = groupDropSets(entry.sets);
   const lastTimeText = lastTime ? formatLastTime(lastTime.sets, unit) : '';
+  const prLine = formatPrLine(prs, unit);
   const weightLabel = bodyweight ? `Added weight in ${unit} for ${label}` : `Weight in ${unit} for ${label}`;
 
   return (
@@ -317,10 +333,29 @@ export function EntryCard({
         </View>
       </View>
 
+      {/* The "last time" panel (LOG-5): previous session's work sets, current PRs, History link. */}
       {lastTimeText !== '' ? (
         <Body variant="small" style={styles.lastTime}>
           Last time: {lastTimeText}
         </Body>
+      ) : null}
+      {prLine !== '' ? (
+        <Body variant="small" style={styles.lastTime}>
+          PRs: {prLine}
+        </Body>
+      ) : null}
+      {onOpenHistory && entry.exercise_id ? (
+        <Pressable
+          accessibilityRole="link"
+          accessibilityLabel={`History of ${label}`}
+          onPress={() => entry.exercise_id && onOpenHistory(entry.exercise_id)}
+          hitSlop={spacing.xs}
+          style={({ pressed }) => [styles.historyLink, pressed && styles.iconPressed]}
+        >
+          <Body variant="small" style={styles.historyText}>
+            History
+          </Body>
+        </Pressable>
       ) : null}
 
       {/* The exercise's note (LOG-3): its text, or a muted "Add note"; tapping opens the box. */}
@@ -686,6 +721,15 @@ const styles = StyleSheet.create({
   },
   lastTime: {
     color: colors.muted,
+  },
+  historyLink: {
+    alignSelf: 'flex-start',
+    minHeight: layout.minTouchTarget,
+    justifyContent: 'center',
+    borderRadius: radii.md,
+  },
+  historyText: {
+    color: colors.accent,
   },
   setRow: {
     flexDirection: 'row',

@@ -39,7 +39,7 @@ export {
   roundWeightKgForStorage,
 } from './limits.ts';
 export type { SetFieldsToCheck } from './limits.ts';
-export { classifyPrs, recordsFromSets } from './prs.ts';
-export type { PrCandidateSet, PrEvent, PrKind, PrRecords } from './prs.ts';
+export { beatsRecord, classifyPrs, compareRecordBooks, recordBooks, recordsFromSets } from './prs.ts';
+export type { PrCandidateSet, PrEvent, PrKind, PrRecords, RecordBook, RefSet } from './prs.ts';
 export { sessionVolumeKg, setVolumeKg } from './volume.ts';
 export type { VolumeSet } from './volume.ts';

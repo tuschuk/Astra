@@ -1,5 +1,5 @@
 /**
- * The sync engine's view of the server: four operations, nothing more.
+ * The sync engine's view of the server: six operations, nothing more.
  *
  * Why an interface: the real implementation (`supabaseTransport.ts`) talks to
  * Supabase over the network; tests use an in-memory fake server
@@ -13,7 +13,15 @@
  * Every method throws on failure (no signal, server error, refused by
  * security rules). The engine treats any throw as "try again later".
  */
-import type { ExerciseRow, RowByTable, SetRow, SyncedTable, WorkoutExerciseRow, WorkoutRow } from '@/db/dao';
+import type {
+  ExerciseRow,
+  PersonalRecordRow,
+  RowByTable,
+  SetRow,
+  SyncedTable,
+  WorkoutExerciseRow,
+  WorkoutRow,
+} from '@/db/dao';
 
 /**
  * A bookmark in a download: "everything after this row". Rows are read in
@@ -65,4 +73,10 @@ export interface SyncTransport {
    * own customs — the server's security rules decide), changed after `after`.
    */
   pullExercises(after: PullCursor | null, limit: number): Promise<ExerciseRow[]>;
+
+  /**
+   * One page of the user's own personal records (B13) changed after `after`, ordered by
+   * (updated_at, id) — the records another device (or the server's keep-best rule) changed.
+   */
+  pullPersonalRecords(userId: string, after: PullCursor | null, limit: number): Promise<PersonalRecordRow[]>;
 }

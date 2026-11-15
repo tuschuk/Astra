@@ -40,7 +40,7 @@ function columnsOf(tbl: SyncedTable): string {
 /** Builds a `SyncTransport` that talks to Supabase through `client`. */
 export function createSupabaseTransport(client: SupabaseClient): SyncTransport {
   /** One page of a table after a cursor, optionally narrowed to one user. */
-  async function page<T extends 'workouts' | 'exercises'>(
+  async function page<T extends 'workouts' | 'exercises' | 'personal_records'>(
     tbl: T,
     after: PullCursor | null,
     limit: number,
@@ -69,6 +69,9 @@ export function createSupabaseTransport(client: SupabaseClient): SyncTransport {
     pullWorkouts: (userId, after, limit) => page('workouts', after, limit, userId),
 
     pullExercises: (after, limit) => page('exercises', after, limit),
+
+    // numeric(8,3) arrives as a JSON number, exactly like sets.weight_kg.
+    pullPersonalRecords: (userId, after, limit) => page('personal_records', after, limit, userId),
 
     pullWorkoutExercises: (workoutIds) => childrenOf('workout_exercises', 'workout_id', workoutIds),
 

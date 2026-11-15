@@ -1,10 +1,11 @@
 /**
  * Reading the lifter's past workouts from the phone's database — the read side of the logger.
  *
- * Three questions the logger screens ask:
+ * Four questions the logger screens ask:
  *   - `listPastWorkouts`: which workouts have I finished? (the Workout tab's list)
  *   - `readWorkout`: what exactly was in this one? (the saved-workout screen)
  *   - `lastSessionSets`: what did I do on this exercise last time? (the "last time" line, LOG-5)
+ *   - `exerciseSessions`: every time I did this exercise (the per-exercise history screen, LOG-4)
  * plus `exerciseInfo`, the name (and equipment) to show for an exercise in the active workout.
  *
  * Two rules every query here follows:
@@ -159,6 +160,64 @@ export async function lastSessionSets(
     [workout.id, exerciseId],
   );
   return { workoutId: workout.id, startedAt: workout.started_at, sets: rows.map((r) => fromSqlRow('sets', r)) };
+}
+
+/** How many past sessions the per-exercise history screen lists (no paging yet — B09's precedent). */
+export const EXERCISE_SESSION_LIMIT = 50;
+
+/** One past session of one exercise: the workout it was in and that exercise's sets in it. */
+export interface ExerciseSession {
+  workoutId: string;
+  /** The workout's title, or null (the screen then shows its date). */
+  title: string | null;
+  startedAt: string;
+  /** Every set of the exercise in that workout, in logged order (both slots if it appeared twice). */
+  sets: SetRow[];
+}
+
+/**
+ * Every finished session of `exerciseId` (LOG-4's history screen), newest first, at most
+ * `limit`: each workout that has at least one logged set of it, with those sets in order. It is
+ * `lastSessionSets` widened from "the newest one" to "the newest N". Workouts still in progress
+ * and other users' workouts are never included.
+ */
+export async function exerciseSessions(
+  db: SqlExecutor,
+  userId: string,
+  exerciseId: string,
+  limit: number = EXERCISE_SESSION_LIMIT,
+): Promise<ExerciseSession[]> {
+  const workouts = await db.getAllAsync<{ id: string; title: string | null; started_at: string }>(
+    `select w.id, w.title, w.started_at from workouts w
+     where w.user_id = ? and w.ended_at is not null
+       and exists (
+         select 1 from workout_exercises we join sets s on s.workout_exercise_id = we.id
+         where we.workout_id = w.id and we.exercise_id = ?
+       )
+     order by w.started_at desc, w.id desc
+     limit ?`,
+    [userId, exerciseId, limit],
+  );
+  if (workouts.length === 0) return [];
+  const rows = await db.getAllAsync<Record<string, unknown>>(
+    `select ${columnsOf('sets', 's')}, we.workout_id as session_workout_id from sets s
+     join workout_exercises we on we.id = s.workout_exercise_id
+     where we.exercise_id = ? and we.workout_id in (${placeholders(workouts.length)})
+     order by we.position, we.id, s.position, s.id`,
+    [exerciseId, ...workouts.map((w) => w.id)],
+  );
+  const setsByWorkout = new Map<string, SetRow[]>();
+  for (const { session_workout_id, ...set } of rows) {
+    const list = setsByWorkout.get(String(session_workout_id)) ?? [];
+    list.push(fromSqlRow('sets', set));
+    setsByWorkout.set(String(session_workout_id), list);
+  }
+  return workouts.map((w) => ({
+    workoutId: w.id,
+    title: w.title ?? null,
+    startedAt: w.started_at,
+    sets: setsByWorkout.get(w.id) ?? [],
+  }));
 }
 
 /** What the logger needs to know about an exercise beyond its id. */

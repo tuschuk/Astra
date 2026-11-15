@@ -2,7 +2,9 @@
  * Active workout — the logger itself (LOG-2), shown full-screen without the tab bar.
  *
  * What it shows: the exercises of the workout in progress, in order, each as an EntryCard
- * (its sets, a reps / weight entry row in the lifter's unit, one-tap Repeat, "last time").
+ * (its sets, a reps / weight entry row in the lifter's unit, one-tap Repeat, and the "last
+ * time" panel: last session's sets, current PRs, and a History link to that exercise's
+ * history screen).
  *
  * What the lifter can do:
  *   - **Add exercise**: search the library and add the exercise at the end;
@@ -208,6 +210,10 @@ export default function ActiveWorkoutScreen() {
             unit={unit}
             linkedToPrevious={placement[index]?.linkedToPrevious}
             inSuperset={placement[index]?.inSuperset}
+            // Pushed on top: Back returns here with the workout exactly as it was.
+            onOpenHistory={(exerciseId) =>
+              router.push({ pathname: '/exercise-history/[exerciseId]', params: { exerciseId } })
+            }
           />
         )}
         ListHeaderComponent={header}

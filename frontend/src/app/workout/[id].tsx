@@ -7,7 +7,8 @@
  * exercises (LOG-11); a drop set is one numbered row with its drops joined by arrows (LOG-12).
  * Notes written in the logger show at all three levels (LOG-3): the workout's under its date
  * line, an exercise's under its name, and a set's as a muted line under that set (a drop's
- * marked "↳").
+ * marked "↳"). A set that currently holds a personal record wears a badge naming the record
+ * ("PR · 5RM", "PR · 1RM · e1RM") — B13, read from the phone's `personal_records`.
  *
  * This is what Finish opens, and what each row of the Workout tab's history opens — the
  * "reopens with every set intact" half of LOG-2. It reads straight from the phone's database, so it works offline.
@@ -27,9 +28,13 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
 import { useAppDatabase } from '@/db/useAppDatabase';
 import { useDisplayUnit } from '@/settings/displayUnit';
+import type { PersonalRecordRow } from '@/db/dao';
+import type { SqlExecutor } from '@/db/driver';
 import type { WeightUnit } from '@training-math';
+import { currentPrs } from '@/workout/prs';
 import {
   formatDropSet,
+  formatPrBadge,
   groupDropSets,
   supersetRuns,
   totalSets,
@@ -39,8 +44,32 @@ import {
 import { readWorkout, type SavedEntry, type SavedWorkout } from '@/workout/history';
 import { colors, spacing, type } from '@/theme';
 
-/** Where the screen is: reading, found, or not on this phone (or not this user's). */
-type LoadState = { status: 'loading' } | { status: 'found'; workout: SavedWorkout } | { status: 'missing' };
+/**
+ * Where the screen is: reading, found, or not on this phone (or not this user's). A found
+ * workout carries the records its sets currently hold, by set id (for the PR badges).
+ */
+type LoadState =
+  | { status: 'loading' }
+  | { status: 'found'; workout: SavedWorkout; recordsBySet: RecordsBySet }
+  | { status: 'missing' };
+
+/** Set id → the record books that set currently holds. */
+type RecordsBySet = ReadonlyMap<string, PersonalRecordRow[]>;
+
+/**
+ * The current records of every exercise in the workout, grouped by the set that holds them —
+ * read through `currentPrs`, the same reader as the logger's panel and the history screen.
+ */
+async function readRecordsBySet(db: SqlExecutor, userId: string, workout: SavedWorkout): Promise<RecordsBySet> {
+  const exerciseIds = [...new Set(workout.entries.map((e) => e.exercise_id).filter((id): id is string => id != null))];
+  const bySet = new Map<string, PersonalRecordRow[]>();
+  for (const exerciseId of exerciseIds) {
+    for (const record of await currentPrs(db, userId, exerciseId)) {
+      bySet.set(record.source_set_id, [...(bySet.get(record.source_set_id) ?? []), record]);
+    }
+  }
+  return bySet;
+}
 
 export default function SavedWorkoutScreen() {
   const router = useRouter();
@@ -58,8 +87,13 @@ export default function SavedWorkoutScreen() {
     if (!db || !userId || typeof id !== 'string') return;
     let cancelled = false;
     readWorkout(db, userId, id)
-      .then((workout) => {
-        if (!cancelled) setLoaded({ forId: id, state: workout ? { status: 'found', workout } : { status: 'missing' } });
+      .then(async (workout) => {
+        if (!workout) {
+          if (!cancelled) setLoaded({ forId: id, state: { status: 'missing' } });
+          return;
+        }
+        const recordsBySet = await readRecordsBySet(db, userId, workout);
+        if (!cancelled) setLoaded({ forId: id, state: { status: 'found', workout, recordsBySet } });
       })
       .catch((caught: unknown) => {
         console.warn('Saved workout: could not read it from the phone', caught);
@@ -92,6 +126,7 @@ export default function SavedWorkoutScreen() {
   }
 
   const { workout, entries } = state.workout;
+  const { recordsBySet } = state;
   const details = workoutDetailsLabel(workout, entries.length, totalSets(entries));
 
   return (
@@ -112,7 +147,7 @@ export default function SavedWorkoutScreen() {
             </SectionLabel>
           ) : null}
           {run.map((entry) => (
-            <SavedExercise key={entry.id} entry={entry} unit={unit} />
+            <SavedExercise key={entry.id} entry={entry} unit={unit} recordsBySet={recordsBySet} />
           ))}
         </Card>
       ))}
@@ -123,9 +158,18 @@ export default function SavedWorkoutScreen() {
 /**
  * One exercise of the saved workout: its name, then one row per set as the lifter thinks of
  * it — a drop set is a single row with its drops joined by arrows ("Set 2 · 8 × 225 lb →
- * 8 × 185 lb"), numbered with the other sets (LOG-12).
+ * 8 × 185 lb"), numbered with the other sets (LOG-12). A set that holds a record gets a badge
+ * naming the book(s) under its row ("PR · 5RM"); for a drop set, any segment's records count.
  */
-function SavedExercise({ entry, unit }: { entry: SavedEntry; unit: WeightUnit }) {
+function SavedExercise({
+  entry,
+  unit,
+  recordsBySet,
+}: {
+  entry: SavedEntry;
+  unit: WeightUnit;
+  recordsBySet: RecordsBySet;
+}) {
   return (
     <View style={styles.exercise}>
       <Body style={styles.name}>{entry.exerciseName ?? 'Deleted exercise'}</Body>
@@ -145,6 +189,7 @@ function SavedExercise({ entry, unit }: { entry: SavedEntry; unit: WeightUnit })
               </SectionLabel>
               <Body style={styles.setText}>{formatDropSet(segments, unit)}</Body>
             </View>
+            <PrBadge records={segments.flatMap((segment) => recordsBySet.get(segment.id) ?? [])} />
             {/* Each segment's note, in order; a drop's is marked "↳" so it reads as that drop's. */}
             {segments.map((segment, segmentIndex) =>
               segment.notes ? (
@@ -160,7 +205,25 @@ function SavedExercise({ entry, unit }: { entry: SavedEntry; unit: WeightUnit })
   );
 }
 
+/**
+ * The PR badge under a set (LOG-4): "PR · 1RM · e1RM" naming each record book the set holds
+ * right now, or nothing. Right after Finish these are exactly the PRs the session earned; on an
+ * older workout a badge means "this set still holds the record" (a beaten record moves on).
+ */
+function PrBadge({ records }: { records: readonly PersonalRecordRow[] }) {
+  const text = formatPrBadge(records);
+  if (text === '') return null;
+  return (
+    <SectionLabel size="small" style={[styles.prBadge, styles.setNote]}>
+      {text}
+    </SectionLabel>
+  );
+}
+
 const styles = StyleSheet.create({
+  prBadge: {
+    color: colors.accent,
+  },
   back: {
     alignSelf: 'flex-start',
     marginBottom: spacing.lg,

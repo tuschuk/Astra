@@ -114,7 +114,7 @@ describe('pushOutbox', () => {
     // The fake server refuses orphans and any client updated_at, so success proves both.
     const result = await pushOutbox(db, server);
     // Workouts go twice: first as parents, then again to re-touch the root.
-    expect(result.pushed).toEqual({ exercises: 0, workouts: 2, workout_exercises: 2, sets: 5 });
+    expect(result.pushed).toEqual({ exercises: 0, workouts: 2, workout_exercises: 2, sets: 5, personal_records: 0 });
     expect(server.upsertCalls.map((c) => c.tbl)).toEqual(['workouts', 'workout_exercises', 'sets', 'workouts']);
     expect(await outboxSize(db)).toBe(0);
   });
