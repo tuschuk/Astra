@@ -138,3 +138,18 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
 - B10 set-types follow-ups (`set-types`): device check of the entry card's new second row
   (Warm-up chip + Log set) and the per-set W toggle at phone width; the RPE error copy hard-codes
   "1 to 10" — build it from `limits.ts`'s RPE bounds if they are ever exported or changed.
+- B11 supersets-dropsets-timed follow-ups (`supersets-dropsets-timed`):
+  - **Migration file vs live version:** `backend/supabase/migrations/20261115100000_sets_score.sql`
+    was applied live as version `20261115024010` (rename declined by the permission layer). Rename
+    the file to match, along with B05's `20261114130000_signup_birthdate_gate.sql` (live
+    `20261114224613`), before anyone runs `supabase db push`.
+  - **Feed display of WOD entries (LOG-13 "and the feed")** waits for B20. The feed must print sets
+    through `formatSet` / `formatDropSet` and group with `supersetRuns` / `groupDropSets`.
+  - **Device check (Tristen):** the entry card's header now has four icon buttons (link, up, down,
+    remove) and the action row has two chips plus Drop + Log set. Check both at phone width, plus
+    the Timed row and the keyboard (`numbers-and-punctuation` for the Time box).
+  - A score-only set shows as "—" in the "Last time" one-liner (scores are left out by the plan).
+    Revisit if lifters find it confusing.
+  - Repeat after a drop copies the drop's number, so the copy shows as its own plain-looking set
+    (plan Risk 3, unchanged NFR-2 behaviour).
+  - `mmdc` was not permitted for the headless builder again; neither diagram was render-checked.

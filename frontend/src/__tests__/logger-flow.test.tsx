@@ -10,7 +10,8 @@
  * the logger's two exits that don't save: finishing with nothing logged (offered only
  * "Discard workout" / "Keep lifting") and Discard. The router is a stub, so each screen is
  * rendered in turn the way navigation would show it; the database is handed in through a
- * mocked `openAppDatabase`. Sync is proven in B07/B08 and not re-tested here.
+ * mocked `openAppDatabase`. Sync is proven in B07/B08; B11's test pushes once more to show its
+ * new columns (superset, drop, time, score) reach the stand-in server intact.
  */
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
@@ -22,6 +23,8 @@ import { createPreparedDb, renderSignedIn, SIGNED_IN_USER_ID } from '@/test-util
 import { loadActiveWorkout, startActiveWorkout } from '@/workout/activeWorkout';
 import { clearSessionWorkout, currentSessionWorkout } from '@/workout/activeWorkoutSession';
 import { readWorkout } from '@/workout/history';
+import { pushOutbox } from '@/sync/push';
+import { FakeServer } from '@/test-utils/fakeTransport';
 
 import WorkoutScreen from '@/app/(tabs)/workout';
 import ActiveWorkoutScreen from '@/app/active-workout';
@@ -163,6 +166,73 @@ describe('logger flow (B09 definition of done)', () => {
         [5, false, 8, false],
       ],
       [[8, true, null, false]],
+    ]);
+  });
+
+  it('B11: a superset, a drop set, a timed and a scored entry log, sync and show as one unit each', async () => {
+    await startActiveWorkout(db, SIGNED_IN_USER_ID);
+    await renderSignedIn(<ActiveWorkoutScreen />);
+
+    // A superset: bench, then pull-ups linked to it (LOG-11).
+    await addExercise('bench press', 'Bench Press');
+    await addExercise('pullups', 'Pullups');
+    await fireEvent.press(screen.getByLabelText('Superset Pullups with the exercise above'));
+    expect(await screen.findAllByText('Superset')).toHaveLength(2);
+
+    // A three-segment drop set on bench (LOG-12).
+    await logSet('Bench Press', '8', '225', 1);
+    await fireEvent.changeText(screen.getByLabelText('Weight in lb for Bench Press'), '185');
+    await fireEvent.press(screen.getAllByLabelText('Drop')[0]);
+    await screen.findByLabelText('Remove drop 1 of set 1 of Bench Press');
+    await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), '10');
+    await fireEvent.changeText(screen.getByLabelText('Weight in lb for Bench Press'), '155');
+    await fireEvent.press(screen.getAllByLabelText('Drop')[0]);
+    await screen.findByLabelText('Remove drop 2 of set 1 of Bench Press');
+
+    // A pull-up set inside the superset.
+    await fireEvent.changeText(screen.getByLabelText('Reps for Pullups'), '8');
+    await fireEvent.press(screen.getAllByLabelText('Log set')[1]);
+    await screen.findByLabelText('Remove set 1 of Pullups');
+
+    // Timed and scored work on a third exercise (LOG-13).
+    await addExercise('deadlift', 'Deadlift');
+    await fireEvent.press(screen.getByLabelText('Timed work for Deadlift'));
+    await fireEvent.changeText(screen.getByLabelText('Reps for Deadlift'), '100');
+    await fireEvent.changeText(screen.getByLabelText('Time for Deadlift'), '7:32');
+    await fireEvent.press(screen.getAllByLabelText('Log set')[2]);
+    await screen.findByLabelText('Remove set 1 of Deadlift');
+    await fireEvent.changeText(screen.getByLabelText('Reps for Deadlift'), '');
+    await fireEvent.changeText(screen.getByLabelText('Time for Deadlift'), '');
+    await fireEvent.changeText(screen.getByLabelText('Score for Deadlift'), '7 rounds + 12 reps');
+    await fireEvent.press(screen.getAllByLabelText('Log set')[2]);
+    await screen.findByLabelText('Remove set 2 of Deadlift');
+
+    await fireEvent.press(screen.getByLabelText('Finish'));
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalled());
+    const [[target]] = mockRouter.replace.mock.calls as [[{ params: { id: string } }]];
+    await screen.unmount();
+
+    // Displays: the saved workout shows each as one unit.
+    mockParams = { id: target.params.id };
+    await renderSignedIn(<SavedWorkoutScreen />);
+    await screen.findByText('Pullups');
+    expect(screen.getAllByText('Superset')).toHaveLength(1);
+    expect(screen.getByText('8 × 225 lb → 8 × 185 lb → 10 × 155 lb')).toBeTruthy();
+    expect(screen.getByText('100 reps · 7:32')).toBeTruthy();
+    expect(screen.getByText('7 rounds + 12 reps')).toBeTruthy();
+
+    // Syncs: the upload carries every new column intact.
+    const saved = await readWorkout(db, SIGNED_IN_USER_ID, target.params.id);
+    const server = new FakeServer();
+    await pushOutbox(db, server);
+    const [benchEntry, pullupEntry, deadliftEntry] = saved!.entries;
+    expect(
+      [benchEntry, pullupEntry, deadliftEntry].map((e) => server.tables.workout_exercises.get(e.id)?.superset_group),
+    ).toEqual([1, 1, null]);
+    expect(benchEntry.sets.map((s) => server.tables.sets.get(s.id)?.drop_set_position)).toEqual([null, 1, 2]);
+    expect(deadliftEntry.sets.map((s) => server.tables.sets.get(s.id))).toEqual([
+      expect.objectContaining({ reps: 100, duration_seconds: 452, score: null }),
+      expect.objectContaining({ reps: null, duration_seconds: null, score: '7 rounds + 12 reps' }),
     ]);
   });
 

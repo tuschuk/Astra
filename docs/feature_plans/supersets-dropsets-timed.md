@@ -325,3 +325,43 @@ at full severity (B08–B10 precedent). Questions that changed or sharpened the 
 - **"Score separator in `formatSet` can collide with the '—' empty-load placeholder."**
   Score-only sets print the score text alone (removing the main collision); the joined
   separator is pinned by the format tests as the one spelling.
+
+## Deviations during build (recorded by the builder)
+
+1. **Superset operations are a "hinge", and the unlink is `unlinkFromPrevious`, not
+   `unlinkFromSuperset`.** The card's toggle means "this card is linked to the one above it", so
+   the two store operations act on that boundary:
+   - `linkWithPrevious` merges the run above with the run starting at this entry. The previous
+     entry's number wins; if it has none, this entry's own; if neither has one, max + 1. So
+     linking card 2 when cards 2–3 are already linked makes a tri-set (the plan's rule would have
+     split 2 off from 3), and linking two supersets merges them.
+   - `unlinkFromPrevious` splits the run at this entry. The lower part gets a fresh number; the
+     plan's "remove just this one entry" would have left cards 1 and 3 of a tri-set sharing a
+     number while no longer adjacent.
+   - Any number held by only one entry is cleared (the plan's orphan rule, generalised).
+   - Added after review: before either action the numbers are rewritten to match what is shown
+     (`asShown`). A member moved away from its superset loses its number, and a number shared
+     by two separate runs is split. Without this, linking could pull a far-away stray into a
+     tri-set the lifter never built (review repro: `[A(1), C, B(1)]`, link B → A, C, B all one
+     group). These writes happen only inside link/unlink; reorder and remove still never
+     rewrite groups.
+2. **Two batch store operations, `updateSets` and `removeSets`** (one transaction each), added
+   after review.
+   - The plan had the W toggle on a drop set as serialized per-segment `updateSet` calls; it is
+     now atomic.
+   - The plan gave each segment only its own remove. Removing just the top row left drop 1
+     behind, which the grouping rule then attached to the *previous* set as its drop (it
+     mis-merged, displayed and synced wrong). So the top row's remove now removes the whole
+     drop set; each drop row keeps its own remove.
+   - Risk 3's grilling note about non-atomic W writes no longer applies.
+3. **Load before time in `formatSet`**: "100 reps · 7:32", "20 kg · 1:00". The plan's example
+   read "0:45 · 135 lb". Reps × weight comes first everywhere else, so the time follows it.
+4. **Drop grouping needs a strictly higher drop number, not exactly +1.** The plan wrote
+   `(prev ?? 0) + 1` but also required that a removed middle drop leave a gap the rule
+   tolerates. Exactly +1 would break the chain at the gap. Strictly increasing satisfies both
+   the gap rule and isolating a Repeat-copied stray.
+5. **Migration version.** The file is `20261115100000_sets_score.sql`; Supabase recorded the live
+   apply as version `20261115024010` (same mismatch pattern as B05's signup gate). The rename
+   to match was declined by the permission layer; left for Gate 2 / DEFERRED.
+6. **v1 → v2 upgrade test added** to `schema.test.ts`. The plan assumed B07's harness already
+   ran an upgrade path; only fresh-file creation was covered.
