@@ -100,8 +100,8 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     `user_id`.
   - **Leftover unfinished workouts.** If more than one unfinished workout ever exists, resume
     picks the newest and leaves the others untouched. No UI surfaces them yet.
-  - **Title/notes setters** (LOG-3, B12) add their length limits to `@training-math`
-    `limits.ts` (title ≤ 100, notes ≤ 2000 / entry notes ≤ 1000).
+  - ~~**Title/notes setters** (LOG-3, B12) add their length limits to `@training-math`
+    `limits.ts`~~ — done in B12.
   - **`limits.ts` mirrors the migration by hand.** Any future migration that changes a `sets`
     CHECK or column type must update `limits.ts` in the same commit. No test spans the SQL and
     the TS.
@@ -153,3 +153,15 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - Repeat after a drop copies the drop's number, so the copy shows as its own plain-looking set
     (plan Risk 3, unchanged NFR-2 behaviour).
   - `mmdc` was not permitted for the headless builder again; neither diagram was render-checked.
+- B12 workout-notes follow-ups (`workout-notes`):
+  - **Device check (Tristen):** the title + 2000-char notes box in the logger header (keyboard
+    over a multiline input inside a FlatList header), the per-set note icon now making five
+    controls on a set row (number, text, note, W, remove) at phone width, and the autosave feel
+    (~750 ms) on a real keyboard. Force-kill mid-note and relaunch → the note is there (minus at
+    most the last ~¾ s of typing).
+  - **Feed display of notes** waits for B20; **editing notes on a finished workout** is B14's
+    (its edit surface should reuse `setTitle` / `setNotes` / `setEntryNotes` / `setSetNotes`
+    validation through `limits.ts`).
+  - A save refused *after* its box closed (unmount flush) only logs a `console.warn`; the inputs'
+    `maxLength` makes that near-unreachable. Surface it on the card if it is ever seen.
+  - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.

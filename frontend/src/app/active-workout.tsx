@@ -9,8 +9,10 @@
  *   - everything on each card: log sets (plain, warm-up, timed or scored), log a drop, repeat,
  *     remove sets; move or remove the exercise; link it into a superset with the card above
  *     (B11 — linked cards wear a "Superset" badge, worked out here from the snapshot);
- *   - **Finish**: save the workout for good (it is handed to sync, which uploads it when there
- *     is signal) and open the saved workout. Finishing with no sets logged instead asks
+ *   - give the workout a **title** and a **note** in the boxes at the top (LOG-3); notes on an
+ *     exercise or a set are written on its card. Every box saves itself as it is typed;
+ *   - **Finish**: save any title or note still being typed, then save the workout for good (it
+ *     is handed to sync, which uploads it when there is signal) and open the saved workout. Finishing with no sets logged instead asks
  *     "Nothing logged yet" with two choices — discard the workout, or keep lifting;
  *   - **Discard**: after a confirmation, delete the workout from the phone.
  *
@@ -20,8 +22,9 @@
  * nothing to resume.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, FlatList, StyleSheet, View } from 'react-native';
+import { Alert, FlatList, StyleSheet, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import { MAX_WORKOUT_NOTES_LENGTH, MAX_WORKOUT_TITLE_LENGTH } from '@training-math';
 
 import { useAuth } from '@/auth/AuthProvider';
 import { Screen } from '@/components/Screen';
@@ -32,14 +35,17 @@ import { Body, Heading } from '@/components/ui/Text';
 import { EntryCard } from '@/components/workout/EntryCard';
 import { ExercisePicker } from '@/components/workout/ExercisePicker';
 import { confirmDiscardWorkout } from '@/components/workout/confirmDiscardWorkout';
+import type { WorkoutRow } from '@/db/dao';
 import { useAppDatabase } from '@/db/useAppDatabase';
 import type { ExerciseDef } from '@/library/catalog';
 import { libraryExerciseId } from '@/library/uuidv5';
 import { useDisplayUnit } from '@/settings/displayUnit';
+import type { ActiveWorkoutStore } from '@/workout/activeWorkout';
 import { clearSessionWorkout, resumeSessionWorkout } from '@/workout/activeWorkoutSession';
-import { supersetPlacement, totalSets, workoutDateLabel } from '@/workout/format';
+import { supersetPlacement, textErrorMessage, totalSets, workoutDateLabel } from '@/workout/format';
 import { useSessionWorkout, useWorkoutSnapshot } from '@/workout/useActiveWorkout';
-import { spacing } from '@/theme';
+import { AutosaveRegistryContext, createAutosaveRegistry, useAutosaveText } from '@/workout/useAutosaveText';
+import { colors, layout, radii, spacing, type } from '@/theme';
 
 export default function ActiveWorkoutScreen() {
   const router = useRouter();
@@ -52,6 +58,8 @@ export default function ActiveWorkoutScreen() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Every title / note box on this screen, so Finish can save them all first (LOG-3).
+  const [autosave] = useState(createAutosaveRegistry);
   // Set once Finish or Discard succeeds: from then on this screen is on its way out, and the
   // now-empty slot must not trigger the "nothing to resume" exit a second time.
   const ended = useRef(false);
@@ -116,6 +124,14 @@ export default function ActiveWorkoutScreen() {
   function finish(): Promise<void> {
     return endWorkout(async () => {
       if (!store) return;
+      // Any title or note still waiting out its autosave timer is saved first, so text typed a
+      // moment before tapping Finish (the tap doesn't close the keyboard) is in the finished
+      // workout rather than dropped once it has ended. If one is refused, stop: finishing would
+      // seal the workout without it (the box that failed says why).
+      if (!(await autosave.flushAll())) {
+        setError('A title or note couldn’t be saved. Fix it, then tap Finish again.');
+        return;
+      }
       const workout = await store.finish();
       ended.current = true;
       clearSessionWorkout();
@@ -164,6 +180,7 @@ export default function ActiveWorkoutScreen() {
     <View style={styles.header}>
       <Heading>Workout</Heading>
       <Body variant="muted">Started {workoutDateLabel(snapshot.workout.started_at)}</Body>
+      <WorkoutDetailsFields store={store} workout={snapshot.workout} />
       <View style={styles.headerActions}>
         <Button label="Finish" onPress={onFinish} disabled={busy} style={styles.headerButton} />
         <Button
@@ -176,6 +193,7 @@ export default function ActiveWorkoutScreen() {
   );
 
   return (
+    <AutosaveRegistryContext.Provider value={autosave}>
     <Screen scroll={false} contentStyle={styles.screenContent}>
       <FlatList
         data={snapshot.entries}
@@ -205,6 +223,43 @@ export default function ActiveWorkoutScreen() {
       />
       <ExercisePicker visible={pickerOpen} onPick={addExercise} onClose={() => setPickerOpen(false)} />
     </Screen>
+    </AutosaveRegistryContext.Provider>
+  );
+}
+
+/**
+ * The workout's own Title and Notes boxes, under "Started …" (LOG-3). Each saves itself a moment
+ * after the lifter stops typing (see `useAutosaveText`), so nothing typed here is lost if the app
+ * is killed; Finish saves anything still waiting. A blank box means no title (the saved workout
+ * shows its date) or no note. A save that is refused shows a message under the boxes.
+ */
+function WorkoutDetailsFields({ store, workout }: { store: ActiveWorkoutStore; workout: WorkoutRow }) {
+  const title = useAutosaveText({ initial: workout.title, save: (text) => store.setTitle(text), store });
+  const notes = useAutosaveText({ initial: workout.notes, save: (text) => store.setNotes(text), store });
+  const error = title.error ?? notes.error;
+  return (
+    <View style={styles.details}>
+      <TextInput
+        style={[styles.input, styles.titleInput]}
+        value={title.text}
+        onChangeText={title.onChangeText}
+        placeholder="Workout title"
+        placeholderTextColor={colors.muted}
+        maxLength={MAX_WORKOUT_TITLE_LENGTH}
+        accessibilityLabel="Workout title"
+      />
+      <TextInput
+        style={[styles.input, styles.notesInput]}
+        value={notes.text}
+        onChangeText={notes.onChangeText}
+        placeholder="Notes"
+        placeholderTextColor={colors.muted}
+        maxLength={MAX_WORKOUT_NOTES_LENGTH}
+        multiline
+        accessibilityLabel="Workout notes"
+      />
+      <FormError message={error ? textErrorMessage(error) : null} />
+    </View>
   );
 }
 
@@ -220,6 +275,28 @@ const styles = StyleSheet.create({
   },
   headerButton: {
     flex: 1,
+  },
+  details: {
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  input: {
+    ...type.input,
+    minHeight: layout.minTouchTarget,
+    backgroundColor: colors.inputBg,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: radii.lg,
+    paddingHorizontal: spacing.md,
+  },
+  titleInput: {
+    ...type.cardTitle,
+  },
+  notesInput: {
+    // Grows with the note up to a few lines, then scrolls inside the box.
+    maxHeight: 140,
+    paddingVertical: spacing.sm,
+    textAlignVertical: 'top',
   },
   screenContent: {
     paddingBottom: 0,

@@ -236,6 +236,70 @@ describe('logger flow (B09 definition of done)', () => {
     ]);
   });
 
+  it('B12: a title and notes at all three levels, typed right before Finish, save, sync and show on review', async () => {
+    await startActiveWorkout(db, SIGNED_IN_USER_ID);
+    await renderSignedIn(<ActiveWorkoutScreen />);
+    await addExercise('bench press', 'Bench Press');
+    await logSet('Bench Press', '8', '225', 1);
+    await fireEvent.changeText(screen.getByLabelText('Weight in lb for Bench Press'), '185');
+    await fireEvent.press(screen.getByLabelText('Drop'));
+    await screen.findByLabelText('Remove drop 1 of set 1 of Bench Press');
+
+    // Every box is typed into and Finish is tapped at once: no box is closed, no autosave timer
+    // has run — Finish must save them all first.
+    await fireEvent.changeText(screen.getByLabelText('Workout title'), 'Push day');
+    await fireEvent.changeText(screen.getByLabelText('Workout notes'), 'Slept badly, still moved well.');
+    await fireEvent.press(screen.getByLabelText('Add a note on Bench Press'));
+    await fireEvent.changeText(await screen.findByLabelText('Note on Bench Press'), 'Grip slipping on the top set.');
+    await fireEvent.press(screen.getByLabelText('Write a note on drop 1 of set 1 of Bench Press'));
+    await fireEvent.changeText(await screen.findByLabelText('Note on drop 1 of set 1 of Bench Press'), 'Grip gave out');
+    await fireEvent.press(screen.getByLabelText('Write a note on set 1 of Bench Press'));
+    await fireEvent.changeText(await screen.findByLabelText('Note on set 1 of Bench Press'), 'Elbow twinged on rep 3');
+    await fireEvent.press(screen.getByLabelText('Finish'));
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalled());
+    const [[target]] = mockRouter.replace.mock.calls as [[{ params: { id: string } }]];
+    await screen.unmount();
+
+    // Shows on review: the saved workout prints all three levels.
+    mockParams = { id: target.params.id };
+    await renderSignedIn(<SavedWorkoutScreen />);
+    expect(await screen.findByText('Push day')).toBeTruthy();
+    expect(screen.getByText('Slept badly, still moved well.')).toBeTruthy();
+    expect(screen.getByText('Grip slipping on the top set.')).toBeTruthy();
+    expect(screen.getByText('Elbow twinged on rep 3')).toBeTruthy();
+    expect(screen.getByText('↳ Grip gave out')).toBeTruthy();
+
+    // Syncs: the upload carries every note.
+    const saved = await readWorkout(db, SIGNED_IN_USER_ID, target.params.id);
+    const server = new FakeServer();
+    await pushOutbox(db, server);
+    expect(server.tables.workouts.get(target.params.id)).toMatchObject({
+      title: 'Push day',
+      notes: 'Slept badly, still moved well.',
+    });
+    const [bench] = saved!.entries;
+    expect(server.tables.workout_exercises.get(bench.id)).toMatchObject({ notes: 'Grip slipping on the top set.' });
+    expect(bench.sets.map((s) => server.tables.sets.get(s.id)?.notes)).toEqual(['Elbow twinged on rep 3', 'Grip gave out']);
+  });
+
+  it('B12: Finish stops, and says so, when a note can’t be saved', async () => {
+    await startActiveWorkout(db, SIGNED_IN_USER_ID);
+    await renderSignedIn(<ActiveWorkoutScreen />);
+    await addExercise('bench press', 'Bench Press');
+    await logSet('Bench Press', '5', '225', 1);
+    // Past the 2000-character cap (the box's maxLength normally stops this).
+    await fireEvent.changeText(screen.getByLabelText('Workout notes'), 'x'.repeat(2001));
+    await fireEvent.press(screen.getByLabelText('Finish'));
+    expect(await screen.findByText('A title or note couldn’t be saved. Fix it, then tap Finish again.')).toBeTruthy();
+    expect(mockRouter.replace).not.toHaveBeenCalled();
+    expect(await loadActiveWorkout(db, SIGNED_IN_USER_ID)).not.toBeNull(); // still in progress
+
+    // Fixing the note lets Finish through.
+    await fireEvent.changeText(screen.getByLabelText('Workout notes'), 'fine');
+    await fireEvent.press(screen.getByLabelText('Finish'));
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalled());
+  });
+
   it('finishing with no sets offers only Discard workout or Keep lifting', async () => {
     const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
     await startActiveWorkout(db, SIGNED_IN_USER_ID);

@@ -20,10 +20,15 @@
  *   duration_seconds  integer   check (duration_seconds >= 0)      → whole, 0 … 2147483647
  *   score             text      check (char_length(score) <= 100)  → at most 100 characters
  *                     (added by 20261115024010_sets_score.sql)
+ *   notes             text      check (char_length(notes) <= 500)  → at most 500 characters
+ *                     (added by 20261115031049_sets_notes.sql)
  *
- * And one rule from the `workout_exercises` table in the same training migration:
+ * And rules from the `workout_exercises` and `workouts` tables in the same training migration:
  *
- *   superset_group    smallint  (no CHECK)                         → whole, 1 … 32767
+ *   workout_exercises.superset_group smallint (no CHECK)                → whole, 1 … 32767
+ *   workout_exercises.notes text check (char_length(notes) <= 1000)     → at most 1000 characters
+ *   workouts.title          text check (char_length(title) <= 100)      → at most 100 characters
+ *   workouts.notes          text check (char_length(notes) <= 2000)     → at most 2000 characters
  *
  * The upper bounds come from the column types (a value bigger than the column holds is refused
  * just like a broken CHECK). Weight and RPE are checked after rounding to their column's
@@ -44,6 +49,14 @@ export const MIN_SET_RPE = 1;
 export const MAX_SET_RPE = 10;
 /** Longest WOD score text the server accepts (CHECK `char_length(score) <= 100`). */
 export const MAX_SET_SCORE_LENGTH = 100;
+/** Longest note on one set (CHECK `char_length(notes) <= 500`, …_sets_notes.sql). */
+export const MAX_SET_NOTES_LENGTH = 500;
+/** Longest note on one exercise of a workout (`workout_exercises.notes`, CHECK ≤ 1000). */
+export const MAX_ENTRY_NOTES_LENGTH = 1000;
+/** Longest workout title (`workouts.title`, CHECK ≤ 100). */
+export const MAX_WORKOUT_TITLE_LENGTH = 100;
+/** Longest note on a whole workout (`workouts.notes`, CHECK ≤ 2000). */
+export const MAX_WORKOUT_NOTES_LENGTH = 2000;
 
 /**
  * Rounds a kg weight to the 2 decimals its server column keeps (numeric(6, 2)).
@@ -75,6 +88,8 @@ export interface SetFieldsToCheck {
   durationSeconds?: number | null;
   /** Free-text WOD score ("7 rounds + 12 reps"), already trimmed. */
   score?: string | null;
+  /** The lifter's remark about this set ("elbow twinged on rep 3"), already trimmed. */
+  notes?: string | null;
 }
 
 /**
@@ -104,11 +119,8 @@ export function assertValidSetFields(fields: SetFieldsToCheck): void {
   if (fields.durationSeconds != null) {
     assertWholeInRange(fields.durationSeconds, 0, MAX_INTEGER, 'durationSeconds');
   }
-  if (fields.score != null && scoreLength(fields.score) > MAX_SET_SCORE_LENGTH) {
-    throw new RangeError(
-      `score must be at most ${MAX_SET_SCORE_LENGTH} characters, got ${scoreLength(fields.score)}`,
-    );
-  }
+  if (fields.score != null) assertTextLength(fields.score, MAX_SET_SCORE_LENGTH, 'score');
+  if (fields.notes != null) assertTextLength(fields.notes, MAX_SET_NOTES_LENGTH, 'notes');
 }
 
 /**
@@ -116,8 +128,38 @@ export function assertValidSetFields(fields: SetFieldsToCheck): void {
  * counts once — whereas JavaScript's `.length` counts it twice. Counting the server's way keeps
  * a 100-character score with an emoji in it from being refused here but accepted there.
  */
-function scoreLength(text: string): number {
+function textLength(text: string): number {
   return Array.from(text).length;
+}
+
+/** Throws a `RangeError` if `text` is longer than `max` characters, counted the server's way. */
+function assertTextLength(text: string, max: number, name: string): void {
+  const length = textLength(text);
+  if (length > max) throw new RangeError(`${name} must be at most ${max} characters, got ${length}`);
+}
+
+/**
+ * Throws a `RangeError` if a workout title is longer than the server accepts (100 characters).
+ * `null` (no title) is always fine. Call it before saving a title.
+ */
+export function assertValidWorkoutTitle(title: string | null): void {
+  if (title != null) assertTextLength(title, MAX_WORKOUT_TITLE_LENGTH, 'title');
+}
+
+/**
+ * Throws a `RangeError` if a note on the whole workout is longer than the server accepts (2000
+ * characters). `null` (no note) is always fine. Call it before saving the note.
+ */
+export function assertValidWorkoutNotes(notes: string | null): void {
+  if (notes != null) assertTextLength(notes, MAX_WORKOUT_NOTES_LENGTH, 'notes');
+}
+
+/**
+ * Throws a `RangeError` if a note on one exercise of a workout is longer than the server
+ * accepts (1000 characters). `null` (no note) is always fine. Call it before saving the note.
+ */
+export function assertValidEntryNotes(notes: string | null): void {
+  if (notes != null) assertTextLength(notes, MAX_ENTRY_NOTES_LENGTH, 'notes');
 }
 
 /**

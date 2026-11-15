@@ -58,6 +58,7 @@ export function makeSet(entry: number, position: number, overrides: Partial<SetR
     drop_set_position: null,
     duration_seconds: null,
     score: null,
+    notes: null,
     created_at: T0,
     updated_at: T0,
     ...overrides,

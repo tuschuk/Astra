@@ -289,3 +289,13 @@ export function setErrorMessage(error: unknown): string {
   }
   return 'That set couldn’t be saved. Try again.';
 }
+
+/**
+ * Turns a refused title or note save into a sentence for the lifter (LOG-3). The store throws a
+ * `RangeError` when the text is longer than the server accepts (the inputs' own length limits
+ * make that rare); anything else is an unexpected failure.
+ */
+export function textErrorMessage(error: unknown): string {
+  if (error instanceof RangeError) return 'That’s too long to save — shorten it a little.';
+  return 'That couldn’t be saved. Try again.';
+}

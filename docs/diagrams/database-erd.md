@@ -114,6 +114,7 @@ erDiagram
     smallint drop_set_position "null on plain and top sets; drops are 1, 2, ..."
     integer duration_seconds "for timed work, at least 0"
     text score "WOD result, max 100 chars; display only"
+    text notes "remark on this one set, max 500 chars; display only"
     timestamptz created_at
     timestamptz updated_at
   }
@@ -147,6 +148,16 @@ migration, because workout history references these ids).
   `char_length(score) <= 100`) holds free text such as "7 rounds + 12 reps". Either can sit
   alongside reps and weight, or stand alone. Nothing parses `score`; timed or scored sets without
   reps and weight add no volume and set no PRs.
+
+## Notes at three levels (B12)
+
+Free text written by the lifter, for people to read; nothing parses it and analysis ignores it.
+Each level has its own column and cap (all `char_length` CHECKs, so an emoji counts once):
+`workouts.notes` ≤ 2000 and `workouts.title` ≤ 100 (both since the training migration),
+`workout_exercises.notes` ≤ 1000 (same), and `sets.notes` ≤ 500 (added by
+`20261115031049_sets_notes.sql`). The phone checks the same caps before saving (`@training-math`
+`limits.ts`). Notes need no RLS of their own: they are columns on rows the policies below already
+cover, so a note is visible to exactly whoever may see its workout.
 
 ## Enums
 
@@ -210,8 +221,8 @@ the rows as they are, with no id remapping.
 ## The device mirror (not part of this database)
 
 This diagram draws the server. The phone keeps its own SQLite copy (`frontend/src/db/schema.ts`)
-of `exercises`, `workouts`, `workout_exercises` and `sets` (schema version 2 since B11, which
-added `sets.score`; versions are append-only, upgraded on launch). It has the same column names, but
+of `exercises`, `workouts`, `workout_exercises` and `sets` (schema version 3 since B12: version 2 (B11)
+added `sets.score`, version 3 added `sets.notes`; versions are append-only, upgraded on launch). It has the same column names, but
 uses text for uuids and timestamps and 0/1 for booleans, and it does not repeat the server's
 CHECK rules as SQL (instead the app checks every set against them before saving, through the
 shared `@training-math` `limits.ts`). It also has two tables of its own: `outbox`, the local changes waiting to upload,

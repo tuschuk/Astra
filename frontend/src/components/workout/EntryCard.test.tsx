@@ -484,3 +484,129 @@ describe('EntryCard', () => {
     expect(screen.getAllByText(/^Last time:/)).toHaveLength(1);
   });
 });
+
+describe('EntryCard notes (LOG-3)', () => {
+  /** Logs `count` plain sets of 5 reps on the bench card. */
+  async function logSets(count: number) {
+    await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), '5');
+    for (let i = 1; i <= count; i++) {
+      await fireEvent.press(screen.getByLabelText('Log set'));
+      await screen.findByText(`Set ${i}`);
+    }
+  }
+
+  it('adds, edits and clears the exercise note', async () => {
+    const { store } = await setup();
+    await fireEvent.press(screen.getByLabelText('Add a note on Bench Press'));
+    const box = await screen.findByLabelText('Note on Bench Press');
+    await fireEvent.changeText(box, 'grip slipping');
+    await fireEvent(box, 'blur'); // closing the box saves it
+    expect(await screen.findByText('grip slipping')).toBeTruthy();
+    expect(store.getSnapshot().entries[0].notes).toBe('grip slipping');
+
+    await fireEvent.press(screen.getByLabelText('Edit note on Bench Press'));
+    const again = await screen.findByLabelText('Note on Bench Press');
+    expect(again.props.value).toBe('grip slipping');
+    await fireEvent.changeText(again, '  ');
+    await fireEvent(again, 'blur');
+    expect(await screen.findByText('Add note')).toBeTruthy();
+    await waitFor(() => expect(store.getSnapshot().entries[0].notes).toBeNull());
+  });
+
+  it('saves an exercise note on its own once typing stops, with the box still open', async () => {
+    const { store } = await setup();
+    await fireEvent.press(screen.getByLabelText('Add a note on Bench Press'));
+    await fireEvent.changeText(await screen.findByLabelText('Note on Bench Press'), 'autosaved');
+    await waitFor(() => expect(store.getSnapshot().entries[0].notes).toBe('autosaved'), { timeout: 3000 });
+    expect(screen.getByLabelText('Note on Bench Press')).toBeTruthy();
+  });
+
+  it('adds a note to a logged set, shows it under the row, and clears it', async () => {
+    const { store } = await setup();
+    await logSets(1);
+    await fireEvent.press(screen.getByLabelText('Write a note on set 1 of Bench Press'));
+    const box = await screen.findByLabelText('Note on set 1 of Bench Press');
+    await fireEvent.changeText(box, 'elbow twinged on rep 3');
+    await fireEvent(box, 'blur');
+    expect(await screen.findByText('elbow twinged on rep 3')).toBeTruthy();
+    expect(store.getSnapshot().entries[0].sets[0].notes).toBe('elbow twinged on rep 3');
+
+    await fireEvent.press(screen.getByLabelText('Edit note on set 1 of Bench Press'));
+    const again = await screen.findByLabelText('Note on set 1 of Bench Press');
+    await fireEvent.changeText(again, '');
+    await fireEvent(again, 'blur');
+    await waitFor(() => expect(store.getSnapshot().entries[0].sets[0].notes).toBeNull());
+    expect(screen.queryByText('elbow twinged on rep 3')).toBeNull();
+  });
+
+  it('opens one set note box at a time, saving the one it replaces', async () => {
+    const { store } = await setup();
+    await logSets(2);
+    await fireEvent.press(screen.getByLabelText('Write a note on set 1 of Bench Press'));
+    await fireEvent.changeText(await screen.findByLabelText('Note on set 1 of Bench Press'), 'first');
+    await fireEvent.press(screen.getByLabelText('Write a note on set 2 of Bench Press'));
+    await screen.findByLabelText('Note on set 2 of Bench Press');
+    await waitFor(() => expect(store.getSnapshot().entries[0].sets[0].notes).toBe('first'));
+    expect(screen.getAllByPlaceholderText('Note')).toHaveLength(1);
+    expect(await screen.findByText('first')).toBeTruthy();
+  });
+
+  it('a set note saved after flipping that set to a warm-up keeps the warm-up flag', async () => {
+    const { store } = await setup();
+    await logSets(1);
+    await fireEvent.press(screen.getByLabelText('Write a note on set 1 of Bench Press'));
+    const box = await screen.findByLabelText('Note on set 1 of Bench Press');
+    await fireEvent.changeText(box, 'felt light');
+    // While the note box is open (its save still pending), flip the set to a warm-up.
+    await fireEvent.press(screen.getByLabelText('Warm-up: set 1 of Bench Press'));
+    await waitFor(() => expect(store.getSnapshot().entries[0].sets[0].is_warmup).toBe(true));
+    await fireEvent(box, 'blur');
+    await waitFor(() => expect(store.getSnapshot().entries[0].sets[0].notes).toBe('felt light'));
+    expect(store.getSnapshot().entries[0].sets[0].is_warmup).toBe(true);
+  });
+
+  it('gives each drop of a drop set its own note', async () => {
+    const { store } = await setup();
+    await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), '8');
+    await fireEvent.changeText(screen.getByLabelText('Weight in lb for Bench Press'), '225');
+    await fireEvent.press(screen.getByLabelText('Log set'));
+    await screen.findByText('Set 1');
+    await fireEvent.changeText(screen.getByLabelText('Weight in lb for Bench Press'), '185');
+    await fireEvent.press(screen.getByLabelText('Drop'));
+    await fireEvent.press(await screen.findByLabelText('Write a note on drop 1 of set 1 of Bench Press'));
+    const box = await screen.findByLabelText('Note on drop 1 of set 1 of Bench Press');
+    await fireEvent.changeText(box, 'grip gave out');
+    await fireEvent(box, 'blur');
+    expect(await screen.findByText('grip gave out')).toBeTruthy();
+    const [top, drop] = store.getSnapshot().entries[0].sets;
+    expect(top.notes).toBeNull();
+    expect(drop.notes).toBe('grip gave out');
+  });
+
+  it('keeps a note box open with a message when its save is refused', async () => {
+    const { store } = await setup();
+    await logSets(1);
+    await fireEvent.press(screen.getByLabelText('Write a note on set 1 of Bench Press'));
+    const box = await screen.findByLabelText('Note on set 1 of Bench Press');
+    // Past the server's 500-character cap (the box's maxLength normally stops this).
+    await fireEvent.changeText(box, 'x'.repeat(501));
+    await fireEvent(box, 'blur');
+    expect(await screen.findByText('That’s too long to save — shorten it a little.')).toBeTruthy();
+    expect(screen.getByLabelText('Note on set 1 of Bench Press')).toBeTruthy();
+    expect(store.getSnapshot().entries[0].sets[0].notes).toBeNull();
+  });
+
+  it('Repeat does not copy a set’s note', async () => {
+    const { store } = await setup();
+    await logSets(1);
+    await fireEvent.press(screen.getByLabelText('Write a note on set 1 of Bench Press'));
+    const box = await screen.findByLabelText('Note on set 1 of Bench Press');
+    await fireEvent.changeText(box, 'belt on');
+    await fireEvent(box, 'blur');
+    await screen.findByText('belt on');
+    await fireEvent.press(screen.getByLabelText('Repeat last set'));
+    await screen.findByText('Set 2');
+    expect(store.getSnapshot().entries[0].sets.map((s) => s.notes)).toEqual(['belt on', null]);
+    expect(screen.getAllByText('belt on')).toHaveLength(1);
+  });
+});
