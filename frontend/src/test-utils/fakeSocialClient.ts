@@ -29,6 +29,10 @@
  * `not(column, 'is', null)`, and `rpc('follow_counts', …)` counting every follow row the way the
  * server's definer function does.
  *
+ * B26 lets an update end in `.select('id')`, answering with the rows it changed (the post
+ * privacy control's "did anything change?" check). Posts are updated in place, so a later feed
+ * read shows the new visibility.
+ *
  * What it does NOT do: row-level security or general embedding. Posts are seeded already shaped
  * the way the server's embed returns them (author, flair and workout nested in), and the follow
  * insert imitates the one RLS refusal the app handles (a block in either direction). Server-side
@@ -363,7 +367,10 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
         if (refused) return { data: null, error: refused };
       }
       for (const row of matching) Object.assign(row, update);
-      return { data: null, error: null };
+      // `.update(…).select('id')` (B26) returns the changed rows — none when nothing matched,
+      // which is how the app learns a post was gone or not the lifter's.
+      const returning = calls.some(([m]) => m === 'select');
+      return { data: returning ? matching.map((r) => ({ id: r.id })) : null, error: null };
     }
     if (isDelete) {
       if (table === 'post_hot_scores') throw new Error('fake: a view cannot be deleted from');

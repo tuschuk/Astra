@@ -31,7 +31,7 @@ import { useDisplayUnit } from '@/settings/displayUnit';
 import { getToolKitSession, setToolKitTool, type ToolId } from '@/toolkit/session';
 import { colors, layout, spacing } from '@/theme';
 
-import { ChoiceChips, type ChoiceOption } from './ChoiceChips';
+import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
 import { IntensityCalculator } from './IntensityCalculator';
 import { OneRmCalculator } from './OneRmCalculator';
 import { PlateLoader } from './PlateLoader';

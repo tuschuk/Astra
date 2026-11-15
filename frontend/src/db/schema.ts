@@ -8,7 +8,8 @@
  *     …_exercises_slug.sql). Column names match the server's exactly, so
  *     syncing a row is a straight copy, not a translation.
  *   - personal_records — the lifter's current PRs per exercise (version 4, B13).
- *   - user_settings — the lifter's kg/lb choice (version 6, B15).
+ *   - user_settings — the lifter's kg/lb choice (version 6, B15) and who sees their new progress
+ *     pics (version 10, B26).
  *   - workout_analyses — each finished workout's post-workout analysis, as the
  *     server function wrote it (version 7, B18; download-only).
  *   - flairs — the server's list of post flairs (version 8, B21; download-only, replaced whole).
@@ -154,8 +155,9 @@ alter table outbox add column op text not null default 'upsert';
 /**
  * Version 6 (B15): `user_settings` — the signed-in lifter's preferences, one row per user,
  * mirroring the server table of the same name (…_identity.sql). Only the columns the phone
- * syncs today: the kg/lb `unit` (and its `updated_at`). `default_workout_visibility` joins when
- * B26 gives it a reader. Synced by its own small push and pull phases (see
+ * syncs today: the kg/lb `unit` (and its `updated_at`); version 10 (B26) adds who sees new
+ * progress pics. `default_workout_visibility` still has no reader on the phone (new workouts are
+ * born public) and stays unmirrored. Synced by its own small push and pull phases (see
  * `db/userSettings.ts`), not the five-table machinery: this table is keyed by `user_id`, and
  * the server only lets the phone update it, never insert.
  */
@@ -253,8 +255,19 @@ drop table posts;
 alter table posts_v9 rename to posts;
 `;
 
+/**
+ * Version 10 (B26): `user_settings.progress_pic_visibility` — who a NEW progress pic is shown to
+ * ('private', 'followers' or 'public'), the lifter's choice in Settings → Privacy. Mirrored on the
+ * phone because a progress pic can be posted with no signal and must know its visibility then
+ * (`social/createPost.ts`). A plain add-column: existing rows get 'private', the same default as
+ * the server's column.
+ */
+const V10 = `
+alter table user_settings add column progress_pic_visibility text not null default 'private';
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9];
+export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

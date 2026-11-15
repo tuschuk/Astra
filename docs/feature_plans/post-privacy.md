@@ -409,6 +409,35 @@ claim verified in the repo, not assumed.
   checked against B21's retry path; (c) the local workout-mirror update does not invent an
   `updated_at` — the next pull overwrites with the server's authoritative row regardless, and
   the mirror exists only so interim pushes carry truth.
+## Builder deviations (B26 build)
+
+- **D1 — the per-post chooser expands inline under the chip, not a modal sheet.** Same three
+  `ChoiceChips` options, disabled while a change is in flight, revert + message on refusal. It
+  shows the *chosen* option's one-line meaning under the chips; every option's meaning is in its
+  screen-reader label ("Followers: Your followers can see this post"). Inline is simpler, needs no
+  sheet component, and keeps the card's context visible.
+- **D2 — `ONLY_YOU_LINE` removed (subsumed, as G10 planned).** The chip reads "Only you"; the
+  sentence "Only you can see this post" lives once, in `VISIBILITY_WORDS` (`social/postPrivacy.ts`),
+  shared by the card, Settings and Share a photo.
+- **D3 — `IMAGE_POST_DEFAULTS` keeps only the flair**; visibility comes from the new
+  `imagePostVisibility(db, userId, kind)`.
+- **D4 — Share a photo's progress-pic line adds where the choice is changed:** "Your followers can
+  see this post. Choose who sees new progress pics in Settings." (`privacyLine` replaces the
+  `PRIVACY_LINES` constant).
+- **D5 — one order everywhere: Only you · Followers · Public** (most private first,
+  `VISIBILITY_ORDER`), on the card and in Settings.
+- **D6 — review fixes beyond the plan:** after an accepted change, Home and ProfileView also rewrite
+  their stored post lists (`withPostVisibility`), so a FlatList card rebuilt after scrolling can't
+  show the old audience; `setPostVisibility` calls `notifyLocalWrite(['posts','workouts'])` after
+  the local mirror so phone-read screens redraw; `visibilityTargetOf(post)` is the one home for
+  "post → change target"; a stale refusal line clears when the chooser is toggled.
+- **D7 — live probe done at build time, not left to Gate 2** (three synthetic users, deleted after;
+  recorded in `docs/diagrams/database-erd.md` → Post privacy). It confirmed the invoker-rights
+  trigger works under `authenticated`, though that role has no `usage` on the `private` schema —
+  a trigger function is called by its id, not looked up by name.
+- **D8 — `fakeTransport` no longer imitates the dropped `posts_progress_pic_private` CHECK**, and
+  `fakeSocialClient` answers `update(…).select()` with the changed rows.
+
 - **Scope verdict (planner):** right as written, with one deliberate narrowing said out loud
   (body data, G5) and one product reading flagged for Gate 1 (lockstep, G1). The three-option
   control (G3) is the same machinery as the named toggle, not a widening; the `ChoiceChips`

@@ -8,8 +8,8 @@
  *     the photo's copy and the outbox line on the phone — the upload happens afterwards, in the
  *     sync engine's push (photo first, then the post), exactly once.
  *
- * Plus the type choice (progress pics private, PR photos public, each with its flair) and the
- * empty-flairs guard. The photo library and the file copy are stubbed at their seams; the router
+ * Plus the type choice (progress pics private by default, PR photos public, each with its flair),
+ * (B26) a progress pic born with the lifter's Settings choice, and the empty-flairs guard. The photo library and the file copy are stubbed at their seams; the router
  * is a stub. Route files live in `src/app/`, so their tests live here.
  */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
@@ -18,6 +18,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react-native';
 
 import type { SqlDriver } from '@/db/driver';
 import { replaceFlairsTx } from '@/db/flairs';
+import { setProgressPicVisibility } from '@/settings/privacySettings';
 import { checkPostImage, MAX_POST_IMAGE_BYTES } from '@/social/mediaLimits';
 import { outboxSize, pendingRows } from '@/sync/outbox';
 import { pushOutbox } from '@/sync/push';
@@ -25,7 +26,7 @@ import { FakePostImageFiles } from '@/test-utils/fakePostImageFiles';
 import { FakeServer } from '@/test-utils/fakeTransport';
 import { createPreparedDb, renderSignedIn, SIGNED_IN_USER_ID } from '@/test-utils/loggerTestKit';
 
-import NewPostScreen, { PRIVACY_LINES } from '@/app/new-post';
+import NewPostScreen, { privacyLine } from '@/app/new-post';
 
 const mockOpenDatabase = jest.fn<() => Promise<SqlDriver>>();
 jest.mock('@/db/database', () => ({
@@ -101,7 +102,7 @@ describe('Share a photo (B22)', () => {
 
   it('an accepted progress pic: Post returns to Home at once with only local work done; the push uploads photo then post, once', async () => {
     await renderSignedIn(<NewPostScreen />);
-    expect(await screen.findByText(PRIVACY_LINES['progress-pic'], { exact: false })).toBeTruthy();
+    expect(await screen.findByText(privacyLine('progress-pic', 'private'), { exact: false })).toBeTruthy();
     await fireEvent.press(await screen.findByLabelText('Choose photo'));
     expect(await screen.findByLabelText('Chosen photo')).toBeTruthy();
 
@@ -129,13 +130,29 @@ describe('Share a photo (B22)', () => {
   it('PR photo: public, with the New PR flair', async () => {
     await renderSignedIn(<NewPostScreen />);
     await fireEvent.press(await screen.findByLabelText('PR photo'));
-    expect(await screen.findByText(PRIVACY_LINES.pr, { exact: false })).toBeTruthy();
+    expect(await screen.findByText(privacyLine('pr', 'private'), { exact: false })).toBeTruthy();
     expect(screen.getByText(/Flair: New PR\./)).toBeTruthy();
     await fireEvent.press(screen.getByLabelText('Choose photo'));
     await screen.findByLabelText('Chosen photo');
     await fireEvent.press(screen.getByLabelText('Post'));
     await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
     expect(await postRows()).toEqual([expect.objectContaining({ kind: 'pr', visibility: 'public', flair_id: 'new-pr' })]);
+  });
+
+  it('B26: with Followers chosen in Settings, the line says so and the progress pic is born followers-only, then uploads so', async () => {
+    await setProgressPicVisibility(db, SIGNED_IN_USER_ID, 'followers');
+    await renderSignedIn(<NewPostScreen />);
+    expect(await screen.findByText('Your followers can see this post. Choose who sees new progress pics in Settings.', { exact: false })).toBeTruthy();
+    await fireEvent.press(await screen.findByLabelText('Choose photo'));
+    await screen.findByLabelText('Chosen photo');
+    await fireEvent.press(screen.getByLabelText('Post'));
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalledWith('/'));
+    expect(await postRows()).toEqual([expect.objectContaining({ kind: 'progress-pic', visibility: 'followers' })]);
+
+    // The stand-in server takes it as chosen (B22's private-only CHECK is gone).
+    const server = new FakeServer();
+    await pushOutbox(db, server, mockFiles);
+    expect([...server.posts.values()].map((p) => p.visibility)).toEqual(['followers']);
   });
 
   it('a cancelled pick changes nothing; Cancel goes back', async () => {

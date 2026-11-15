@@ -44,7 +44,7 @@ import { getToolKitSession, updateToolKitSession } from '@/toolkit/session';
 import { parseNumberInput } from '@/workout/format';
 import { colors, layout, radii, spacing } from '@/theme';
 
-import { ChoiceChips, type ChoiceOption } from './ChoiceChips';
+import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
 import { ResultCard } from './ResultCard';
 import { NumberField, WeightField } from './WeightField';
 

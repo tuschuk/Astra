@@ -3,8 +3,11 @@
  *
  * What it shows: one chip per option, the chosen one lit in the accent red. Used by the Tool
  * Kit for its calculator switcher, the RPE calculator's reps and RPE pickers, and the plate
- * loader's kg | lb rack toggle — places where the answer is one of a few fixed values, so a tap
- * is faster than typing and a value outside the allowed range can't be entered at all.
+ * loader's kg | lb rack toggle; by the Home feed and profile for their switchers; and (B26) by
+ * Settings → Privacy and a post's "who can see this" chooser — places where the answer is one
+ * of a few fixed values, so a tap is faster than typing and a value outside the allowed range
+ * can't be entered at all. (Moved from `components/toolkit/` to `components/ui/` at B26, once it
+ * served more than the Tool Kit.)
  *
  * What the lifter can do: tap a chip to choose it. Screen readers hear a radio group, each
  * chip's spoken label, and which one is selected (the Settings unit-toggle pattern).

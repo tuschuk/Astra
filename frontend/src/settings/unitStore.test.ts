@@ -1,14 +1,15 @@
 /**
  * Tests for the unit store (B15), on real SQLite: loading the lifter's unit, the toggle's
  * one-transaction write (row + one outbox line), telling subscribers, the account-switch guard,
- * and that no stored weight is ever touched.
+ * that no stored weight is ever touched, and (B26) that a unit toggle leaves the progress-pic
+ * privacy choice in the same row exactly as it was.
  */
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { prepareDatabase } from '@/db/database';
-import { onLocalWrite, writeLocal } from '@/db/dao';
+import { onLocalWrite, writeLocal, type WorkoutVisibility } from '@/db/dao';
 import type { SqlDriver } from '@/db/driver';
-import { readUserSettingsRow, writeUserSettingsRowTx } from '@/db/userSettings';
+import { readUserSettingsRow, writeUserSettingsRowTx, type UserSettingsRow } from '@/db/userSettings';
 import { pendingRows } from '@/sync/outbox';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { ENTRIES, SETS, WORKOUT } from '@/test-utils/workoutFixtures';
@@ -17,6 +18,16 @@ import { createUnitStore, DEFAULT_DISPLAY_UNIT } from './unitStore';
 
 function freshDb(): Promise<SqlDriver> {
   return prepareDatabase(createNodeSqliteDriver());
+}
+
+/** A whole settings row (privacy at its default unless given). */
+function settingsRow(
+  user_id: string,
+  unit: 'kg' | 'lb',
+  updated_at = 't',
+  progress_pic_visibility: WorkoutVisibility = 'private',
+): UserSettingsRow {
+  return { user_id, unit, progress_pic_visibility, updated_at };
 }
 
 /** Lets pending promise callbacks (a re-read after a download) run. */
@@ -35,7 +46,7 @@ describe('unit store', () => {
 
   it('loads the lifter’s saved unit and tells subscribers', async () => {
     const db = await freshDb();
-    await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, { user_id: 'u1', unit: 'kg', updated_at: 't' }));
+    await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, settingsRow('u1', 'kg')));
     const store = createUnitStore();
     const listener = jest.fn();
     store.subscribe(listener);
@@ -46,7 +57,7 @@ describe('unit store', () => {
 
   it('hydrating a different user replaces the unit wholesale', async () => {
     const db = await freshDb();
-    await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, { user_id: 'u1', unit: 'kg', updated_at: 't' }));
+    await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, settingsRow('u1', 'kg')));
     const store = createUnitStore();
     await store.hydrate(db, 'u1');
     await store.hydrate(db, 'u2');
@@ -66,15 +77,20 @@ describe('unit store', () => {
 
     expect(store.getSnapshot()).toBe('kg');
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(await readUserSettingsRow(db, 'u1')).toEqual({
-      user_id: 'u1',
-      unit: 'kg',
-      updated_at: '2026-11-15T01:00:00.000Z',
-    });
+    expect(await readUserSettingsRow(db, 'u1')).toEqual(settingsRow('u1', 'kg', '2026-11-15T01:00:00.000Z'));
     const pending = await pendingRows(db, 'user_settings');
     expect(pending.map((p) => p.rowId)).toEqual(['u1']);
     expect(heard).toEqual(['user_settings']);
     unsubscribe();
+  });
+
+  it('B26: a unit toggle keeps the progress-pic privacy choice stored in the same row', async () => {
+    const db = await freshDb();
+    await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, settingsRow('u1', 'lb', 't0', 'followers')));
+    const store = createUnitStore();
+    await store.hydrate(db, 'u1');
+    await store.setUnit(db, 'u1', 'kg', { now: 't1' });
+    expect(await readUserSettingsRow(db, 'u1')).toEqual(settingsRow('u1', 'kg', 't1', 'followers'));
   });
 
   it('a failed save changes nothing on screen and queues nothing', async () => {
@@ -89,7 +105,7 @@ describe('unit store', () => {
 
   it('a toggle made while the sign-in load is still reading wins over that load', async () => {
     const db = await freshDb();
-    await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, { user_id: 'u1', unit: 'lb', updated_at: 't' }));
+    await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, settingsRow('u1', 'lb')));
     const store = createUnitStore();
     const loading = store.hydrate(db, 'u1');
     await store.setUnit(db, 'u1', 'kg');
@@ -104,7 +120,7 @@ describe('unit store', () => {
     const listener = jest.fn();
     store.subscribe(listener);
     // What the pull does: save the server's row, then hand it over.
-    const row = { user_id: 'u1', unit: 'kg' as const, updated_at: '2026-11-15T02:00:00+00:00' };
+    const row = settingsRow('u1', 'kg', '2026-11-15T02:00:00+00:00');
     await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, row));
     store.applyPulled(row);
     await settle();
@@ -116,7 +132,7 @@ describe('unit store', () => {
     const db = await freshDb();
     const store = createUnitStore();
     await store.hydrate(db, 'new-user');
-    const old = { user_id: 'old-user', unit: 'kg' as const, updated_at: 't' };
+    const old = settingsRow('old-user', 'kg');
     await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, old));
     store.applyPulled(old);
     await settle();
@@ -145,7 +161,7 @@ describe('unit store', () => {
     }) as typeof db.getFirstAsync;
     await expect(store.hydrate(db, 'u1')).rejects.toThrow('disk busy');
     db.getFirstAsync = realGet;
-    await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, { user_id: 'u1', unit: 'kg', updated_at: 't' }));
+    await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, settingsRow('u1', 'kg')));
     await store.hydrate(db, 'u1');
     expect(store.getSnapshot()).toBe('kg');
   });
@@ -156,7 +172,7 @@ describe('unit store', () => {
     await store.setUnit(db, 'u1', 'kg');
     store.reset();
     expect(store.getSnapshot()).toBe('lb');
-    store.applyPulled({ user_id: 'u1', unit: 'kg', updated_at: 't' });
+    store.applyPulled(settingsRow('u1', 'kg'));
     await settle();
     expect(store.getSnapshot()).toBe('lb');
   });

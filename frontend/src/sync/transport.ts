@@ -13,8 +13,6 @@
  * Every method throws on failure (no signal, server error, refused by
  * security rules). The engine treats any throw as "try again later".
  */
-import type { WeightUnit } from '@training-math';
-
 import type {
   ExerciseRow,
   FlairRow,
@@ -27,7 +25,7 @@ import type {
   WorkoutExerciseRow,
   WorkoutRow,
 } from '@/db/dao';
-import type { UserSettingsRow } from '@/db/userSettings';
+import type { UserSettingsFields, UserSettingsRow } from '@/db/userSettings';
 
 /**
  * A bookmark in a download: "everything after this row". Rows are read in
@@ -106,13 +104,14 @@ export interface SyncTransport {
   pullUserSettings(userId: string): Promise<UserSettingsRow | null>;
 
   /**
-   * Saves the user's kg/lb choice on the server (B15). An UPDATE of their existing row, never
-   * an insert: the row is created with the account, and the server's security rules allow the
+   * Saves the user's settings on the server: the kg/lb unit (B15) and who sees new progress
+   * pics (B26), both taken from the phone's row. An UPDATE of their existing row, never an
+   * insert: the row is created with the account, and the server's security rules allow the
    * phone no inserts. The server stamps `updated_at` itself, as on every upload. If no row
    * matches (only possible for a line left over from a previous account on this phone) the
    * update changes nothing and still counts as done, so it can't block the queue.
    */
-  pushUserSettings(userId: string, unit: WeightUnit): Promise<void>;
+  pushUserSettings(userId: string, fields: UserSettingsFields): Promise<void>;
 
   /**
    * Asks the server to analyze one of the user's finished workouts (B18) — the

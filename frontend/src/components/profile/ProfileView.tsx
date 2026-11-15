@@ -13,7 +13,8 @@
  *   - three tabs: **Posts** (their posts as feed cards, newest first, twenty at a time — the server
  *     decides which ones the viewer may see), **History** (every finished workout, newest first,
  *     paging back to the very first one), and **PRs** (current records per exercise, e.g.
- *     "1RM 140 kg · e1RM 151.7 kg · 5RM 130 kg", in the viewer's kg / lb unit).
+ *     "1RM 140 kg · e1RM 151.7 kg · 5RM 130 kg", in the viewer's kg / lb unit). On your own
+ *     Posts tab (B26) each card has the "who can see this" chip — Only you / Followers / Public.
  *
  * Where the data comes from:
  *   - your own History and PRs are read from the phone, so they work with no signal, and a past
@@ -36,12 +37,13 @@ import { Avatar } from '@/components/social/Avatar';
 import { FollowButton } from '@/components/social/FollowButton';
 import { PostCard, UNNAMED_EXERCISE } from '@/components/social/PostCard';
 import { usePostPhotoSource } from '@/components/social/usePostPhotoSource';
-import { ChoiceChips, type ChoiceOption } from '@/components/toolkit/ChoiceChips';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
+import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
 import { WorkoutListItem } from '@/components/workout/WorkoutListItem';
+import type { WorkoutVisibility } from '@/db/dao';
 import { useAppDatabase } from '@/db/useAppDatabase';
 import { getSupabase } from '@/lib/supabase';
 import { useDisplayUnit } from '@/settings/displayUnit';
@@ -49,6 +51,7 @@ import { appendPage, loadFeedPage, type FeedCursor, type FeedPost } from '@/soci
 import { follow, unfollow } from '@/social/follows';
 import { personLabels } from '@/social/names';
 import { getCachedOwnProfile, loadOwnProfile, saveOwnProfile, type OwnProfileIdentity } from '@/social/ownProfileCache';
+import { setPostVisibility, visibilityTargetOf, withPostVisibility, type PostVisibilityResult } from '@/social/postPrivacy';
 import {
   loadProfileHeader,
   loadProfilePrs,
@@ -320,6 +323,23 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
     [client, me],
   );
 
+  /**
+   * An own post card's "who can see this" choice (B26): the server post (and its workout, moved
+   * by the server) plus the phone's copies, then the Posts tab's own list, so a card rebuilt
+   * after scrolling shows the new audience. Only the lifter's own cards offer it.
+   */
+  const changeVisibility = useCallback(
+    async (post: FeedPost, next: WorkoutVisibility): Promise<PostVisibilityResult> => {
+      if (!me) return { ok: false, reason: 'failed' };
+      const result = await setPostVisibility(client, db, me, visibilityTargetOf(post), next);
+      if (result.ok) {
+        setPosts((prev) => (prev.status === 'ready' ? { ...prev, items: withPostVisibility(prev.items, post.id, next) } : prev));
+      }
+      return result;
+    },
+    [client, db, me],
+  );
+
   if (header.status === 'missing') {
     return (
       <Screen>
@@ -467,6 +487,7 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
           viewerId={me}
           photoSource={photoSource}
           onVote={vote}
+          onChangeVisibility={changeVisibility}
           onOpenComments={(postId) => router.push({ pathname: '/post-comments/[id]', params: { id: postId } })}
         />
       );

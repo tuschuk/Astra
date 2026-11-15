@@ -56,7 +56,7 @@ describe('useSync', () => {
 
   it('B15: loads the signed-in lifter’s unit, and a unit changed on another device reaches the store', async () => {
     const db = await prepareDatabase(createNodeSqliteDriver());
-    await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, { user_id: USER_ID, unit: 'kg', updated_at: 't' }));
+    await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, { user_id: USER_ID, unit: 'kg', progress_pic_visibility: 'private', updated_at: 't' }));
     const server = new FakeServer();
     const store = createUnitStore();
     const { deps } = makeDeps(db, server);

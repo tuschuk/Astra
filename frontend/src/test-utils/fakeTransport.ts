@@ -44,8 +44,9 @@ import type {
   WorkoutAnalysisRow,
   WorkoutExerciseRow,
   WorkoutRow,
+  WorkoutVisibility,
 } from '@/db/dao';
-import type { UserSettingsRow } from '@/db/userSettings';
+import type { UserSettingsFields, UserSettingsRow } from '@/db/userSettings';
 import {
   PostAlreadyExistsError,
   type PostPushRow,
@@ -252,11 +253,19 @@ export class FakeServer implements SyncTransport {
    */
   readonly userSettings = new Map<string, UserSettingsRow>();
   /** Every settings update received, in order (including failed ones). */
-  readonly userSettingsPushes: { userId: string; unit: WeightUnit }[] = [];
+  readonly userSettingsPushes: ({ userId: string } & UserSettingsFields)[] = [];
 
-  /** Creates or changes a user's settings row directly (the signup trigger, or another device). */
-  seedUserSettings(userId: string, unit: WeightUnit): void {
-    this.userSettings.set(userId, { user_id: userId, unit, updated_at: this.now() });
+  /**
+   * Creates or changes a user's settings row directly (the signup trigger, or another device).
+   * The progress-pic choice (B26) defaults to 'private', the server column's default.
+   */
+  seedUserSettings(userId: string, unit: WeightUnit, progressPicVisibility: WorkoutVisibility = 'private'): void {
+    this.userSettings.set(userId, {
+      user_id: userId,
+      unit,
+      progress_pic_visibility: progressPicVisibility,
+      updated_at: this.now(),
+    });
   }
 
   async pullUserSettings(userId: string): Promise<UserSettingsRow | null> {
@@ -269,10 +278,10 @@ export class FakeServer implements SyncTransport {
    * Like the real `update … where user_id = …`: changes an existing row (re-stamping it by the
    * server clock) and silently changes nothing when the user has no row — never inserts.
    */
-  async pushUserSettings(userId: string, unit: WeightUnit): Promise<void> {
-    this.userSettingsPushes.push({ userId, unit });
+  async pushUserSettings(userId: string, fields: UserSettingsFields): Promise<void> {
+    this.userSettingsPushes.push({ userId, ...fields });
     this.guard();
-    if (this.userSettings.has(userId)) this.seedUserSettings(userId, unit);
+    if (this.userSettings.has(userId)) this.seedUserSettings(userId, fields.unit, fields.progress_pic_visibility);
   }
 
   /** The server's `workout_analyses` table (B18): workout id → row. */
@@ -385,16 +394,13 @@ export class FakeServer implements SyncTransport {
         throw new Error('Upload of post failed: new row violates row-level security policy for table "posts"');
       }
     } else {
-      // The B22 rules: an image post names a photo in its author's own folder and no workout,
-      // and a progress pic is private.
+      // The B22 rules: an image post names a photo in its author's own folder and no workout.
+      // (B22's "a progress pic is private" CHECK was dropped at B26 — the lifter chooses.)
       if (row.workout_id !== null || !row.image_path) {
         throw new Error('Upload of post failed: violates check constraint "posts_kind_shape"');
       }
       if (!row.image_path.startsWith(`${row.user_id}/`)) {
         throw new Error('Upload of post failed: violates check constraint "posts_image_in_own_folder"');
-      }
-      if (row.kind === 'progress-pic' && row.visibility !== 'private') {
-        throw new Error('Upload of post failed: violates check constraint "posts_progress_pic_private"');
       }
     }
     if (!this.flairs.some((f) => f.id === row.flair_id)) {

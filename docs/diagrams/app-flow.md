@@ -30,15 +30,15 @@ flowchart TD
 
   Tabs["Tab layout (only with a session)<br/>five bottom tabs, Workout dead center,<br/>floating top-right profile button"]
 
-  Tabs --> Home["Home (app/(tabs)/index.tsx, B20, SOC-1)<br/>FlatList of PostCards: followed lifters' + my own posts, newest first —<br/>workout posts, and (B22) progress-pic / PR photo posts: the photo is an RN Image of<br/>/storage/v1/object/authenticated/post-images/path with the viewer's Bearer token + apikey<br/>(postImageSource; 'Photo unavailable' panel on error); my own progress pic: 'Only you can see this post';<br/>reloads page 1 on every focus; pull-to-refresh; end of list → next page (20, keyset);<br/>card footer (B23, SOC-4/5): Upvote · net score · Downvote (no Downvote at all when flair.upvotesOnly,<br/>e.g. Physique Check) — tap = optimistic score ± voteDelta, revert + message on refusal;<br/>'n comments' / 'Comment' button;<br/>header 'Share a photo' (B22) + 'Find lifters' buttons;<br/>under 'Your feed' (B24): order chips Latest | Hot (SOC-11) and a scrolling flair row All + one chip per<br/>device flairs row (SOC-9) — shown once the remembered choice AND the flair list are read; first feed read waits for both;<br/>a remembered flair not in the flair list reads as All; tap = save + reload page 1 ('Loading your feed…'<br/>whenever the list on screen was loaded for another order / flair);<br/>empty: filtered to a flair → 'No Form Check posts yet.' + Show all posts;<br/>follow nobody → Find lifters + Log a workout, follow people who haven't posted → Find lifters;<br/>request failed / offline → 'The feed needs a connection' + Retry (nothing queued)"]
+  Tabs --> Home["Home (app/(tabs)/index.tsx, B20, SOC-1)<br/>FlatList of PostCards: followed lifters' + my own posts, newest first —<br/>workout posts, and (B22) progress-pic / PR photo posts: the photo is an RN Image of<br/>/storage/v1/object/authenticated/post-images/path with the viewer's Bearer token + apikey<br/>(postImageSource; 'Photo unavailable' panel on error);<br/>my own cards only (B26, YOU-5): a 'who can see this' chip (Only you / Followers / Public) → tap opens an inline<br/>chooser (ChoiceChips + the chosen option's meaning) → optimistic chip, setPostVisibility, revert + message on refusal,<br/>held while in flight; success also rewrites the feed's own list (withPostVisibility); others' cards have no chip;<br/>reloads page 1 on every focus; pull-to-refresh; end of list → next page (20, keyset);<br/>card footer (B23, SOC-4/5): Upvote · net score · Downvote (no Downvote at all when flair.upvotesOnly,<br/>e.g. Physique Check) — tap = optimistic score ± voteDelta, revert + message on refusal;<br/>'n comments' / 'Comment' button;<br/>header 'Share a photo' (B22) + 'Find lifters' buttons;<br/>under 'Your feed' (B24): order chips Latest | Hot (SOC-11) and a scrolling flair row All + one chip per<br/>device flairs row (SOC-9) — shown once the remembered choice AND the flair list are read; first feed read waits for both;<br/>a remembered flair not in the flair list reads as All; tap = save + reload page 1 ('Loading your feed…'<br/>whenever the list on screen was loaded for another order / flair);<br/>empty: filtered to a flair → 'No Form Check posts yet.' + Show all posts;<br/>follow nobody → Find lifters + Log a workout, follow people who haven't posted → Find lifters;<br/>request failed / offline → 'The feed needs a connection' + Retry (nothing queued)"]
   Home <-->|"social/feedPrefs.ts (B24): loadFeedPrefs (cached per user; damaged → Latest + All),<br/>saveFeedPrefs on every chip tap (fire-and-forget)"| FeedPrefsStore[("kv-store key astra.social.feedPrefs.userId<br/>JSON v1: sort latest | hot + flairId (null = All);<br/>this phone only, not synced, one entry per account")]
   Home -->|"readFlairs on focus (B24): flair chips, by position"| LocalDB
   Home -->|"Find lifters: router.push('/find-lifters')"| FindScr["Find lifters (app/find-lifters.tsx, B20, SOC-7 part)<br/>search box (≥ 2 letters, 300 ms after typing stops);<br/>UserCards (Avatar, name, @handle, FollowButton) — never me,<br/>never someone I blocked; no match / no connection messages; Back"]
   Home -->|"Log a workout (empty feed)"| Workout
   FindScr -->|"Back: router.back (Home reloads on focus)"| Home
-  Home -->|"Share a photo: router.push('/new-post')"| NewPostScr["Share a photo (app/new-post.tsx, B22: SOC-2, NFR-4, NFR-5)<br/>type chips Progress pic | PR photo; privacy line (progress pics private for now,<br/>PR photos public) + the kind's flair name from the device flairs rows;<br/>Choose photo → expo-image-picker library (images, quality 0.9 → iOS HEIC re-encoded to JPEG);<br/>preview; checkPostImage (social/mediaLimits.ts: ≤ 10 MiB, jpeg / png / webp) at pick time —<br/>over limit → 'This photo is 12.4 MB — the limit is 10 MB…', Post disabled;<br/>no flairs synced → Post disabled + a line why; Post · Cancel"]
+  Home -->|"Share a photo: router.push('/new-post')"| NewPostScr["Share a photo (app/new-post.tsx, B22: SOC-2, NFR-4, NFR-5)<br/>type chips Progress pic | PR photo; privacy line (B26: progress pic → the Settings choice read on focus,<br/>e.g. 'Your followers can see this post. Choose who sees new progress pics in Settings.'; PR photos public) + the kind's flair name from the device flairs rows;<br/>Choose photo → expo-image-picker library (images, quality 0.9 → iOS HEIC re-encoded to JPEG);<br/>preview; checkPostImage (social/mediaLimits.ts: ≤ 10 MiB, jpeg / png / webp) at pick time —<br/>over limit → 'This photo is 12.4 MB — the limit is 10 MB…', Post disabled;<br/>no flairs synced → Post disabled + a line why; Post · Cancel"]
   NewPostScr -->|"Cancel: router.back"| Home
-  NewPostScr -->|Post| ImgPostQ["createImagePost (social/createPost.ts, B22):<br/>re-check limits + kind's flair on the phone (progress-pic → physique-check,<br/>private; pr → new-pr, public); copy the picked file to<br/>documents/post-images/postId.ext (postImages.ts); then ONE transaction:<br/>posts row (kind, workout_id null, image_path = userId/postId.ext) + outbox line 'posts';<br/>notifyLocalWrite — nothing is uploaded here"]
+  NewPostScr -->|Post| ImgPostQ["createImagePost (social/createPost.ts, B22):<br/>re-check limits + kind's flair on the phone (progress-pic → physique-check,<br/>visibility = imagePostVisibility: the phone's user_settings.progress_pic_visibility, default private (B26);<br/>pr → new-pr, public); copy the picked file to<br/>documents/post-images/postId.ext (postImages.ts); then ONE transaction:<br/>posts row (kind, workout_id null, image_path = userId/postId.ext) + outbox line 'posts';<br/>notifyLocalWrite — nothing is uploaded here"]
   ImgPostQ -->|"posts row + outbox line; photo file in documents"| LocalDB
   ImgPostQ -.->|"notifies"| Triggers
   NewPostScr -->|"Post saved: router.replace('/') at once"| Home
@@ -49,6 +49,7 @@ flowchart TD
   subgraph SocialMod["Social reads (src/social, B20): online only, client passed in, RLS decides visibility"]
     FeedQ["feed.ts: feedAuthorIds = me + follows.followee_id where follower_id = me;<br/>loadFeedPage(client, me, authors, sort, flairId, after) — B24: Latest → from posts, Hot → from the<br/>post_hot_scores view (same select + hot_score); .select(FEED_SELECT: kind, image_path, visibility,<br/>flair (id, name, upvotes_only — B23), author:profiles!posts_user_id_fkey (hint required through the view, B24),<br/>workout (plain left embed since B22) → entries → exercise name, sets, my_vote:votes(value) — B23)<br/>.in(user_id, authors) .eq(my_vote.user_id, me) [.eq(flair_id, flairId) — B24, SOC-9]<br/>Latest: [.or(beforeCursorFilter)] order created_at desc, id desc;<br/>Hot: [.or(beforeHotCursorFilter: hot_score lt, or eq + id lt)] order hot_score desc, id desc; limit 20;<br/>the bookmark is tagged latest | hot — one from the other order is refused;<br/>then (B23) loadPostScores: post_scores.select(post_id, score, comment_count).in(post_id, page ids);<br/>toFeedPost: photo post → kind + imagePath; workout post → sort entries + sets, weight → number;<br/>+ score, commentCount (0 without a scores row), myVote (+1 / −1 / null);<br/>a workout post whose workout RLS withheld (null) is dropped; appendPage drops repeats"]
     VoteQ["votes.ts (B23): castVote → votes.upsert(onConflict post_id,user_id);<br/>clearVote → delete where post_id + user_id = me; never throw:<br/>P0001 (upvote-only trigger) → 'This post takes upvotes only.', anything else → 'didn't go through';<br/>voteDelta / nextVote: the card's optimistic arithmetic (the tally itself stays on the server)"]
+    PrivacyQ["postPrivacy.ts (B26): setPostVisibility(client, db, me, target, next) →<br/>posts.update({visibility}).eq(id).eq(user_id, me).select(id); 0 rows → 'can't be changed right now',<br/>error / offline → 'Couldn't change who can see this post…'; never throws; online only, nothing queued.<br/>On success: astra.db posts row + (workout post) workouts row get the new visibility, no outbox lines,<br/>then notifyLocalWrite; VISIBILITY_WORDS / VISIBILITY_ORDER: the one spelling of the three audiences"]
     CommentQ["comments.ts (B23): loadComments → comments.select(…, author:profiles) eq post_id<br/>order created_at, id asc, limit 200; addComment → commentBodyError first<br/>(commentLimits.ts: 500 chars, not blank — mirrors the CHECK), then insert(…).select().single()"]
     FollowQ["follows.ts: searchLifters (sanitized ilike on username / display_name,<br/>not me, not in my blocks, limit 20, + which I follow);<br/>follow = insert follows row (duplicate = ok; RLS refusal → 'You can't follow this lifter.');<br/>unfollow = delete my row; results carry avatar_url (B25)"]
     ProfileQ["profile.ts (B25): loadProfileRow (profiles row) · loadProfileHeader = row + rpc follow_counts<br/>+ (others) my follows row → viewerFollows; updateProfile → profiles.update eq id = me<br/>(23505 username → 'That username is taken.', 23514 → the box's message, else the calm line);<br/>loadWorkoutHistory → workouts.select(HISTORY_SELECT) eq user_id, ended_at not null,<br/>[.or(beforeStartedFilter)] order started_at, id desc, limit 20;<br/>loadProfilePrs → personal_records.select(…, exercise:exercises(name)) eq user_id → groupPrs"]
@@ -58,6 +59,10 @@ flowchart TD
   FindScr --> FollowQ
   FeedQ -->|"supabase-js select as the signed-in user"| DB
   VoteQ -->|"upsert / delete votes (RLS + votes_upvote_only trigger)"| DB
+  Home -->|"own card chip (B26)"| PrivacyQ
+  ProfileView -->|"own Posts tab card chip (B26)"| PrivacyQ
+  PrivacyQ -->|"update posts.visibility as me (owner update RLS);<br/>trigger sync_workout_visibility moves the workout in the same transaction"| DB
+  PrivacyQ -->|"mirror: posts + workouts visibility (no outbox)"| LocalDB
   CommentQ -->|"select / insert comments (RLS: post visible to me)"| DB
   FollowQ -->|"select profiles / blocks / follows; insert / delete follows"| DB
   DispUnit -->|"viewer's unit: PostCard sets via formatSet / formatDropSet"| Home
@@ -70,7 +75,7 @@ flowchart TD
   Home -->|"card author tap (B25): router.push('/profile/[id]')"| ProfileScr["Profile (app/profile/[id].tsx, B25)<br/>ProfileView for the route id (my own id → my own view); Back"]
   FindScr -->|"card tap (B25): router.push('/profile/[id]')"| ProfileScr
   ProfileScr --> ProfileView
-  ProfileView["ProfileView (components/profile, B25)<br/>header: Avatar (public avatars URL, else letter) · display name · @username · bio<br/>(own null → 'Add a bio…', other null → 'No bio yet.') · Followers / Following counts ('—' while unknown);<br/>own: Edit profile · other: FollowButton (optimistic; refusal flips back + line) → header re-read so counts match;<br/>header offline → 'Counts and posts need a connection.' + Retry; no profile row → 'This lifter isn't available.';<br/>tabs Posts | History | PRs (ChoiceChips), reloaded on focus, Posts / History page at the list end:<br/>Posts = PostCards (vote, comments) · History own = WorkoutListItem → workout/[id], other = not tappable rows<br/>· PRs = one card per exercise, formatPrLine in the viewer's unit"]
+  ProfileView["ProfileView (components/profile, B25)<br/>header: Avatar (public avatars URL, else letter) · display name · @username · bio<br/>(own null → 'Add a bio…', other null → 'No bio yet.') · Followers / Following counts ('—' while unknown);<br/>own: Edit profile · other: FollowButton (optimistic; refusal flips back + line) → header re-read so counts match;<br/>header offline → 'Counts and posts need a connection.' + Retry; no profile row → 'This lifter isn't available.';<br/>tabs Posts | History | PRs (ChoiceChips), reloaded on focus, Posts / History page at the list end:<br/>Posts = PostCards (vote, comments; own: the B26 visibility chip, success rewrites the tab's list) · History own = WorkoutListItem → workout/[id], other = not tappable rows<br/>· PRs = one card per exercise, formatPrLine in the viewer's unit"]
   ProfileView -->|"own header: saveOwnProfile on load; read first at mount (offline identity)"| OwnProfileStore[("kv-store key astra.social.ownProfile.userId<br/>JSON v1: username, displayName, bio, avatarPath<br/>(no counts); per account, not synced")]
   ProfileView -->|"own History: listPastWorkouts(db, me, 20, before-cursor) · own PRs: allCurrentPrs (workout/prs.ts + prList.groupPrs)"| LocalDB
   ProfileView --> ProfileQ
@@ -78,10 +83,14 @@ flowchart TD
   ProfileView -->|"Edit profile: router.push('/edit-profile')"| EditProfileScr["Edit profile (app/edit-profile.tsx, B25, YOU-1)<br/>loadProfileRow fills Display name / Username / Bio; Change photo → expo-image-picker<br/>(square crop, quality 0.8) → checkAvatarImage (≤ 5 MiB, jpeg / png / webp; refusal line, Save disabled);<br/>Save: checkProfileText (profileLimits: 50 / 300 / username pattern; a set username can't be cleared)<br/>→ uploadAvatar to avatars/me/uuid.ext (new name each time) → updateProfile(avatar_url = path)<br/>→ deleteAvatar(old) best effort (or the new one if the update failed) → saveOwnProfile → Back;<br/>offline → 'Editing your profile needs a connection.' + Retry; nothing queued"]
   EditProfileScr --> ProfileQ
   EditProfileScr -->|"FileSystem.uploadAsync POST /storage/v1/object/avatars/path (Bearer + apikey);<br/>DELETE same address for the old photo"| DB
-  You -->|"gear: router.push('/settings')"| SettingsScr["Settings (app/settings.tsx, B15, YOU-4 part)<br/>Units: kg | lb segmented toggle (radio roles for screen readers)<br/>Account: signed-in email + Sign out<br/>Back (or /you); no Notifications / Privacy until B47 / B26"]
+  You -->|"gear: router.push('/settings')"| SettingsScr["Settings (app/settings.tsx, B15, YOU-4 part)<br/>Units: kg | lb segmented toggle (radio roles for screen readers)<br/>Privacy (B26): 'Who can see new progress pics' ChoiceChips Only you | Followers | Public<br/>(read from astra.db on focus, disabled until read; failed save → chip back + line);<br/>'existing posts keep their own setting'; Body data: static 'Only you. Body data never leaves your account.' (no control)<br/>Account: signed-in email + Sign out<br/>Back (or /you); no Notifications until B47"]
   SettingsScr -->|"tap kg / lb: unitStore.setUnit"| UnitStore
+  SettingsScr -->|"progress-pic chip: setProgressPicVisibility"| PrivacySet["privacySettings.ts (src/settings, B26):<br/>readProgressPicVisibility (no row → private) ·<br/>setProgressPicVisibility (ONE transaction: patchUserSettingsTx — unit kept —<br/>+ outbox line row_id = user id, then notify); no in-memory store"]
+  PrivacySet -->|"user_settings row + outbox line"| LocalDB
+  PrivacySet -.->|"notifies"| Triggers
+  ImgPostQ -->|"reads progress_pic_visibility"| PrivacySet
   subgraph UnitsMod["Units (src/settings, B15)"]
-    UnitStore["unitStore.ts: the signed-in lifter's unit in memory (default lb)<br/>hydrate (read astra.db row at sign-in) · setUnit (ONE transaction:<br/>user_settings row + outbox line row_id = user id, then notify) ·<br/>applyPulled (re-read the row; ignored for another user) · reset (sign-out)"]
+    UnitStore["unitStore.ts: the signed-in lifter's unit in memory (default lb)<br/>hydrate (read astra.db row at sign-in) · setUnit (ONE transaction:<br/>patchUserSettingsTx — only the unit; the privacy choice kept, B26 — + outbox line row_id = user id, then notify) ·<br/>applyPulled (re-read the row; ignored for another user) · reset (sign-out)"]
     DispUnit["displayUnit.ts useDisplayUnit():<br/>useSyncExternalStore over unitStore — every weight screen re-draws on change"]
     UnitStore --> DispUnit
   end
@@ -102,7 +111,7 @@ flowchart TD
 
   subgraph Device["On the device"]
     Store[("expo-sqlite key-value store<br/>the saved Supabase session<br/>(survives killing the app)")]
-    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records, user_settings (B15: user_id, unit),<br/>workout_analyses (B18, download-only, new_prs as JSON text),<br/>flairs (B21, download-only, replaced whole), posts (B21, my own, upload-only;<br/>B22: kind, nullable workout_id, image_path) (schema V9)<br/>+ outbox (unsent changes; op = upsert or delete, B14) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
+    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records, user_settings (B15: user_id, unit; V10, B26: progress_pic_visibility),<br/>workout_analyses (B18, download-only, new_prs as JSON text),<br/>flairs (B21, download-only, replaced whole), posts (B21, my own, upload-only;<br/>B22: kind, nullable workout_id, image_path) (schema V10)<br/>+ outbox (unsent changes; op = upsert or delete, B14) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
     LocalSeed["First-launch seed (library/seedLocal.ts)<br/>insert-if-missing all 151 exercises,<br/>id = uuidv5(namespace, slug); never queued"]
     WriteLocal["writeLocal / writeLocalRowsTx / writeLocalTree (db/dao.ts): the queued write paths<br/>rows + outbox lines + re-stamp & queue parent workout,<br/>all-or-nothing (writeLocalTree: a whole workout in one transaction)<br/>deleteLocalRowsTx (B14): delete rows + 'delete' outbox line + touch the root<br/>(a deleted workout also drops its analysis and, B21, its post + the post's unsent lines)"]
     Drafts["writeDraftRows / deleteDraftRowsTx (db/dao.ts): the in-progress path<br/>saved at once, NEVER queued; refused for a finished workout"]
@@ -245,7 +254,7 @@ flowchart TD
   subgraph SyncEng["Sync engine (src/sync), mounted by useSync in the root layout"]
     Triggers{{"Triggers, debounced 750 ms, one run at a time:<br/>start with a session, app back to foreground,<br/>network reconnects, a local write"}}
     PrePass["Tombstones first (B14): apply other devices' deletions<br/>BEFORE uploading, so an unsent edit can't re-create<br/>a workout deleted elsewhere"]
-    Push["Push: DELETE phase first (B14): outbox 'delete' lines,<br/>children's tables first, batches of 100 ids;<br/>then outbox → server upserts, parents first<br/>(… sets, then personal_records), batches of 500 on id (no updated_at),<br/>then workouts again to re-touch roots;<br/>clear lines up to each row's watermark PER OP; stop on failure;<br/>LAST (B15): settings phase — pending user_settings line → UPDATE unit by user_id<br/>(never insert; zero-row update = done);<br/>then (B21) posts phase — each pending posts line → upsert on id (no updated_at),<br/>after its workout landed; 23505 (another device posted it) → drop the local post + lines;<br/>B22 photo post: FIRST stream the waiting file to Storage (uploadPostImage, x-upsert: same path<br/>every retry), THEN upsert the row, ack, delete the waiting file;<br/>waiting file missing → drop the post (can never upload); bucket refusal / no signal → keep line, retry next sync"]
+    Push["Push: DELETE phase first (B14): outbox 'delete' lines,<br/>children's tables first, batches of 100 ids;<br/>then outbox → server upserts, parents first<br/>(… sets, then personal_records), batches of 500 on id (no updated_at),<br/>then workouts again to re-touch roots;<br/>clear lines up to each row's watermark PER OP; stop on failure;<br/>LAST (B15): settings phase — pending user_settings line → UPDATE unit + (B26) progress_pic_visibility<br/>by user_id (never insert; zero-row update = done);<br/>then (B21) posts phase — each pending posts line → upsert on id (no updated_at),<br/>after its workout landed; 23505 (another device posted it) → drop the local post + lines;<br/>B22 photo post: FIRST stream the waiting file to Storage (uploadPostImage, x-upsert: same path<br/>every retry), THEN upsert the row, ack, delete the waiting file;<br/>waiting file missing → drop the post (can never upload); bucket refusal / no signal → keep line, retry next sync"]
     Pull["Pull: exercises, then own workouts by (updated_at, id)<br/>bookmark minus 5 s; fetch their entries and sets;<br/>reconcile (B14): drop local entries / sets the server's copy lacks<br/>(+ PR rows citing them), unless they have unsent lines;<br/>then own personal_records on their own bookmark (B13);<br/>LAST: tombstones after the stored id (B14): deleted workout → local tree<br/>+ its outbox lines go; deleted PR → goes unless unsent or newer;<br/>then (B15) the user_settings row, no bookmark: saved unless a toggle is unsent<br/>(check + save in one transaction), then onUserSettingsPulled → unitStore.applyPulled;<br/>save page + bookmark in one transaction;<br/>skip rows with unsent local edits;<br/>B18: after personal_records, workout_analyses on pull_cursor:workout_analyses<br/>(saved as they come — never any outbox lines); a workout tombstone also drops its analysis<br/>and (B21) its post + the post's unsent lines;<br/>VERY LAST (B21): flairs select-all by position → replace the device copy<br/>(a failure is recorded + logged, not a failed pull; an empty answer is ignored)"]
     Triggers --> PrePass --> Push --> Pull
     Pull -->|"only if the pull succeeded (B18)"| ReqPass
@@ -266,7 +275,7 @@ flowchart TD
   subgraph Backend["Supabase project (live)"]
     AuthAPI["Supabase Auth<br/>email + password accounts"]
     Trigger{"signup trigger handle_new_user<br/>refuses missing / under-18 birthdate;<br/>creates profile, settings, body data"}
-    DB[("Postgres<br/>profiles, settings, body data, follows, blocks,<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records (owner-only RLS; keep-best trigger<br/>never lets an UPDATE lower a record; delete+insert can),<br/>sync_tombstones (B14: written by delete triggers, owner-only read),<br/>workout_analyses (B18: owner read only; NO write policies),<br/>flairs + posts (B20: posts read per workout_visible; write only own post of own workout;<br/>B22: kind / image_path, own-folder + progress-pic-private CHECKs)<br/>see database-erd.md")]
+    DB[("Postgres<br/>profiles, settings, body data, follows, blocks,<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records (owner-only RLS; keep-best trigger<br/>never lets an UPDATE lower a record; delete+insert can),<br/>sync_tombstones (B14: written by delete triggers, owner-only read),<br/>workout_analyses (B18: owner read only; NO write policies),<br/>flairs + posts (B20: posts read per workout_visible; write only own post of own workout;<br/>B22: kind / image_path, own-folder CHECK; B26: progress-pic-private CHECK dropped, the author picks;<br/>trigger sync_workout_visibility: a post's visibility change moves its workout, invoker rights)<br/>see database-erd.md")]
     Bucket[("Storage bucket post-images (B22, private)<br/>10 MiB cap, jpeg / png / webp only;<br/>write only in your own userId/ folder;<br/>read own folder, or any object a visible post cites (workout_visible)")]
     AnalyzeFn["Edge function analyze-workout (B18, deployed, verify_jwt on)<br/>POST {workoutId} with the user's token → getUser;<br/>reads AS THE CALLER (RLS); 404 unless the caller OWNS the workout;<br/>422 if unfinished; buildAnalysis (no model); upsert by id<br/>with the SERVICE ROLE (one statement); returns the stored row"]
     AuthAPI --> Trigger --> DB
@@ -448,14 +457,14 @@ flowchart TD
    this lifter." if a block stops it). Posts are made at the Post step after Finish (item 13).
    Offline, Home says the feed needs a connection (with Retry); everything else keeps working.
 15. **Share a photo (B22, SOC-2, NFR-4, NFR-5).** Home's **Share a photo** opens a screen with two
-   type chips — **Progress pic** (private: only the lifter sees it for now; Physique Check flair)
-   and **PR photo** (public; New PR flair) — and **Choose photo** (the phone's photo library). A
+   type chips — **Progress pic** (seen by whoever the lifter chose in Settings → Privacy, only
+   them by default — B26; Physique Check flair) and **PR photo** (public; New PR flair) — and **Choose photo** (the phone's photo library). A
    photo over 10 MB, or not JPEG / PNG / WebP, is refused the moment it is picked with a sentence
    saying how big it is and what the limit is, and Post stays disabled. **Post** saves the post
    and a copy of the photo on the phone and returns to Home at once; the sync engine uploads the
    photo, then the post, in the background (retrying every sync until both land). Photo posts
    appear on Home as a photo card fetched with the viewer's sign-in, so the server decides who
-   sees each one; the lifter's own progress pic says "Only you can see this post".
+   sees each one; the lifter's own posts show who can see them (item 19).
 16. **Vote and comment (B23, SOC-4, SOC-5) — needs a connection.** Every card's footer has an
    up arrow, the post's net score (ups minus downs, counted on the server) and a down arrow — no
    down arrow at all on an upvote-only post (Physique Check; the flair row says so, and the
@@ -486,7 +495,16 @@ flowchart TD
    can be changed, not removed; "That username is taken." if someone has it), bio (300
    characters) and photo (square crop, up to 5 MB, JPEG / PNG / WebP; refused at pick time
    otherwise). Saving needs a connection.
-19. Everything else is a placeholder that renders its final layout with inert controls (Start
+19. **Who can see a post (B26, YOU-5, NFR-5) — needs a connection.** Every one of the lifter's own
+   cards (Home and their own Posts tab — workout posts, progress pics and PR photos) carries a
+   small chip: **Only you**, **Followers** or **Public**. Tapping it opens the three choices;
+   picking one changes it at once and on the server (a workout post's workout changes with it).
+   If the server refuses, the chip goes back with a short line. The post stays on the lifter's
+   own screens whichever they pick; for everyone else a private post — and its photo — is gone
+   through the API, not just hidden. Other people's cards have no chip. **Settings → Privacy**
+   chooses who *new* progress pics are shown to (Only you by default; works offline, synced
+   like the unit) and states that body data is only ever visible to the lifter.
+20. Everything else is a placeholder that renders its final layout with inert controls (Start
    from a program, Marketplace, Communities).
 
 ## Data path today
@@ -757,22 +775,40 @@ flowchart TD
   layout's signed-in guard. The fake social client grows `workouts` / `personal_records` tables,
   `update` with the profiles unique / CHECK refusals, `not(col, 'is', null)` and
   `rpc('follow_counts')`.
+- **Post privacy (B26).** `social/postPrivacy.ts` — `setPostVisibility` (one online update of the
+  author's own post, `.select('id')` to learn whether a row changed; never throws), then a local
+  mirror of the post and workout rows with no outbox lines, so a later whole-row workout upload
+  (B14 edit) carries the new value; the server's `sync_workout_visibility` trigger moves the
+  workout itself. `visibilityTargetOf` / `withPostVisibility` let Home and ProfileView rewrite
+  their stored lists after success. `VISIBILITY_WORDS` / `VISIBILITY_ORDER` are the one spelling
+  of the three audiences (card chip, Settings chips, Share a photo's line). The settings row
+  gained `progress_pic_visibility` (device V10): `db/userSettings.ts` adds `parseVisibility`
+  (unknown → `private`, fail closed) and `patchUserSettingsTx` (read-merge-write, so the unit
+  toggle and the privacy choice never undo each other); `settings/privacySettings.ts` reads and
+  saves it (one transaction + outbox line); `transport.pushUserSettings` now carries both fields.
+  `createImagePost` reads the choice for progress pics (`imagePostVisibility`), so posting stays
+  offline. `ChoiceChips` moved to `components/ui/`. The fake social client answers
+  `update(…).select()` with the changed rows; the fake server no longer imitates the dropped CHECK.
 - **Still unwired:** follower / following counts don't open lists; another lifter's workout rows
   on a profile aren't tappable; there is no "remove photo"; the Library reads the bundled catalog, not `astra.db`; posts can't be
   edited, deleted or re-offered from old workouts (photo posts can't be deleted either, so their
-  storage objects are never removed); progress pics have no visibility choice (B26); feed cards don't
+  storage objects are never removed); feed cards don't
   open a detail screen; comments can't be deleted from the app (the RLS allows your own) and
   aren't paged past 200; the muscle map appears only on the analysis screen; Settings has no
-  Notifications (B47) or Privacy (B26) section.
+  Notifications section (B47); body data has a statement but no visibility control (it has no
+  reader yet); there is no per-workout visibility control or default-workout-visibility setting
+  (new workouts are born public).
 
 ## Shared pieces every screen uses
 
 - `components/Screen.tsx` and `components/AppBackground.tsx` wrap each screen in the common chrome.
 - `components/AstraTabBar.tsx` defines the five tabs once (route, label, icon) and renders the bar.
 - `components/ProfileButton.tsx` is the floating route to You.
-- `components/ui/` holds Button, Card, EmptyState, Text, TextField (labeled input) and FormError
-  (red alert line), all styled from `theme/tokens.ts`.
-- `components/social/` (B20) holds PostCard (one feed post — a workout, or since B22 a photo; since B23 with the vote / comments footer; since B25 a tappable author), UserCard (a person + FollowButton; since B25 tappable to their profile),
+- `components/ui/` holds Button, Card, EmptyState, Text, TextField (labeled input), FormError
+  (red alert line) and (moved from the Tool Kit at B26) ChoiceChips (a radio-group chip row, can
+  be locked with `disabled` — Tool Kit, Home, profile tabs, Settings, the post visibility
+  chooser), all styled from `theme/tokens.ts`.
+- `components/social/` (B20) holds PostCard (one feed post — a workout, or since B22 a photo; since B23 with the vote / comments footer; since B25 a tappable author; since B26 the owner-only visibility chip), UserCard (a person + FollowButton; since B25 tappable to their profile),
   FollowButton (B25: Follow / Following, optimistic with revert, `onSettled` after an accepted
   change), Avatar (B25: the public-bucket photo, else LetterAvatar — the initial badge),
   and `usePostPhotoSource` (B25: the viewer-token photo fetch Home and profiles share).
@@ -787,7 +823,7 @@ flowchart TD
   alert, B14).
 - `components/toolkit/` (B16, B17) holds ToolKitSheet, the four calculators (OneRmCalculator,
   RpeCalculator, IntensityCalculator, PlateLoader), TimerScreen, and their shared pieces:
-  ChoiceChips (a radio-group chip row, can be locked with `disabled`), NumberField / WeightField (labeled number box + inline error, the
+  ChoiceChips (now in `components/ui/`), NumberField / WeightField (labeled number box + inline error, the
   weight one naming its unit) and ResultCard (the big answer + second line).
 - **Training math** (`backend/supabase/functions/_shared/training-math/`, imported in the app as
   `@training-math`) is the only place e1RM, RPE and %1RM working weights, plate breakdowns, kg/lb

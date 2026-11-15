@@ -12,7 +12,9 @@
  * progress pic or PR photo, and open Find lifters to search for people and follow them. On each
  * card (B23): upvote or downvote (no downvote on upvote-only posts such as Physique Check), and
  * open the post's comments. Votes go straight to the server; the card shows the change at once
- * and takes it back if refused. Tapping a card's author opens their profile (B25).
+ * and takes it back if refused. Tapping a card's author opens their profile (B25). On the
+ * lifter's own cards (B26), the "who can see this" chip changes a post to Only you / Followers /
+ * Public — sent straight to the server, where row-level security makes it real.
  *
  * Order and flair (B24): under "Your feed", Latest | Hot picks newest first or the server's
  * vote ranking (SOC-11), and a row of flair chips — All plus one per flair on the phone — shows
@@ -40,16 +42,17 @@ import { useAuth } from '@/auth/AuthProvider';
 import { Screen } from '@/components/Screen';
 import { PostCard } from '@/components/social/PostCard';
 import { usePostPhotoSource } from '@/components/social/usePostPhotoSource';
-import { ChoiceChips, type ChoiceOption } from '@/components/toolkit/ChoiceChips';
 import { Button } from '@/components/ui/Button';
+import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
-import type { FlairRow } from '@/db/dao';
+import type { FlairRow, WorkoutVisibility } from '@/db/dao';
 import { readFlairs } from '@/db/flairs';
 import { useAppDatabase } from '@/db/useAppDatabase';
 import { getSupabase } from '@/lib/supabase';
 import { appendPage, feedAuthorIds, loadFeedPage, type FeedCursor, type FeedPost } from '@/social/feed';
 import { getCachedFeedPrefs, loadFeedPrefs, saveFeedPrefs, type FeedPrefs, type FeedSort } from '@/social/feedPrefs';
+import { setPostVisibility, visibilityTargetOf, withPostVisibility, type PostVisibilityResult } from '@/social/postPrivacy';
 import { castVote, clearVote, type VoteResult, type VoteValue } from '@/social/votes';
 import { colors, spacing } from '@/theme';
 
@@ -239,6 +242,24 @@ export default function HomeScreen() {
     [client, me],
   );
 
+  /**
+   * An own card's "who can see this" choice (B26): changes the post on the server (its workout
+   * follows there) and the phone's copies, then the feed's own list, so a card rebuilt after
+   * scrolling shows the new audience. The post stays on the lifter's own feed whatever they
+   * pick — an owner always sees their own posts — so nothing vanishes in front of them.
+   */
+  const changeVisibility = useCallback(
+    async (post: FeedPost, next: WorkoutVisibility): Promise<PostVisibilityResult> => {
+      if (!me) return { ok: false, reason: 'failed' };
+      const result = await setPostVisibility(client, db, me, visibilityTargetOf(post), next);
+      if (result.ok) {
+        setState((prev) => (prev.status === 'ready' ? { ...prev, posts: withPostVisibility(prev.posts, post.id, next) } : prev));
+      }
+      return result;
+    },
+    [client, db, me],
+  );
+
   /** A card's comments button (B23): the post's comments screen. */
   const openComments = useCallback(
     (postId: string) => router.push({ pathname: '/post-comments/[id]', params: { id: postId } }),
@@ -362,6 +383,7 @@ export default function HomeScreen() {
             viewerId={me}
             photoSource={photoSource}
             onVote={vote}
+            onChangeVisibility={changeVisibility}
             onOpenComments={openComments}
             onOpenProfile={openProfile}
           />

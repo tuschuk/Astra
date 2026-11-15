@@ -247,7 +247,7 @@ async function pushUserSettingsPhase(db: SqlDriver, transport: SyncTransport): P
   for (const pending of await pendingRows(db, 'user_settings')) {
     const row = await readUserSettingsRow(db, pending.rowId);
     if (row) {
-      await transport.pushUserSettings(row.user_id, row.unit);
+      await transport.pushUserSettings(row.user_id, { unit: row.unit, progress_pic_visibility: row.progress_pic_visibility });
       sent += 1;
     }
     await acknowledge(db, 'user_settings', [pending]);

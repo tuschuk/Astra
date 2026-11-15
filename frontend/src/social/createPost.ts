@@ -17,6 +17,7 @@
 import { notifyLocalWrite, type ImagePostKind, type PostRow, type WorkoutVisibility } from '@/db/dao';
 import type { SqlDriver, SqlExecutor } from '@/db/driver';
 import { newUuid } from '@/lib/ids';
+import { readProgressPicVisibility } from '@/settings/privacySettings';
 import { enqueueTx } from '@/sync/outbox';
 
 import { checkPostImage } from './mediaLimits';
@@ -117,16 +118,27 @@ export interface PickedImage {
 }
 
 /**
- * The defaults each photo post kind is born with (B22). Flair ids are stable data slugs (the
- * names stay in the server's `flairs` table, SOC-3).
- *   - a progress pic wears Physique Check and is PRIVATE — the CLAUDE.md privacy rule, enforced by
- *     the server too (`posts_progress_pic_private`); the lifter's choice arrives with B26;
- *   - a PR photo wears New PR and is public.
+ * The flair each photo post kind is born wearing (B22). Flair ids are stable data slugs (the
+ * names stay in the server's `flairs` table, SOC-3): a progress pic wears Physique Check, a PR
+ * photo wears New PR. Who sees the post is decided separately (`imagePostVisibility`).
  */
-export const IMAGE_POST_DEFAULTS: Record<ImagePostKind, { flairId: string; visibility: WorkoutVisibility }> = {
-  'progress-pic': { flairId: 'physique-check', visibility: 'private' },
-  pr: { flairId: 'new-pr', visibility: 'public' },
+export const IMAGE_POST_DEFAULTS: Record<ImagePostKind, { flairId: string }> = {
+  'progress-pic': { flairId: 'physique-check' },
+  pr: { flairId: 'new-pr' },
 };
+
+/**
+ * Who a new photo post of kind `kind` is shown to (B26):
+ *   - a PR photo — public, as it has been since B22;
+ *   - a progress pic — the lifter's own choice in Settings → Privacy, read from the phone so it
+ *     works with no signal; 'private' until they choose otherwise (the sensitive-class default,
+ *     CLAUDE.md's privacy rule).
+ * Either way, the post can be changed afterwards on its card (`social/postPrivacy.ts`), and the
+ * server's row-level security is what actually enforces it.
+ */
+export async function imagePostVisibility(db: SqlExecutor, userId: string, kind: ImagePostKind): Promise<WorkoutVisibility> {
+  return kind === 'pr' ? 'public' : readProgressPicVisibility(db, userId);
+}
 
 /**
  * Saves a photo post of kind `kind` (a progress pic or a PR photo) for user `userId` and queues
@@ -138,7 +150,8 @@ export const IMAGE_POST_DEFAULTS: Record<ImagePostKind, { flairId: string; visib
  *      first, this is the module's own guarantee) and that the kind's flair is on the phone;
  *   2. copies the photo into the phone's waiting folder (a kill here leaves only a stray file);
  *   3. in ONE transaction saves the post row — no workout, `image_path` in the lifter's own
- *      server folder, the kind's flair and visibility — and its outbox line;
+ *      server folder, the kind's flair, and the visibility from `imagePostVisibility` (for a
+ *      progress pic, the lifter's Settings choice) — and its outbox line;
  *   4. tells the sync engine.
  *
  * Refuses (throws `PostRefusedError`, saving nothing): `image-refused` with the lifter-facing
@@ -154,8 +167,9 @@ export async function createImagePost(
 ): Promise<PostRow> {
   const check = checkPostImage(image);
   if (!check.ok) throw new PostRefusedError('image-refused', check.message);
-  const { flairId, visibility } = IMAGE_POST_DEFAULTS[kind];
+  const { flairId } = IMAGE_POST_DEFAULTS[kind];
   if (!(await flairExists(db, flairId))) throw new PostRefusedError('unknown-flair');
+  const visibility = await imagePostVisibility(db, userId, kind);
 
   const now = options.now ?? new Date().toISOString();
   const id = (options.newId ?? newUuid)();

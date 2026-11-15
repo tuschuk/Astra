@@ -10,7 +10,8 @@
  *     pounds, the server's default). Called by `useSync` before the sync engine starts.
  *   - `setUnit(db, userId, unit)` — the Settings toggle. Saves the row AND queues it for upload
  *     in one transaction, so a choice made in airplane mode survives the app being killed and
- *     reaches the server on reconnect. Then every screen showing a weight re-draws.
+ *     reaches the server on reconnect. Then every screen showing a weight re-draws. Only the
+ *     unit changes: the row's other setting (who sees new progress pics, B26) is kept as is.
  *   - `applyPulled(row)` — a download just saved the server's row (changed on another device).
  *     The store re-reads the phone's row and shows what it says.
  *
@@ -25,7 +26,7 @@ import type { WeightUnit } from '@training-math';
 
 import type { SqlDriver } from '@/db/driver';
 import { notifyLocalWrite } from '@/db/dao';
-import { readUserSettingsRow, writeUserSettingsRowTx, type UserSettingsRow } from '@/db/userSettings';
+import { patchUserSettingsTx, readUserSettingsRow, type UserSettingsRow } from '@/db/userSettings';
 import { enqueueTx } from '@/sync/outbox';
 
 /**
@@ -110,7 +111,9 @@ export function createUnitStore(): UnitStore {
     async setUnit(onDb, forUser, next, options = {}) {
       const now = options.now ?? new Date().toISOString();
       await onDb.withTransactionAsync(async (tx) => {
-        await writeUserSettingsRowTx(tx, { user_id: forUser, unit: next, updated_at: now });
+        // A patch, not a whole-row write: the row also holds the progress-pic privacy choice
+        // (B26), which a unit toggle must leave exactly as it was.
+        await patchUserSettingsTx(tx, forUser, { unit: next }, now);
         // The outbox line's row id is the user id: that is the settings table's key.
         await enqueueTx(tx, 'user_settings', forUser, now);
       });

@@ -31,7 +31,7 @@ import { getToolKitSession, updateToolKitSession } from '@/toolkit/session';
 import { formatWeight } from '@/workout/format';
 import { colors, spacing } from '@/theme';
 
-import { ChoiceChips, type ChoiceOption } from './ChoiceChips';
+import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
 import { ResultCard } from './ResultCard';
 import { WeightField } from './WeightField';
 
