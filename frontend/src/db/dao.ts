@@ -1,13 +1,24 @@
 /**
  * Reading and writing the on-device training tables.
  *
- * There are exactly two ways rows get written, and they are separate on
- * purpose:
+ * Rows get written in four ways, each separate on purpose. Every feature that
+ * changes training data goes through one of them, never through raw SQL:
  *
- *   - `writeLocal` — the USER changed something (logged a set, renamed a
- *     workout). The row is saved AND recorded in the outbox so the sync engine
- *     pushes it, in one transaction. Every feature that changes training data
- *     goes through here, never through raw SQL.
+ *   - `writeLocal` — the USER changed something synced (a custom exercise,
+ *     later an edit to a past workout). The row is saved AND recorded in the
+ *     outbox so the sync engine pushes it, in one transaction.
+ *   - `writeLocalTree` — the same, for a whole workout at once (workout +
+ *     entries + sets) in ONE transaction. Finishing a workout uses it: the
+ *     workout and everything in it are queued together or not at all, so a
+ *     crash can never upload a finished workout missing its sets.
+ *   - `writeDraftRows` / `deleteDraftRowsTx` — the workout that is still IN
+ *     PROGRESS (`ended_at` null). Saved on the device straight away (so a
+ *     killed app loses nothing) but deliberately NOT queued: the server only
+ *     ever receives finished workouts, and a set removed mid-workout has
+ *     nothing to un-upload. Limited to the three workout tables by type, and
+ *     refused at runtime for any row whose workout is already finished — a
+ *     finished workout is synced data and must take the queued path. See the
+ *     B08 plan (docs/feature_plans/active-workout-store.md), section 1.
  *   - `upsertRows` — rows arriving FROM the server (a pull) or from the
  *     bundled library seed. Saved without touching the outbox: they aren't
  *     local changes, and pushing them back would be wasted at best (and, for
@@ -283,6 +294,142 @@ export async function writeLocal<T extends SyncedTable>(
   });
 
   listeners.get(db)?.forEach((listener) => listener(tbl));
+}
+
+/** The three tables that make up one workout: the workout, its exercise slots, their sets. */
+export type WorkoutTreeTable = 'workouts' | 'workout_exercises' | 'sets';
+
+/** Rows of a workout tree, per table; any table may be left out. */
+export type WorkoutTreeRows = { [T in WorkoutTreeTable]?: readonly RowByTable[T][] };
+
+/**
+ * Saves a whole workout tree as the user's change, in ONE transaction:
+ * every row is stamped `updated_at = now`, saved, and added to the outbox,
+ * parents before children. If any given entry or set belongs to a workout
+ * not in `tree.workouts`, that workout is re-stamped and queued too (the
+ * touch-the-root rule, same as `writeLocal`). Afterwards the `onLocalWrite`
+ * listeners hear about each table written, so the sync engine pushes soon.
+ *
+ * Why one transaction matters: finishing a workout queues the workout and
+ * all its sets. Split across transactions, a crash in between could upload
+ * a finished-looking empty workout for good. Here it is all or nothing.
+ */
+export async function writeLocalTree(
+  db: SqlDriver,
+  tree: WorkoutTreeRows,
+  options: WriteLocalOptions = {},
+): Promise<void> {
+  const now = options.now ?? new Date().toISOString();
+  const tables = (['workouts', 'workout_exercises', 'sets'] as const).filter((t) => (tree[t]?.length ?? 0) > 0);
+  if (tables.length === 0) return;
+
+  await db.withTransactionAsync(async (tx) => {
+    const writtenWorkouts = new Set((tree.workouts ?? []).map((w) => w.id));
+    const roots = new Set<string>();
+    for (const tbl of tables) {
+      const stamped = (tree[tbl] as readonly { id: string }[]).map((r) => ({ ...r, updated_at: now }));
+      await upsertRowsTx(tx, tbl, stamped as unknown as readonly RowByTable[typeof tbl][]);
+      for (const row of stamped) await enqueueTx(tx, tbl, row.id, now);
+      for (const id of await rootWorkoutIds(tx, tbl, stamped)) roots.add(id);
+    }
+    for (const workoutId of roots) {
+      if (writtenWorkouts.has(workoutId)) continue;
+      await tx.runAsync('update workouts set updated_at = ? where id = ?', [now, workoutId]);
+      await enqueueTx(tx, 'workouts', workoutId, now);
+    }
+  });
+
+  for (const tbl of tables) listeners.get(db)?.forEach((listener) => listener(tbl));
+}
+
+/**
+ * Throws unless every given workout is still in progress (`ended_at` null).
+ * Ids that don't exist pass — there is nothing finished to protect. This is
+ * what keeps the draft paths from silently editing synced data.
+ */
+async function assertDraftWorkoutsTx(tx: SqlExecutor, workoutIds: readonly string[]): Promise<void> {
+  if (workoutIds.length === 0) return;
+  const finished = await tx.getAllAsync<{ id: string }>(
+    `select id from workouts where ended_at is not null and id in (${placeholders(workoutIds.length)})`,
+    workoutIds,
+  );
+  if (finished.length > 0) {
+    throw new Error(`Workout ${finished[0].id} is finished; its rows must be written with writeLocal, not as a draft`);
+  }
+}
+
+/**
+ * Saves rows of an IN-PROGRESS workout, inside an already-open transaction:
+ * stamps `updated_at = now` and upserts, without queueing anything for upload
+ * (see the file comment for why drafts stay off the outbox until finish).
+ *
+ * Throws (and the caller's transaction rolls back) for a workout row with an
+ * `ended_at`, or for an entry/set whose workout is already finished.
+ */
+export async function writeDraftRowsTx<T extends WorkoutTreeTable>(
+  tx: SqlExecutor,
+  tbl: T,
+  rows: readonly RowByTable[T][],
+  now: string,
+): Promise<void> {
+  if (rows.length === 0) return;
+  if (tbl === 'workouts' && (rows as readonly WorkoutRow[]).some((w) => w.ended_at !== null)) {
+    throw new Error('A finished workout cannot be written as a draft; finish goes through writeLocalTree');
+  }
+  const workoutIds =
+    tbl === 'workouts' ? rows.map((r) => r.id) : await rootWorkoutIds(tx, tbl, rows);
+  await assertDraftWorkoutsTx(tx, workoutIds);
+  await upsertRowsTx(
+    tx,
+    tbl,
+    rows.map((r) => ({ ...r, updated_at: now })),
+  );
+}
+
+/** `writeDraftRowsTx` in a transaction of its own. */
+export async function writeDraftRows<T extends WorkoutTreeTable>(
+  db: SqlDriver,
+  tbl: T,
+  rows: readonly RowByTable[T][],
+  options: WriteLocalOptions = {},
+): Promise<void> {
+  const now = options.now ?? new Date().toISOString();
+  await db.withTransactionAsync((tx) => writeDraftRowsTx(tx, tbl, rows, now));
+}
+
+/**
+ * Deletes rows of an IN-PROGRESS workout, inside an already-open transaction.
+ * Deleting a workout removes its entries and sets with it, and deleting an
+ * entry removes its sets (the device's foreign keys cascade). Purely local:
+ * a draft was never uploaded, so there is nothing to tell the server.
+ *
+ * Throws for rows of a finished workout — deleting synced data needs B14's
+ * delete-sync, without which the server copy would come back on the next pull.
+ */
+export async function deleteDraftRowsTx(
+  tx: SqlExecutor,
+  tbl: WorkoutTreeTable,
+  ids: readonly string[],
+): Promise<void> {
+  if (ids.length === 0) return;
+  let workoutIds: string[];
+  if (tbl === 'workouts') workoutIds = [...ids];
+  else if (tbl === 'workout_exercises') {
+    const found = await tx.getAllAsync<{ workout_id: string }>(
+      `select distinct workout_id from workout_exercises where id in (${placeholders(ids.length)})`,
+      ids,
+    );
+    workoutIds = found.map((r) => r.workout_id);
+  } else {
+    const found = await tx.getAllAsync<{ workout_id: string }>(
+      `select distinct e.workout_id from sets s join workout_exercises e on e.id = s.workout_exercise_id ` +
+        `where s.id in (${placeholders(ids.length)})`,
+      ids,
+    );
+    workoutIds = found.map((r) => r.workout_id);
+  }
+  await assertDraftWorkoutsTx(tx, workoutIds);
+  await tx.runAsync(`delete from ${tbl} where id in (${placeholders(ids.length)})`, ids);
 }
 
 /**

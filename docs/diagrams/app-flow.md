@@ -53,10 +53,25 @@ flowchart TD
     Store[("expo-sqlite key-value store<br/>the saved Supabase session<br/>(survives killing the app)")]
     LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets<br/>+ outbox (unsent changes) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
     LocalSeed["First-launch seed (library/seedLocal.ts)<br/>insert-if-missing all 151 exercises,<br/>id = uuidv5(namespace, slug); never queued"]
-    WriteLocal["writeLocal (db/dao.ts): the one write path<br/>row + outbox line + re-stamp & queue parent workout,<br/>all-or-nothing<br/>SCAFFOLDING: no screen calls it yet (B08/B09)"]
+    WriteLocal["writeLocal / writeLocalTree (db/dao.ts): the queued write paths<br/>rows + outbox lines + re-stamp & queue parent workout,<br/>all-or-nothing (writeLocalTree: a whole workout in one transaction)"]
+    Drafts["writeDraftRows / deleteDraftRowsTx (db/dao.ts): the in-progress path<br/>saved at once, NEVER queued; refused for a finished workout"]
     LocalSeed --> LocalDB
     WriteLocal --> LocalDB
+    Drafts --> LocalDB
   end
+
+  subgraph ActiveWO["Active-workout store (src/workout/activeWorkout.ts)<br/>SCAFFOLDING: live and tested, no screen calls it yet (B09)"]
+    StartWO["startActiveWorkout: blank public workout<br/>(refused while one is in progress)"]
+    ResumeWO["loadActiveWorkout: on launch, rebuild the<br/>signed-in user's unfinished workout from astra.db"]
+    MutWO["add / remove / reorder exercise; log / fix / remove set;<br/>repeat last set: check server limits, convert lb→kg,<br/>commit to SQLite, then re-read the snapshot"]
+    FinishWO["finish: ended_at = max(now, started_at),<br/>queue workout + entries + sets in ONE transaction; store sealed"]
+    DiscardWO["discard: delete the draft (cascades), nothing to sync"]
+  end
+  StartWO --> Drafts
+  MutWO --> Drafts
+  DiscardWO --> Drafts
+  LocalDB --> ResumeWO
+  FinishWO --> WriteLocal
 
   subgraph SyncEng["Sync engine (src/sync), mounted by useSync in the root layout"]
     Triggers{{"Triggers, debounced 750 ms, one run at a time:<br/>start with a session, app back to foreground,<br/>network reconnects, a local write"}}
@@ -89,15 +104,18 @@ flowchart TD
 
   Push -->|"supabase-js upsert as the signed-in user (RLS)"| DB
   DB -->|"supabase-js select (RLS-scoped)"| Pull
-  Tabs -.->|"not wired yet: no screen reads or writes astra.db;<br/>Library still reads the bundled catalog (logger: B08/B09)"| LocalDB
+  Tabs -.->|"not wired yet: no screen reads or writes astra.db;<br/>Library still reads the bundled catalog (logger screen: B09)"| LocalDB
+  Workout -.->|"not wired yet: the logger screen (B09)"| StartWO
 
   subgraph Shared["Shared training math (backend/supabase/functions/_shared/training-math)<br/>import name in the app: @training-math"]
-    MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification<br/>SCAFFOLDING: built and tested, not yet called by any screen<br/>or server function"]
+    MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification,<br/>server limits on a set + storage rounding (limits.ts)<br/>called today only by the active-workout store;<br/>no screen or server function yet"]
   end
+  MathMod -->|"lbToKg, assertValidSetFields,<br/>round weight / RPE for storage"| MutWO
   MathMod -.->|"not wired yet: Tool Kit calculators (B16),<br/>logger PR badges (B13), unit setting (B15)"| Workout
   MathMod -.->|"not wired yet: post-workout analysis<br/>server function (B18)"| Backend
 
-  class Home,Market,Workout,Communities,MathMod,WriteLocal scaffold
+  class Home,Market,Workout,Communities,MathMod scaffold
+  style ActiveWO stroke-dasharray: 5 5
   class Seed,Catalog,DB,Store,LocalDB data
 ```
 
@@ -136,8 +154,23 @@ flowchart TD
   (`src/library/uuidv5.ts`, the repo's one implementation, which the seed generator imports).
   While someone is signed in, a `SyncEngine` pushes and then pulls on start, on foreground, on
   reconnect (expo-network) and after each local write.
-  - **Writes:** every user change must go through `writeLocal`. It saves the row, adds an outbox
-    line, and re-stamps and queues the parent workout, all in one transaction.
+  - **Writes:** every user change goes through the DAO, never raw SQL. Synced changes use
+    `writeLocal` (or `writeLocalTree` for a whole workout): it saves the rows, adds outbox lines,
+    and re-stamps and queues the parent workout, all in one transaction. The workout still in
+    progress uses `writeDraftRows` / `deleteDraftRowsTx` instead: saved immediately, never
+    queued, and refused for any finished workout.
+  - **Active-workout store (B08; no screen yet, B09 adds it):** `src/workout/activeWorkout.ts`.
+    `startActiveWorkout` saves a blank public workout (refused while another is unfinished);
+    `loadActiveWorkout` rebuilds the signed-in user's unfinished workout from `astra.db` — the
+    resume-after-kill path. Each operation (add / remove / reorder exercise, log / fix / remove
+    set, repeat last set) first checks the values against the server's set rules
+    (`@training-math` `limits.ts`), converts lb to kg rounded to the column's 2 decimals, commits
+    one transaction, then re-reads the whole workout from SQLite as its new snapshot — so what the
+    app shows is always what the file holds. Operations run one at a time. `finish` stamps
+    `ended_at` (never before `started_at`) and queues the workout, entries and sets in one
+    transaction, which wakes the sync engine; the store then refuses further changes.
+    `discard` deletes the draft, with nothing to un-sync. `subscribe` / `getSnapshot` fit React's
+    `useSyncExternalStore`. New row ids are random v4 UUIDs from `expo-crypto` (`src/lib/ids.ts`).
   - **Push:** sends the queued rows' current state as upserts on `id`, parents first, with
     `updated_at` left for the server to stamp. It then re-sends the parent workouts so the server
     stamps them after their contents. Outbox lines are cleared only up to the watermark read
@@ -150,7 +183,7 @@ flowchart TD
   - **Failures:** they are logged, and whatever didn't upload stays queued. There is no retry
     timer.
 - **Still unwired:** the Library reads the bundled catalog, not `astra.db`; no screen logs a
-  workout yet (B08/B09); nothing feeds the social feed.
+  workout yet (the store exists, the logger screen is B09); nothing feeds the social feed.
 
 ## Shared pieces every screen uses
 
@@ -166,8 +199,9 @@ flowchart TD
   conversion and PR detection are computed. It lives beside the server functions so Supabase can
   bundle it; `frontend/metro.config.js`, `tsconfig.json` and `jest.config.js` map the alias.
   Weights go in and come out in kg (the plate loader alone works in the rack's own unit); rounded
-  display numbers are never stored. Nothing calls it yet — it is scaffolding for the calculators,
-  logger and analysis.
+  display numbers are never stored. `limits.ts` holds the server's rules on a set and the
+  storage rounding that matches the server's column decimals. Its only caller today is the
+  active-workout store; the calculators and analysis are still to come.
 - Test-only helpers live in `src/test-utils/`: a fake Supabase auth client and fake AppState,
   `renderWithAuth`, a real-SQLite driver over Node's `node:sqlite` (`nodeSqliteDriver.ts`), an
   in-memory fake server for sync (`fakeTransport.ts`: upsert-by-id, server-stamped `updated_at`,

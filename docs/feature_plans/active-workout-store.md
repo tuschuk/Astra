@@ -381,3 +381,47 @@ at full severity. Questions that changed or sharpened the plan:
 - **"Should `finish` refuse an empty workout?"** No — the store mirrors the server exactly, in
   both directions: looser wedges the outbox, stricter makes the store a second rules home that
   will fight B09's UX. Empty-workout handling (offer discard) is recorded as a B09 concern.
+
+## Build deviations (recorded by the builder)
+
+1. **`finish()` takes no clock argument.** The clock is injected once, when the store is built
+   (`startActiveWorkout` / `loadActiveWorkout` options), and every operation, `finish` included,
+   reads it. One clock per store keeps the timestamps of one workout consistent. The
+   `ended_at = max(now, started_at)` clamp is as planned.
+2. **The DAO gained `deleteDraftRowsTx` and a transaction-level `writeDraftRowsTx`.** Remove-set,
+   remove-exercise and discard need a delete, and remove plus re-numbering positions has to be
+   one transaction. The plan's "no raw SQL in the store beyond selects" therefore needed a DAO
+   delete and a write that runs inside a caller's transaction. `writeDraftRows` (its own
+   transaction) still exists, as planned.
+3. **The draft paths also check at runtime that the workout is unfinished.** The plan relied on
+   the types alone (the three workout tables). Both draft functions now also refuse any row whose
+   workout has an `ended_at`, so a finished, synced workout can never be edited or deleted without
+   going through the outbox.
+4. **`writeLocalTree` touches the root when the workout isn't in the tree.** As planned, finish
+   always includes the workout. The generic function also re-stamps and queues the parent of any
+   entry or set passed without it, so B14 can reuse it without breaking touch-the-root.
+5. **`addExercise` checks ownership as well as existence.** It accepts a library exercise
+   (`owner_id` null) or one of the user's own custom exercises, never someone else's, matching
+   what the server's RLS would refuse.
+6. **Rounding lives in `limits.ts`.** `roundWeightKgForStorage` (0.01 kg) and `roundRpeForStorage`
+   (0.1) sit beside the rule check as the one home for "store the value the way the server column
+   keeps it". They are built on `roundToIncrement`, as planned. `limits.ts` also bounds each value
+   by its column type (smallint 32767, integer 2147483647, weight < 10000). The server refuses a
+   value too big for its column just as it refuses a broken CHECK, so mirroring the server exactly
+   includes those bounds.
+7. **`getStatus()` was added to the store** (`active` / `finished` / `discarded`). Without it, B09
+   could only learn that the store had sealed by catching an error.
+
+Known limits, accepted (also in docs/DEFERRED.md):
+- If the re-read of the snapshot after a committed operation fails, the operation reports an
+  error even though its write landed. The next successful operation or `loadActiveWorkout`
+  re-syncs it, and nothing is lost. For `finish`, the status has already flipped to `finished`.
+- `workout_exercises.position` (smallint) has no 32767 ceiling check. Reaching it would take more
+  than 32 thousand exercises in one workout.
+
+Review (mattpocock-skills:code-review, Standards + Spec axes) ran on the change. Fixed after
+review: missing comments on three inner store helpers and two test helpers, and the unused
+`MAX_*` limit constants dropped from the `@training-math` index (they remain in `limits.ts`).
+Deviations 1–7 were recorded here. The remaining smells were left as judgement calls: some
+small duplication across the DAO's three workout-id lookups, and the store's own parameterized
+selects (the plan allowed them).
