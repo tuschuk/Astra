@@ -2,10 +2,19 @@
  * Workout — the logger's front door (LOG-1) and the app's boldest screen.
  *
  * What it shows:
- *   - with no workout in progress: **Start empty workout** (starts a blank workout and opens the
- *     logger) and **Start from a program** (disabled until programs arrive, B35);
+ *   - with no workout in progress and no program running: **Start empty workout** (starts a blank
+ *     workout and opens the logger) and **Start from a program** (opens the program picker; picking
+ *     one starts running it, PRG-3, B35);
+ *   - with a program running (and no workout in progress): a card naming the program and its next
+ *     session ("Next: Week 2 · Day A"), with **Start next session** as the main button — it opens
+ *     the logger on that session, its exercises already added with their targets as notes; finishing
+ *     it moves the program on to the session after. **Start empty workout** stays below it (an
+ *     off-program day never blocks logging, and moves the program nowhere), and **Stop program**
+ *     (asks first) ends the run. If the author deleted the rest of the program, the card says there
+ *     is no next session and offers Stop;
  *   - with a workout in progress on this phone (even one left behind when the app was killed):
- *     **Resume workout** and **Discard** instead — never a second workout on top of the first;
+ *     **Resume workout** and **Discard** instead — never a second workout on top of the first (the
+ *     program card hides until it is finished or discarded);
  *   - **Your programs** (always): the lifter's own training programs, where they build plans of
  *     weeks → workouts → exercises with targets (PRG-1, PRG-2, B34);
  *   - the Tool Kit tiles: 1RM, RPE, %1RM, Plates and Timer each open the Tool Kit panel
@@ -14,12 +23,12 @@
  *   - the lifter's finished workouts, newest first (the latest 100), each opening the saved
  *     workout with every set.
  *
- * Every time the tab comes into view it re-checks the phone's database, so the list and the
- * Resume button are always current (after finishing a workout, after a relaunch…). Everything
- * shown comes from the phone, so it works with no signal.
+ * Every time the tab comes into view it re-checks the phone's database, so the list, the program
+ * card and the Resume button are always current (after finishing a workout, after a relaunch…).
+ * Everything shown comes from the phone, so it works with no signal.
  */
 import React, { useCallback, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { Alert, FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 
 import { useAuth } from '@/auth/AuthProvider';
@@ -29,15 +38,27 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { FormError } from '@/components/ui/FormError';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
+import { ProgramPickerSheet } from '@/components/programs/ProgramPickerSheet';
 import { TOOL_OPTIONS, ToolKitSheet } from '@/components/toolkit/ToolKitSheet';
 import type { ToolId } from '@/toolkit/session';
 import { WorkoutListItem } from '@/components/workout/WorkoutListItem';
 import { confirmDiscardWorkout } from '@/components/workout/confirmDiscardWorkout';
 import { useAppDatabase } from '@/db/useAppDatabase';
+import { programSessionLabel, readActiveRun, stopProgramRun, type ActiveProgramRun } from '@/programs/programRuns';
+import { useDisplayUnit } from '@/settings/displayUnit';
 import { clearSessionWorkout, resumeSessionWorkout, startSessionWorkout } from '@/workout/activeWorkoutSession';
 import { listPastWorkouts, type PastWorkoutSummary } from '@/workout/history';
+import { startProgramSession } from '@/workout/startProgramSession';
 import { useSessionWorkout } from '@/workout/useActiveWorkout';
-import { colors, fonts, spacing } from '@/theme';
+import { colors, fonts, spacing, type } from '@/theme';
+
+/** Asks before stopping the program being run; `onConfirm` runs only if the lifter confirms. */
+function confirmStopProgram(onConfirm: () => void): void {
+  Alert.alert('Stop this program?', 'Your logged sessions stay. Starting it again later begins at Week 1.', [
+    { text: 'Keep going', style: 'cancel' },
+    { text: 'Stop program', style: 'destructive', onPress: onConfirm },
+  ]);
+}
 
 export default function WorkoutScreen() {
   const router = useRouter();
@@ -45,18 +66,23 @@ export default function WorkoutScreen() {
   const userId = session?.user.id ?? null;
   const { db, error: dbError } = useAppDatabase();
   const active = useSessionWorkout(userId);
+  const unit = useDisplayUnit();
   const [past, setPast] = useState<PastWorkoutSummary[]>([]);
+  // The program being run (B35), tagged by lifter so an account switch never shows the last one's.
+  const [run, setRun] = useState<{ forUser: string; value: ActiveProgramRun | null } | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Which tool's tile was tapped (the Tool Kit is open at it), or null when closed.
   const [openTool, setOpenTool] = useState<ToolId | null>(null);
 
-  /** Re-reads the workout in progress (into the session slot) and the history list. */
+  /** Re-reads the workout in progress (into the session slot), the program run and the history list. */
   const refresh = useCallback(async () => {
     if (!db || !userId) return;
     try {
       await resumeSessionWorkout(db, userId);
+      setRun({ forUser: userId, value: await readActiveRun(db, userId) });
       setPast(await listPastWorkouts(db, userId));
       setError(null);
     } catch (caught) {
@@ -92,6 +118,44 @@ export default function WorkoutScreen() {
     }
   }
 
+  /** Starts the running program's next session, prefilled, and opens the logger (PRG-3). */
+  async function startNext(): Promise<void> {
+    if (!db || !userId || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await startProgramSession(db, userId, unit);
+      router.push('/active-workout');
+    } catch (caught) {
+      // A workout may have been started elsewhere, or the program changed: re-read and show that.
+      console.warn('Workout tab: could not start the next session', caught);
+      setError('The next session couldn’t be started. If a workout is in progress, resume it.');
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Asks first, then ends the program being run. */
+  function confirmStop(): void {
+    if (!db || !userId || busy) return;
+    confirmStopProgram(() => {
+      void (async () => {
+        setBusy(true);
+        setError(null);
+        try {
+          await stopProgramRun(db, userId);
+          await refresh();
+        } catch (caught) {
+          console.warn('Workout tab: could not stop the program', caught);
+          setError('The program couldn’t be stopped. Try again.');
+        } finally {
+          setBusy(false);
+        }
+      })();
+    });
+  }
+
   /** Asks first, then deletes the workout in progress from the phone. */
   function confirmDiscard(): void {
     if (!active) return;
@@ -112,6 +176,7 @@ export default function WorkoutScreen() {
   }
 
   const ready = db != null && userId != null && loaded;
+  const activeRun = run && run.forUser === userId ? run.value : null;
 
   const header = (
     <View>
@@ -126,11 +191,37 @@ export default function WorkoutScreen() {
             <Button label="Resume workout" onPress={() => router.push('/active-workout')} disabled={busy} />
             <Button label="Discard workout" onPress={confirmDiscard} variant="ghost" disabled={busy} />
           </>
+        ) : activeRun ? (
+          <>
+            <Card style={styles.runCard}>
+              <SectionLabel size="small">Running</SectionLabel>
+              <Body style={styles.runName}>{activeRun.tree.program.name}</Body>
+              <Body variant="muted">
+                {activeRun.nextSession
+                  ? `Next: ${programSessionLabel(activeRun.nextSession)}`
+                  : 'This program has no next session.'}
+              </Body>
+            </Card>
+            {activeRun.nextSession ? (
+              <Button label="Start next session" onPress={() => void startNext()} disabled={!ready || busy} />
+            ) : null}
+            <Button
+              label="Start empty workout"
+              onPress={() => void start()}
+              variant={activeRun.nextSession ? 'outline' : 'primary'}
+              disabled={!ready || busy}
+            />
+            <Button label="Stop program" onPress={confirmStop} variant="ghost" disabled={!ready || busy} />
+          </>
         ) : (
           <>
             <Button label="Start empty workout" onPress={() => void start()} disabled={!ready || busy} />
-            {/* Programs arrive with B35. */}
-            <Button label="Start from a program" onPress={() => {}} variant="ghost" disabled />
+            <Button
+              label="Start from a program"
+              onPress={() => setPickerOpen(true)}
+              variant="ghost"
+              disabled={!ready || busy}
+            />
           </>
         )}
         {/* The program builder (B34) — always available, even mid-workout. */}
@@ -187,6 +278,20 @@ export default function WorkoutScreen() {
         initialTool={openTool ?? undefined}
         onClose={() => setOpenTool(null)}
       />
+      <ProgramPickerSheet
+        visible={pickerOpen}
+        db={db}
+        userId={userId}
+        onStarted={() => {
+          setPickerOpen(false);
+          void refresh();
+        }}
+        onOpenPrograms={() => {
+          setPickerOpen(false);
+          router.push('/programs');
+        }}
+        onClose={() => setPickerOpen(false)}
+      />
     </Screen>
   );
 }
@@ -198,6 +303,12 @@ const styles = StyleSheet.create({
   actions: {
     marginTop: spacing.xl,
     gap: spacing.md,
+  },
+  runCard: {
+    gap: spacing.xs,
+  },
+  runName: {
+    ...type.cardTitle,
   },
   toolkitLabel: {
     marginTop: spacing.xxl,

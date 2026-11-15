@@ -356,6 +356,7 @@ describe('operations', () => {
         started_at: '2026-11-14T09:00:00.000Z',
         ended_at: null,
         visibility: 'public',
+        program_workout_id: null,
         created_at: '2026-11-14T09:00:00.000Z',
         updated_at: '2026-11-14T09:00:00.000Z',
       },

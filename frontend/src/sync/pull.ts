@@ -27,6 +27,10 @@
  * reason (db/schema.ts V12), so the week just waits unseen — reads walk down from the program —
  * until the next sync brings the program.
  *
+ * Program runs (B35) follow the same stand-alone shape on their own bookmark, after the four
+ * program tables, narrowed to the lifter's `user_id`. A run is never deleted — ending it is an
+ * update — so it needs no tombstones either.
+ *
  * Deletions (B14) arrive two ways, because a download cannot see a row that
  * no longer exists:
  *   - inside a workout: a removed set or exercise re-stamps its workout, so
@@ -78,7 +82,7 @@ export const PULL_OVERLAP_MS = 5000;
 /** The lowest possible id, used as the tie-breaker when rewinding a bookmark. */
 const MIN_ID = '00000000-0000-0000-0000-000000000000';
 
-/** `sync_state` keys of the eight bookmarks (four of them the program tables', B34). */
+/** `sync_state` keys of the nine bookmarks (four of them the program tables', B34; one the runs', B35). */
 export const CURSOR_KEYS = {
   workouts: 'pull_cursor:workouts',
   exercises: 'pull_cursor:exercises',
@@ -88,6 +92,7 @@ export const CURSOR_KEYS = {
   program_weeks: 'pull_cursor:program_weeks',
   program_workouts: 'pull_cursor:program_workouts',
   program_exercises: 'pull_cursor:program_exercises',
+  program_runs: 'pull_cursor:program_runs',
 } as const;
 
 type CursorKey = (typeof CURSOR_KEYS)[keyof typeof CURSOR_KEYS];
@@ -168,6 +173,8 @@ export interface PullResult {
   program_weeks: number;
   program_workouts: number;
   program_exercises: number;
+  /** Program runs saved on the phone (B35). */
+  program_runs: number;
   /** Local slots and sets removed because the server's copy of their workout no longer has them (B14). */
   removed: number;
   /** Tombstones that deleted something on the device (B14). */
@@ -193,7 +200,9 @@ export interface PullResult {
  * Analyses (B18) are saved as they come: they never have outbox lines (the
  * phone never writes one of its own), so there is no local change to protect.
  */
-async function pullStandalone<T extends 'exercises' | 'personal_records' | 'workout_analyses' | ProgramTable>(
+async function pullStandalone<
+  T extends 'exercises' | 'personal_records' | 'workout_analyses' | ProgramTable | 'program_runs',
+>(
   db: SqlDriver,
   tbl: T,
   fetchPage: (after: PullCursor | null) => Promise<MirrorRowByTable[T][]>,
@@ -495,7 +504,7 @@ export interface PullOptions {
  * Downloads everything new for user `userId`: exercises first (workouts point
  * at them), then workouts with their contents, then the user's personal
  * records (they cite sets), then their workout analyses (B18), then their
- * programs table by table (B34), then deletions, then their settings row, then the flair list (B21 — whose
+ * programs table by table (B34), then their program runs (B35), then deletions, then their settings row, then the flair list (B21 — whose
  * failure is recorded in the result, not thrown; see `flairsError`). Throws
  * the transport's error on failure; pages already saved stay saved and their
  * bookmarks stay moved.
@@ -517,6 +526,7 @@ export async function pullChanges(
     program_weeks: 0,
     program_workouts: 0,
     program_exercises: 0,
+    program_runs: 0,
     removed: 0,
     tombstones: 0,
     userSettings: 0,
@@ -541,6 +551,15 @@ export async function pullChanges(
   for (const tbl of PROGRAM_TABLES) {
     await pullStandalone(db, tbl, (after) => transport.pullProgramRows(tbl, userId, after, PULL_PAGE_SIZE), result);
   }
+  // Their program runs (B35), after the programs they name. A run whose program another phone
+  // uploaded a moment too late for this sync simply waits unseen (readers require the live
+  // program) until the next sync brings it.
+  await pullStandalone(
+    db,
+    'program_runs',
+    (after) => transport.pullProgramRuns(userId, after, PULL_PAGE_SIZE),
+    result,
+  );
   await pullTombstonePass(db, transport, userId, result);
   const settings = await pullUserSettingsPass(db, transport, userId);
   if (settings) {

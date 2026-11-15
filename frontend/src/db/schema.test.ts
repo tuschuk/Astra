@@ -22,6 +22,7 @@ describe('migrate', () => {
       'personal_records',
       'posts',
       'program_exercises',
+      'program_runs',
       'program_weeks',
       'program_workouts',
       'programs',
@@ -239,14 +240,29 @@ describe('migrate', () => {
 
     await migrate(db);
 
-    expect(SCHEMA_VERSION).toBe(12);
-    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 12 });
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: SCHEMA_VERSION });
     expect(await db.getFirstAsync('select count(*) as n from workouts')).toEqual({ n: 1 });
     for (const tbl of ['programs', 'program_weeks', 'program_workouts', 'program_exercises'] as const) {
       expect(await db.getFirstAsync(`select count(*) as n from ${tbl}`)).toEqual({ n: 0 });
       const columns = await db.getAllAsync<{ name: string }>(`pragma table_info(${tbl})`);
       expect(columns.map((c) => c.name).sort()).toEqual([...TABLE_COLUMNS[tbl]].sort());
     }
+  });
+
+  it('B35: upgrades a version-12 phone to version 13 — an empty program_runs table and an unlinked workouts column', async () => {
+    const db = createNodeSqliteDriver();
+    for (const migration of MIGRATIONS.slice(0, 12)) await db.execAsync(migration);
+    await db.execAsync('pragma user_version = 12');
+    await db.runAsync("insert into workouts (id, user_id, started_at, created_at, updated_at) values ('w', 'u', 't', 't', 't')");
+
+    await migrate(db);
+
+    expect(SCHEMA_VERSION).toBe(13);
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 13 });
+    expect(await db.getFirstAsync('select id, program_workout_id from workouts')).toEqual({ id: 'w', program_workout_id: null });
+    expect(await db.getFirstAsync('select count(*) as n from program_runs')).toEqual({ n: 0 });
+    const columns = await db.getAllAsync<{ name: string }>('pragma table_info(program_runs)');
+    expect(columns.map((c) => c.name).sort()).toEqual([...TABLE_COLUMNS.program_runs].sort());
   });
 
   it('upgrades a version-1 phone through every later version (sets.score), keeping the sets already there', async () => {

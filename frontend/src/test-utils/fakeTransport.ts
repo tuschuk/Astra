@@ -21,7 +21,9 @@
  *   - photo posts (B22) name a photo in their author's folder and no workout, progress pics are
  *     private, and the `post-images` bucket replaces an object uploaded to the same path again;
  *   - program rows (B34) need their parent row (the foreign keys) and are read back only by
- *     their program's author (the author-only security rules).
+ *     their program's author (the author-only security rules);
+ *   - program runs (B35) need their program and are read back only by their owner, and a workout
+ *     naming a program workout needs that program workout (the nullable foreign key).
  *
  * And it can misbehave on demand:
  *   - `offline = true` — every call fails, like airplane mode;
@@ -40,6 +42,7 @@ import type {
   FlairRow,
   PersonalRecordRow,
   PostRow,
+  ProgramRunRow,
   ProgramTable,
   RowByTable,
   SetRow,
@@ -69,6 +72,16 @@ const PARENT: { [T in SyncedTable]?: { column: string; table: SyncedTable } } = 
   program_weeks: { column: 'program_id', table: 'programs' },
   program_workouts: { column: 'program_week_id', table: 'program_weeks' },
   program_exercises: { column: 'program_workout_id', table: 'program_workouts' },
+  program_runs: { column: 'program_id', table: 'programs' },
+};
+
+/**
+ * Nullable links checked like foreign keys only when set (B35): a workout started from a program
+ * names its program workout. Not cascaded on delete (the real column is `on delete set null`, and
+ * program rows are never hard-deleted by the phone).
+ */
+const OPTIONAL_REF: { [T in SyncedTable]?: { column: string; table: SyncedTable } } = {
+  workouts: { column: 'program_workout_id', table: 'program_workouts' },
 };
 
 /** True if row `r` comes after bookmark `c` in (updated_at, id) order. */
@@ -94,6 +107,7 @@ export class FakeServer implements SyncTransport {
     program_weeks: new Map(),
     program_workouts: new Map(),
     program_exercises: new Map(),
+    program_runs: new Map(),
   };
   /** Every upload request received, in order (including failed ones). */
   readonly upsertCalls: { tbl: SyncedTable; ids: string[] }[] = [];
@@ -144,6 +158,15 @@ export class FakeServer implements SyncTransport {
         const parentId = (row as Record<string, unknown>)[parent.column] as string;
         if (!this.tables[parent.table].has(parentId)) {
           throw new Error(`insert into ${tbl} violates foreign key ${parent.column}`);
+        }
+      }
+    }
+    const ref = OPTIONAL_REF[tbl];
+    if (ref) {
+      for (const row of rows) {
+        const refId = (row as Record<string, unknown>)[ref.column] as string | null | undefined;
+        if (refId != null && !this.tables[ref.table].has(refId)) {
+          throw new Error(`insert into ${tbl} violates foreign key ${ref.column}`);
         }
       }
     }
@@ -200,7 +223,13 @@ export class FakeServer implements SyncTransport {
     return this.page(tbl, after, limit, (row) => this.programOwner(tbl, row as unknown as Record<string, unknown>) === userId);
   }
 
-  private page<T extends 'workouts' | 'exercises' | 'personal_records' | ProgramTable>(
+  /** One page of the user's own program runs (B35), like the real owner-only security rules. */
+  async pullProgramRuns(userId: string, after: PullCursor | null, limit: number): Promise<ProgramRunRow[]> {
+    this.guard();
+    return this.page('program_runs', after, limit, (r) => r.user_id === userId);
+  }
+
+  private page<T extends 'workouts' | 'exercises' | 'personal_records' | ProgramTable | 'program_runs'>(
     tbl: T,
     after: PullCursor | null,
     limit: number,

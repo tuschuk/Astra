@@ -156,7 +156,25 @@ describe('createSupabaseTransport', () => {
     expect(rows).toEqual([{ id: 'w1' }]);
     expect(requests[0]).toEqual([
       ['from', 'workouts'],
-      ['select', 'id,user_id,title,notes,started_at,ended_at,visibility,created_at,updated_at'],
+      ['select', 'id,user_id,title,notes,started_at,ended_at,visibility,program_workout_id,created_at,updated_at'],
+      ['eq', 'user_id', 'u1'],
+      ['or', afterCursorFilter({ updated_at: 't', id: 'i' })],
+      ['order', 'updated_at', { ascending: true }],
+      ['order', 'id', { ascending: true }],
+      ['limit', 500],
+    ]);
+  });
+
+  it("pulls the user's program runs (B35) after a bookmark, narrowed to the user", async () => {
+    const { client, requests } = recordingClient([{ data: [{ id: 'r1' }] }]);
+    const rows = await createSupabaseTransport(client).pullProgramRuns('u1', { updated_at: 't', id: 'i' }, 500);
+    expect(rows).toEqual([{ id: 'r1' }]);
+    expect(requests[0]).toEqual([
+      ['from', 'program_runs'],
+      [
+        'select',
+        'id,user_id,program_id,next_week_position,next_workout_position,started_at,ended_at,created_at,updated_at',
+      ],
       ['eq', 'user_id', 'u1'],
       ['or', afterCursorFilter({ updated_at: 't', id: 'i' })],
       ['order', 'updated_at', { ascending: true }],

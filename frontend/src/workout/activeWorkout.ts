@@ -17,7 +17,8 @@
  * Sync: while the workout is in progress it lives only on the phone (written through the DAO's
  * draft path, never queued for upload). `finish` stamps the end time and queues the whole
  * workout for upload in a single transaction — the server only ever sees finished workouts. The
- * same transaction saves and queues the personal records the workout set (LOG-4, `prs.ts`).
+ * same transaction saves and queues the personal records the workout set (LOG-4, `prs.ts`) and,
+ * for a session started from a program, the program run it moved on (PRG-3, `programRuns.ts`).
  * See docs/feature_plans/active-workout-store.md for why.
  *
  * Every value is checked against the server's rules (`assertValidSetFields` in the shared
@@ -59,6 +60,7 @@ import {
 } from '@/db/dao';
 import { placeholders, type SqlDriver, type SqlExecutor } from '@/db/driver';
 import { newUuid } from '@/lib/ids';
+import { advanceRunOnFinish } from '@/programs/programRuns';
 
 import { improvedRecords } from './prs';
 
@@ -144,6 +146,12 @@ export interface ActiveWorkoutOptions {
   clock?: () => string;
   /** Makes a new row id. Defaults to a random v4 UUID (src/lib/ids.ts). */
   mintId?: () => string;
+  /**
+   * Start only (B35): the program workout this session is started from — saved on the workout
+   * row from its birth, so finishing it (even days and app-kills later) moves the program run on.
+   * Left out for an ordinary workout. Ignored by everything but `startActiveWorkout`.
+   */
+  programWorkoutId?: string | null;
 }
 
 /** The active workout and every operation on it (see the file comment). */
@@ -264,6 +272,21 @@ export async function readWorkoutTree(
     workout,
     entries: entries.map((e) => ({ ...e, sets: sets.filter((s) => s.workout_exercise_id === e.id) })),
   };
+}
+
+/**
+ * True when `exerciseId` can be logged by `userId`: a library exercise, or one of their own
+ * customs, on this phone. The ONE copy of the rule `addExercise` enforces (B35's prefill asks it
+ * too, to skip a program slot whose exercise is gone instead of failing). Why it matters: the
+ * phone has no foreign key to exercises but the server does — an unknown id, or someone else's
+ * custom exercise, would be refused at upload and block the queue.
+ */
+export async function canLogExercise(db: SqlExecutor, userId: string, exerciseId: string): Promise<boolean> {
+  const found = await db.getFirstAsync<{ id: string }>(
+    'select id from exercises where id = ? and (owner_id is null or owner_id = ?)',
+    [exerciseId, userId],
+  );
+  return found != null;
 }
 
 /** The user's newest unfinished workout's id, or null if every workout is finished. */
@@ -391,6 +414,10 @@ function relinkSupersets(stored: readonly (number | null)[], index: number, acti
  * Refuses (throws) if this user already has an unfinished workout: the screen must decide
  * whether to resume it (`loadActiveWorkout`) or throw it away (`discard`) — the store never
  * quietly creates a second active workout.
+ *
+ * With `options.programWorkoutId` (B35) the workout is linked to that program workout; it must be
+ * on the phone (the server's foreign key would refuse an unknown one at upload, blocking the
+ * queue). Prefilling it is `startProgramSession`'s job, not this function's.
  */
 export async function startActiveWorkout(
   db: SqlDriver,
@@ -400,6 +427,7 @@ export async function startActiveWorkout(
   const clock = options.clock ?? systemClock;
   const mintId = options.mintId ?? newUuid;
   const now = clock();
+  const programWorkoutId = options.programWorkoutId ?? null;
   const workout: WorkoutRow = {
     id: mintId(),
     user_id: userId,
@@ -408,6 +436,7 @@ export async function startActiveWorkout(
     started_at: now,
     ended_at: null,
     visibility: 'public',
+    program_workout_id: programWorkoutId,
     created_at: now,
     updated_at: now,
   };
@@ -415,6 +444,9 @@ export async function startActiveWorkout(
     // Checked inside the transaction so two quick starts can't both pass.
     if (await findActiveWorkoutId(tx, userId)) {
       throw new Error('A workout is already in progress; resume or discard it before starting another');
+    }
+    if (programWorkoutId && !(await tx.getFirstAsync('select id from program_workouts where id = ?', [programWorkoutId]))) {
+      throw new Error(`Program workout ${programWorkoutId} is not on this phone`);
     }
     await writeDraftRowsTx(tx, 'workouts', [workout], now);
   });
@@ -488,6 +520,13 @@ export function draftPolicy(db: SqlDriver, userId: string): WritePolicy {
       // improved. Read here, inside the store's one-at-a-time queue, then saved in the SAME
       // transaction as the workout — a killed app can never sync the workout without its PRs.
       const personalRecords = await improvedRecords(db, userId, snapshot.entries, now);
+      // B35: a session started from a program moves the lifter's run on to the next session (or
+      // ends it after the last) — in the SAME transaction, so a killed app can never log the
+      // session without advancing the run. An ordinary workout reads and writes nothing extra.
+      const programWorkoutId = snapshot.workout.program_workout_id;
+      const programRuns = programWorkoutId
+        ? await advanceRunOnFinish(db, userId, programWorkoutId, snapshot.workout.started_at, now)
+        : [];
       await writeLocalTree(
         db,
         {
@@ -495,6 +534,7 @@ export function draftPolicy(db: SqlDriver, userId: string): WritePolicy {
           workout_exercises: snapshot.entries.map(({ sets: _nested, ...entry }) => entry),
           sets: snapshot.entries.flatMap((e) => e.sets),
           personal_records: personalRecords,
+          program_runs: programRuns,
         },
         { now },
       );
@@ -699,13 +739,9 @@ export function createWorkoutStore(
           updated_at: now,
         };
         await policy.transaction(async (tx) => {
-          // The phone has no foreign key to exercises, but the server does: an unknown id (or
-          // someone else's custom exercise) would be refused at upload and block the queue.
-          const exercise = await tx.getFirstAsync<{ id: string }>(
-            'select id from exercises where id = ? and (owner_id is null or owner_id = ?)',
-            [exerciseId, userId],
-          );
-          if (!exercise) throw new Error(`Exercise ${exerciseId} is not in this user's library`);
+          if (!(await canLogExercise(tx, userId, exerciseId))) {
+            throw new Error(`Exercise ${exerciseId} is not in this user's library`);
+          }
           await policy.writeRowsTx(tx, 'workout_exercises', [entry], now);
         });
         return entry.id;
