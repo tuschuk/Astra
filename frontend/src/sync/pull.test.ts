@@ -6,7 +6,9 @@ import { describe, expect, it } from '@jest/globals';
 
 import { prepareDatabase } from '@/db/database';
 import { getRowsByIds, writeLocal, type PersonalRecordRow, type WorkoutRow } from '@/db/dao';
+import { readFlairs } from '@/db/flairs';
 import { readUserSettingsRow, type UserSettingsRow } from '@/db/userSettings';
+import { createWorkoutPost } from '@/social/createPost';
 import { libraryExerciseId } from '@/library/uuidv5';
 import { createUnitStore } from '@/settings/unitStore';
 import { FakeServer } from '@/test-utils/fakeTransport';
@@ -396,12 +398,51 @@ describe('B15: the settings row', () => {
     expect(await readUserSettingsRow(db, USER_ID)).toBeNull();
   });
 
-  it('round trip: toggle offline → push → the server copy flows back and the local row matches', async () => {
+  it('round trip (B15): toggle offline → push → the server copy flows back and the local row matches', async () => {
     const { db, server } = await setup();
     server.seedUserSettings(USER_ID, 'lb');
     await createUnitStore().setUnit(db, USER_ID, 'kg');
     await pushOutbox(db, server);
     await pullChanges(db, server, USER_ID);
     expect(await readUserSettingsRow(db, USER_ID)).toEqual(server.userSettings.get(USER_ID));
+  });
+});
+
+describe('B21: the flair list and posts', () => {
+  it('brings down the whole flair list, and a later download replaces it (a new flair is data)', async () => {
+    const { db, server } = await setup();
+    expect((await pullChanges(db, server, USER_ID)).flairs).toBe(4);
+    expect((await readFlairs(db)).map((f) => f.name)).toEqual(['WOD', 'Physique Check', 'New PR', 'Form Check']);
+    expect((await readFlairs(db))[1].upvotes_only).toBe(true);
+
+    server.flairs.push({ id: 'deadlift-day', name: 'Deadlift Day', position: 5, upvotes_only: false });
+    await pullChanges(db, server, USER_ID);
+    expect((await readFlairs(db)).map((f) => f.id)).toContain('deadlift-day');
+  });
+
+  it('a failed flair read is recorded, not thrown: everything else is saved and the old flairs stay', async () => {
+    const { db, server } = await setup();
+    await pullChanges(db, server, USER_ID);
+    serverHasFixtureWorkout(server);
+    server.failFlairs = true;
+
+    const result = await pullChanges(db, server, USER_ID);
+    expect(result.flairsError).toBeInstanceOf(Error);
+    expect(result.flairs).toBe(0);
+    expect(result.workouts).toBe(1);
+    expect(await readFlairs(db)).toHaveLength(4);
+  });
+
+  it('a workout deleted on another device takes this phone’s queued post of it, and its line', async () => {
+    const { db, server } = await setup();
+    serverHasFixtureWorkout(server);
+    await pullChanges(db, server, USER_ID);
+    await createWorkoutPost(db, USER_ID, WORKOUT.id, 'wod');
+    expect(await count(db, 'outbox', "where tbl = 'posts'")).toBe(1);
+
+    await server.deleteRows('workouts', [WORKOUT.id]);
+    await pullChanges(db, server, USER_ID);
+    expect(await count(db, 'posts')).toBe(0);
+    expect(await count(db, 'outbox')).toBe(0);
   });
 });

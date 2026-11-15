@@ -178,7 +178,7 @@ erDiagram
   }
 
   posts {
-    uuid id PK "client-generated (posts will be made offline after Finish)"
+    uuid id PK "client-generated: made on the phone at the Post step, even offline (B21)"
     uuid user_id FK "the author"
     text flair_id FK "required: exactly one flair"
     uuid workout_id FK, UK "the shared workout; one post per workout"
@@ -193,7 +193,17 @@ erDiagram
 `posts` and `flairs` (migration `20261115093217_posts_flairs.sql`) are what the Home feed is made
 of. A post shares one finished workout; at launch that is the only kind of post, so `workout_id` is
 required (a later step relaxes it when image posts exist). `unique (workout_id)` makes sharing the
-same session twice impossible, which is what will make finish-to-post safe to retry.
+same session twice impossible, which is what makes finish-to-post (B21) safe to retry.
+
+**How a post is made (B21).** Only by the phone's Post step after Finish → analysis. The phone
+writes the post into its own `posts` table with a fresh uuid, `visibility` copied from the
+workout, and an outbox line, then uploads it as `INSERT … ON CONFLICT (id) DO UPDATE` (no
+`updated_at`) in the last phase of a sync — after the workout itself, which `owns_workout` and the
+foreign key need first. A retry lands on the same row. A `23505` on `posts_workout_unique` (a
+*different* post for this workout, from another device) is treated as settled: the phone deletes
+its copy. The post links its workout through `workout_id`, and the workout's analysis through the
+same id (`workout_analyses.id` = the workout id) — there is deliberately no separate analysis
+foreign key, since an offline finish's analysis may reach the server after the post.
 
 - **Flairs are data.** The launch four (WOD, Physique Check, New PR, Form Check) are seeded rows;
   any signed-in user may read them and nobody may write them through the API, so a new flair is a
@@ -203,8 +213,10 @@ same session twice impossible, which is what will make finish-to-post safe to re
   created_at desc, id desc)`. The phone pages by bookmark — "older than (created_at, id)" — never
   by offset. `posts_flair_idx (flair_id)` indexes the flair foreign key (no query filters by
   flair yet).
-- **Not mirrored.** No device table, no outbox line: other people's posts are read from the server
-  each time (and the feed embeds the workout, its entries, sets and exercise names in one request).
+- **Mostly not mirrored.** Other people's posts are never on the phone: the feed is read from the
+  server each time (and embeds the workout, its entries, sets and exercise names in one request).
+  Since B21 the phone keeps only its *own* posts (upload-only, never downloaded) and a copy of
+  `flairs` (download-only, replaced whole each sync) — see the device mirror section.
 - **The visibility enum is shared.** `posts.visibility` reuses `workout_visibility` (same three
   values, same meaning) so `private.workout_visible` serves both. The post and its workout each
   have their own visibility; the feed shows a post only when **both** are visible to the viewer
@@ -389,13 +401,15 @@ of `exercises`, `workouts`, `workout_exercises`, `sets`, `personal_records` and 
 `sets.notes`, version 4 added `personal_records`, version 5 added `outbox.op` (`upsert` or
 `delete`), version 6 added `user_settings (user_id, unit, updated_at)` — only the columns the
 phone syncs; `default_workout_visibility` is not mirrored yet; version 7 (B18) added
-`workout_analyses`, download-only, with `new_prs` as JSON text; versions are append-only,
+`workout_analyses`, download-only, with `new_prs` as JSON text; version 8 (B21) added `flairs (id,
+name, position, upvotes_only)`, download-only, and `posts (id, user_id, flair_id, workout_id
+unique, visibility, created_at, updated_at)`, the lifter's own posts, upload-only; versions are append-only,
 upgraded on launch). There is no device copy of `sync_tombstones` — tombstones are applied as
 they download, and `sync_state` keeps the last applied id (`pull_cursor:tombstones`). It has the same column names, but
 uses text for uuids and timestamps and 0/1 for booleans, and it does not repeat the server's
 CHECK rules as SQL (instead the app checks every set against them before saving, through the
 shared `@training-math` `limits.ts`). It also has two tables of its own: `outbox`, the local changes waiting to upload
-(its `tbl` can also be `user_settings`, whose line's `row_id` is the user id),
+(its `tbl` can also be `user_settings`, whose line's `row_id` is the user id, or `posts`, B21),
 and `sync_state`, the download bookmarks. What this means for the server:
 
 - **Uploads are upserts on `id`** (`INSERT … ON CONFLICT (id) DO UPDATE` through PostgREST), run
@@ -434,3 +448,11 @@ and `sync_state`, the download bookmarks. What this means for the server:
   finished workouts with no analysis or a stale one and no unsent changes, and saves each reply.
   Other devices get the rows on their own bookmark (`pull_cursor:workout_analyses`), after
   personal records.
+- **`posts` (B21) are upload-only, one request each, after every other upload phase.** Upsert on
+  `id`; a `23505` (another device posted this workout) drops the phone's copy and its lines; any
+  other refusal keeps the line for the next sync. Deleting a workout on the phone — or applying
+  its tombstone from another device — also deletes the phone's post of it and that post's unsent
+  lines (the device has no cascade), so a post of a gone workout can never jam the queue.
+- **`flairs` (B21) are read whole, last in every download** (`select … order by position`, no
+  bookmark: the table has no `updated_at`), and replace the device copy in one transaction. A
+  failed read is logged and the old copy kept; an empty answer is ignored.

@@ -21,7 +21,9 @@
  * including for workouts finished before analyses existed.
  *
  * What the lifter can do: read it; **View workout** to open the saved workout; **Back** to where
- * it was opened from (or the Workout tab).
+ * it was opened from (or the Workout tab). When Finish opened it (B21, the `post=1` link — never
+ * from the saved workout's button), a primary **Next** button also leads on to the Post step,
+ * where the workout can be shared to the feed with a flair, or skipped (LOG-7).
  */
 import React, { useCallback, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -62,7 +64,9 @@ async function readScreen(db: SqlExecutor, userId: string, id: string): Promise<
 
 export default function AnalysisScreen() {
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
+  // `post=1` only when Finish opened this (B21): then Next leads on to the Post step.
+  const { id, post } = useLocalSearchParams<{ id: string; post?: string }>();
+  const finishMode = post === '1';
   const { session } = useAuth();
   const userId = session?.user.id ?? null;
   const { db, error: dbError } = useAppDatabase();
@@ -163,6 +167,13 @@ export default function AnalysisScreen() {
         </Card>
       ) : null}
 
+      {finishMode ? (
+        <Button
+          label="Next"
+          onPress={() => router.push({ pathname: '/post-workout/[id]', params: { id: analysis.id } })}
+          style={styles.view}
+        />
+      ) : null}
       <Button
         label="View workout"
         variant="outline"

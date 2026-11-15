@@ -7,6 +7,7 @@ import { describe, expect, it } from '@jest/globals';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { CHILD_PAGE_ROWS, afterCursorFilter, createSupabaseTransport, toAnalysisRow } from './supabaseTransport';
+import { PostAlreadyExistsError } from './transport';
 
 type Call = [string, ...unknown[]];
 
@@ -14,7 +15,7 @@ type Call = [string, ...unknown[]];
  * A stand-in Supabase client. Every builder call is recorded; awaiting the
  * builder returns the next queued response.
  */
-function recordingClient(responses: { data?: unknown; error?: { message: string } | null }[] = []) {
+function recordingClient(responses: { data?: unknown; error?: { message: string; code?: string } | null }[] = []) {
   const requests: Call[][] = [];
   const client = {
     from(table: string) {
@@ -226,5 +227,46 @@ describe('createSupabaseTransport', () => {
     );
     expect(requests[0]).toContainEqual(['in', 'workout_id', ['w1']]);
     expect(await createSupabaseTransport(client).pullWorkoutExercises([])).toEqual([]);
+  });
+
+  const POST = {
+    id: 'p1',
+    user_id: 'u1',
+    flair_id: 'wod',
+    workout_id: 'w1',
+    visibility: 'public' as const,
+    created_at: '2026-11-15T10:00:00.000Z',
+  };
+
+  it('B21: uploads a post as an upsert on its id, without updated_at', async () => {
+    const { client, requests } = recordingClient([{ data: null }]);
+    await createSupabaseTransport(client).pushPost(POST);
+    expect(requests[0]).toEqual([
+      ['from', 'posts'],
+      ['upsert', POST, { onConflict: 'id' }],
+    ]);
+  });
+
+  it('B21: maps the one-post-per-workout violation (23505) to PostAlreadyExistsError, other errors to plain ones', async () => {
+    const duplicate = { message: 'duplicate key value violates unique constraint "posts_workout_unique"', code: '23505' };
+    const { client } = recordingClient([{ error: duplicate }, { error: { message: 'permission denied' } }]);
+    const transport = createSupabaseTransport(client);
+    await expect(transport.pushPost(POST)).rejects.toBeInstanceOf(PostAlreadyExistsError);
+    const plain = transport.pushPost(POST);
+    await expect(plain).rejects.toThrow('Upload of post failed: permission denied');
+    await expect(plain).rejects.not.toBeInstanceOf(PostAlreadyExistsError);
+  });
+
+  it('B21: reads the whole flair list in position order, and throws on an error', async () => {
+    const flair = { id: 'wod', name: 'WOD', position: 1, upvotes_only: false };
+    const { client, requests } = recordingClient([{ data: [flair] }, { error: { message: 'timeout' } }]);
+    const transport = createSupabaseTransport(client);
+    expect(await transport.pullFlairs()).toEqual([flair]);
+    expect(requests[0]).toEqual([
+      ['from', 'flairs'],
+      ['select', 'id,name,position,upvotes_only'],
+      ['order', 'position', { ascending: true }],
+    ]);
+    await expect(transport.pullFlairs()).rejects.toThrow('Download of flairs failed: timeout');
   });
 });

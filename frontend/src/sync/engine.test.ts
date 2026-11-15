@@ -103,6 +103,19 @@ describe('SyncEngine.syncNow', () => {
     expect(result.pushError).toBeDefined();
     expect(result.pull?.workouts).toBe(1);
   });
+
+  it('B21: a failed flair refresh is logged but is not a failed download — the analysis requests still run', async () => {
+    const db = await prepareDatabase(createNodeSqliteDriver());
+    const server = new FakeServer();
+    server.failFlairs = true;
+    const log = jest.fn();
+    const engine = new SyncEngine({ db, transport: server, userId: USER_ID, log });
+    const result = await engine.syncNow();
+    expect(result.pullError).toBeUndefined();
+    expect(result.pull?.flairsError).toBeInstanceOf(Error);
+    expect(result.analysis).not.toBeNull();
+    expect(log).toHaveBeenCalledWith('Sync: flair list refresh failed; the phone keeps its last copy', expect.any(Error));
+  });
 });
 
 describe('SyncEngine.start (automatic triggers)', () => {

@@ -14,15 +14,26 @@
  * settings row (B15) is the exception to both: it is read whole every time
  * and saved with a plain update (see `pushUserSettings`). Analyses (B18) are never uploaded:
  * the phone asks the `analyze-workout` server function to make one (`requestAnalysis`) and
- * downloads them like any bookmarked table.
+ * downloads them like any bookmarked table. Posts (B21) are upload-only — one upsert per post —
+ * and flairs (B21) download-only, read whole each time.
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { TABLE_COLUMNS, type MirroredTable, type MirrorRowByTable, type RowByTable, type WorkoutAnalysisRow } from '@/db/dao';
+import {
+  TABLE_COLUMNS,
+  type FlairRow,
+  type MirroredTable,
+  type MirrorRowByTable,
+  type RowByTable,
+  type WorkoutAnalysisRow,
+} from '@/db/dao';
 import { parseUnit } from '@/db/userSettings';
 import { throwIfError } from '@/lib/throwIfError';
 
-import type { PullCursor, SyncTransport, TombstoneRow } from './transport';
+import { PostAlreadyExistsError, type PullCursor, type SyncTransport, type TombstoneRow } from './transport';
+
+/** Postgres's error code for "duplicate key value violates unique constraint". */
+const UNIQUE_VIOLATION = '23505';
 
 /**
  * The "after this bookmark" filter: a later timestamp, or the same timestamp
@@ -144,6 +155,25 @@ export function createSupabaseTransport(client: SupabaseClient): SyncTransport {
     async pullWorkoutAnalyses(userId, after, limit) {
       const rows = await page('workout_analyses', after, limit, userId);
       return rows.map((r) => toAnalysisRow(r as unknown as Record<string, unknown>));
+    },
+
+    async pushPost(row) {
+      // Upsert on the id, so a retry lands on the same row. The only other unique rule on posts
+      // is one-per-workout; its 23505 means another device already posted this workout.
+      const { error } = await client.from('posts').upsert({ ...row }, { onConflict: 'id' });
+      if (error?.code === UNIQUE_VIOLATION) {
+        throw new PostAlreadyExistsError(row.workout_id);
+      }
+      throwIfError(error, 'Upload of post failed');
+    },
+
+    async pullFlairs() {
+      const { data, error } = await client
+        .from('flairs')
+        .select(columnsOf('flairs'))
+        .order('position', { ascending: true });
+      throwIfError(error, 'Download of flairs failed');
+      return (data ?? []) as unknown as FlairRow[];
     },
   };
 

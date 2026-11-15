@@ -15,7 +15,9 @@
  *     workouts and personal records, like the `record_tombstone` triggers;
  *   - the settings row (B15) can only be updated by the phone, never created;
  *   - analyses (B18) are made only by `requestAnalysis` — which runs the real server
- *     function's handler — one per workout, only for its owner, and deleted with their workout.
+ *     function's handler — one per workout, only for its owner, and deleted with their workout;
+ *   - flairs (B21) are the four rows the real migration seeds; posts (B21) are one per workout,
+ *     only about the poster's own workout already on the server, and deleted with it.
  *
  * And it can misbehave on demand:
  *   - `offline = true` — every call fails, like airplane mode;
@@ -30,7 +32,9 @@ import { handleAnalyzeRequest, type AnalyzeDeps } from '../../../backend/supabas
 
 import type {
   ExerciseRow,
+  FlairRow,
   PersonalRecordRow,
+  PostRow,
   RowByTable,
   SetRow,
   SyncedTable,
@@ -39,7 +43,14 @@ import type {
   WorkoutRow,
 } from '@/db/dao';
 import type { UserSettingsRow } from '@/db/userSettings';
-import type { PullCursor, PushRow, SyncTransport, TombstoneRow } from '@/sync/transport';
+import {
+  PostAlreadyExistsError,
+  type PostPushRow,
+  type PullCursor,
+  type PushRow,
+  type SyncTransport,
+  type TombstoneRow,
+} from '@/sync/transport';
 
 type AnyRow = { id: string; updated_at: string } & Record<string, unknown>;
 
@@ -203,6 +214,10 @@ export class FakeServer implements SyncTransport {
     this.tables[tbl].delete(id);
     // The analysis's foreign key cascades from its workout (B18); analyses leave no tombstone.
     if (tbl === 'workouts') this.analyses.delete(id);
+    // So does its post (B21), like the real `posts.workout_id … on delete cascade`.
+    if (tbl === 'workouts') {
+      for (const [postId, post] of [...this.posts.entries()]) if (post.workout_id === id) this.posts.delete(postId);
+    }
     if (tbl === 'workouts' || tbl === 'personal_records') {
       const tombstoneId = this.nextTombstoneId++;
       this.tombstones.push({ id: tombstoneId, tbl, row_id: id, deleted_at: this.now() });
@@ -320,6 +335,61 @@ export class FakeServer implements SyncTransport {
       .sort(byCursorOrder)
       .slice(0, limit)
       .map((r) => ({ ...r })) as unknown as WorkoutAnalysisRow[];
+  }
+
+  /**
+   * The server's `flairs` table (B20), seeded with the same four rows as the real migration.
+   * Tests may change it (a new flair is a data change — SOC-3).
+   */
+  readonly flairs: FlairRow[] = [
+    { id: 'wod', name: 'WOD', position: 1, upvotes_only: false },
+    { id: 'physique-check', name: 'Physique Check', position: 2, upvotes_only: true },
+    { id: 'new-pr', name: 'New PR', position: 3, upvotes_only: false },
+    { id: 'form-check', name: 'Form Check', position: 4, upvotes_only: false },
+  ];
+  /** When true, flair downloads fail while everything else works. */
+  failFlairs = false;
+
+  async pullFlairs(): Promise<FlairRow[]> {
+    this.guard();
+    if (this.failFlairs) throw new Error('Download of flairs failed: 500');
+    return [...this.flairs].sort((a, b) => a.position - b.position).map((f) => ({ ...f }));
+  }
+
+  /** The server's `posts` table (B20): post id → row. */
+  readonly posts = new Map<string, PostRow>();
+  /** Every post upload received, by post id, in order (including failed ones). */
+  readonly postPushes: string[] = [];
+  /** When true, post uploads are refused (a plain error) while everything else works. */
+  failPosts = false;
+
+  /**
+   * Like the real upsert on `posts`: insert, or update the row with this id (re-stamped by the
+   * server clock). Enforced like the real table: the workout must be on the server and belong to
+   * the poster (the `owns_workout` security rule and the foreign key), the flair must exist, and a
+   * second post for the same workout under a different id is the 23505 unique violation — thrown
+   * as `PostAlreadyExistsError`, exactly as the real transport maps it.
+   */
+  async pushPost(row: PostPushRow): Promise<void> {
+    this.postPushes.push(row.id);
+    this.guard();
+    if (this.failPosts) throw new Error('Upload of post failed: refused');
+    if ('updated_at' in row) throw new Error('client must not send updated_at');
+    const workout = this.tables.workouts.get(row.workout_id);
+    if (!workout || workout.user_id !== row.user_id) {
+      throw new Error('Upload of post failed: new row violates row-level security policy for table "posts"');
+    }
+    if (!this.flairs.some((f) => f.id === row.flair_id)) {
+      throw new Error('Upload of post failed: violates foreign key constraint "posts_flair_id_fkey"');
+    }
+    for (const other of this.posts.values()) {
+      if (other.workout_id === row.workout_id && other.id !== row.id) throw new PostAlreadyExistsError(row.workout_id);
+    }
+    this.posts.set(row.id, { ...this.posts.get(row.id), ...row, updated_at: this.now() });
+    if (this.loseResponse) {
+      this.loseResponse = false;
+      throw new Error('Network request failed (response lost)');
+    }
   }
 
   async pullWorkoutExercises(workoutIds: readonly string[]): Promise<WorkoutExerciseRow[]> {

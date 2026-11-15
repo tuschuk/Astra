@@ -32,12 +32,14 @@ import { placeholders, type SqlDriver, type SqlExecutor } from '@/db/driver';
 import type { SyncedTable } from '@/db/dao';
 
 /**
- * Every table the outbox can hold lines for: the five training tables, plus the lifter's
- * settings row (B15). A `user_settings` line's row id is the user's id — that table's key —
- * and it is only ever an upload (the row can't be deleted from the phone). The outbox stores
- * the table name as plain text, so adding a table here changes no stored data.
+ * Every table the outbox can hold lines for: the five training tables, the lifter's settings row
+ * (B15), and the lifter's own posts (B21). A `user_settings` line's row id is the user's id —
+ * that table's key — and it is only ever an upload (the row can't be deleted from the phone). A
+ * `posts` line is only ever an upload too: a post goes with its workout, and the server's
+ * cascade deletes it there. The outbox stores the table name as plain text, so adding a table
+ * here changes no stored data.
  */
-export type OutboxTable = SyncedTable | 'user_settings';
+export type OutboxTable = SyncedTable | 'user_settings' | 'posts';
 
 /** What an outbox line asks the server to do with its row. */
 export type OutboxOp = 'upsert' | 'delete';

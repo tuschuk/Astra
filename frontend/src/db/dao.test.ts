@@ -340,4 +340,25 @@ describe('deleteLocalRowsTx (B14)', () => {
     expect(await pendingRows(db, 'workouts', 'delete')).toHaveLength(1);
     expect(await db.getFirstAsync('select count(*) as n from sets')).toEqual({ n: 0 });
   });
+
+  it('B21: deleting a workout takes its post and the post’s waiting lines, and no other workout’s post', async () => {
+    const db = await syncedDb();
+    const other = { ...WORKOUT, id: 'a0000000-0000-4000-8000-000000000002' };
+    await upsertRows(db, 'workouts', [other]);
+    const insertPost = (id: string, workoutId: string) =>
+      db.runAsync(
+        "insert into posts (id, user_id, flair_id, workout_id, visibility, created_at, updated_at) values (?, ?, 'wod', ?, 'public', 't', 't')",
+        [id, USER_ID, workoutId],
+      );
+    await insertPost('p1', WORKOUT.id);
+    await insertPost('p2', other.id);
+    await db.runAsync("insert into outbox (tbl, row_id, queued_at) values ('posts', 'p1', 't'), ('posts', 'p2', 't')");
+
+    await db.withTransactionAsync((tx) => deleteLocalRowsTx(tx, 'workouts', [WORKOUT.id], LATER));
+
+    expect(await db.getAllAsync('select id from posts')).toEqual([{ id: 'p2' }]);
+    expect((await pendingRows(db, 'posts')).map((p) => p.rowId)).toEqual(['p2']);
+    // The server's cascade removes the post there; no post delete is queued.
+    expect(await pendingRows(db, 'posts', 'delete')).toEqual([]);
+  });
 });

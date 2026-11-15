@@ -40,13 +40,17 @@
  * The lifter's settings row (B15) goes last, in a phase of its own
  * (`pushUserSettingsPhase`): it is keyed by user rather than by id and may
  * only be updated on the server, so it doesn't fit the batches above.
+ *
+ * The lifter's own posts (B21) go after that, in the last phase of all
+ * (`pushPostsPhase`) — after the workouts they share, which the server
+ * requires to be there first.
  */
 import type { SqlDriver } from '@/db/driver';
-import { getRowsByIds, rootWorkoutIds, SYNC_ORDER, type RowByTable, type SyncedTable } from '@/db/dao';
+import { deletePostsTx, getRowsByIds, rootWorkoutIds, SYNC_ORDER, type RowByTable, type SyncedTable } from '@/db/dao';
 import { readUserSettingsRow } from '@/db/userSettings';
 
 import { acknowledge, pendingRows } from './outbox';
-import type { PushRow, SyncTransport } from './transport';
+import { PostAlreadyExistsError, type PushRow, type SyncTransport } from './transport';
 
 /**
  * Drops `updated_at` from a row before upload, so the server stamps it with
@@ -87,6 +91,8 @@ export interface PushResult {
   deleted: Record<SyncedTable, number>;
   /** Settings rows sent (B15): 1 when the kg/lb choice changed on this phone, else 0. */
   userSettings: number;
+  /** The lifter's own posts the server accepted (B21). */
+  posts: number;
 }
 
 /** A per-table counter starting at zero. */
@@ -144,8 +150,50 @@ export async function pushOutbox(db: SqlDriver, transport: SyncTransport): Promi
   }
 
   const userSettings = await pushUserSettingsPhase(db, transport);
+  const posts = await pushPostsPhase(db, transport);
 
-  return { pushed, deleted, userSettings };
+  return { pushed, deleted, userSettings, posts };
+}
+
+/**
+ * The posts phase (B21), last of all: uploads each of the lifter's queued posts, one request per
+ * post (there is at most one per finished workout, so batching would buy nothing).
+ *
+ * Why last is load-bearing: a post may only be stored on the server about a workout already
+ * there (foreign key, and the `owns_workout` security rule). Every training pass runs before this
+ * one and stops the whole push on its first failure, so if a post's workout has not landed, this
+ * phase never runs — a post can never arrive before its workout. (Side effect, accepted: a
+ * failing settings upload holds posts back too, until it clears.)
+ *
+ * Same watermark rule as everything else: the mark is read before the row, and only lines up to
+ * it are cleared. A line whose post is gone from the phone (its workout was deleted) uploads
+ * nothing and is cleared.
+ *
+ * One refusal is not a "try again": `PostAlreadyExistsError` means another device already posted
+ * this workout (one post per workout). The workout has its post, so this phone's copy is deleted
+ * with all its lines — keeping it would be refused on every sync and block the posts behind it.
+ * Any other failure stops the push with the lines kept, like every other phase.
+ *
+ * Returns how many posts the server accepted.
+ */
+async function pushPostsPhase(db: SqlDriver, transport: SyncTransport): Promise<number> {
+  let sent = 0;
+  for (const pending of await pendingRows(db, 'posts')) {
+    const [row] = await getRowsByIds(db, 'posts', [pending.rowId]);
+    if (row) {
+      const { updated_at: _serverStamped, ...upload } = row;
+      try {
+        await transport.pushPost(upload);
+        sent += 1;
+      } catch (error) {
+        if (!(error instanceof PostAlreadyExistsError)) throw error;
+        await db.withTransactionAsync((tx) => deletePostsTx(tx, [row.id]));
+        continue;
+      }
+    }
+    await acknowledge(db, 'posts', [pending]);
+  }
+  return sent;
 }
 
 /**
