@@ -44,12 +44,17 @@ interface PostSpec {
  * A post, with its author, flair and workout nested in, plus the `user_id` column the feed
  * filters on (the server sends it only when asked; the fake needs it to filter).
  */
-export function rawPost(spec: PostSpec): RawFeedPost & { user_id: string } {
+export function rawPost(
+  spec: PostSpec,
+): RawFeedPost & { user_id: string; workout: NonNullable<RawFeedPost['workout']> } {
   const entries = spec.entries ?? [{ name: 'Bench Press', sets: [feedSet({ reps: 5, weight_kg: 100 })] }];
   return {
     id: spec.id,
     user_id: spec.author.id,
     created_at: spec.createdAt,
+    kind: 'workout',
+    image_path: null,
+    visibility: 'public',
     flair: spec.flair ?? { id: 'wod', name: 'WOD' },
     author: spec.author,
     workout: {
@@ -66,5 +71,31 @@ export function rawPost(spec: PostSpec): RawFeedPost & { user_id: string } {
         sets: e.sets,
       })),
     },
+  };
+}
+
+/**
+ * A photo post (B22) as the server sends it: no workout, a photo path in the author's folder.
+ * A progress pic is private (as the server insists); a PR photo public — unless overridden.
+ */
+export function rawImagePost(spec: {
+  id: string;
+  author: ReturnType<typeof profile>;
+  createdAt: string;
+  kind: 'progress-pic' | 'pr';
+  flair?: { id: string; name: string };
+}): RawFeedPost & { user_id: string } {
+  return {
+    id: spec.id,
+    user_id: spec.author.id,
+    created_at: spec.createdAt,
+    kind: spec.kind,
+    image_path: `${spec.author.id}/${spec.id}.jpg`,
+    visibility: spec.kind === 'progress-pic' ? 'private' : 'public',
+    flair:
+      spec.flair ??
+      (spec.kind === 'progress-pic' ? { id: 'physique-check', name: 'Physique Check' } : { id: 'new-pr', name: 'New PR' }),
+    author: spec.author,
+    workout: null,
   };
 }

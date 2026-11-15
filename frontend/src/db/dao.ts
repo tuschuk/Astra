@@ -174,17 +174,36 @@ export interface FlairRow {
 }
 
 /**
- * One of the lifter's own posts (server table `posts`, B20), as the Post step after Finish writes
- * it (B21). Upload-only on the phone: the feed is read from the server. The post links its
- * workout through `workout_id` — and through it the workout's analysis, whose id IS the workout id.
+ * What a post is (B22): a shared finished workout, a progress photo, or a photo of a PR moment.
+ * Server column `posts.kind`.
+ */
+export type PostKind = 'workout' | 'progress-pic' | 'pr';
+
+/** The two kinds of post that are a photo rather than a workout (B22). */
+export type ImagePostKind = Exclude<PostKind, 'workout'>;
+
+/**
+ * One of the lifter's own posts (server table `posts`, B20), as the Post step after Finish
+ * (B21) or the Share a photo screen (B22) writes it. Upload-only on the phone: the feed is read
+ * from the server. A workout post links its workout through `workout_id` — and through it the
+ * workout's analysis, whose id IS the workout id. A photo post instead names its picture in
+ * `image_path`. Exactly one of the two is set, by kind (the server's `posts_kind_shape` rule).
  */
 export interface PostRow {
   /** Made on the phone, so a retried upload lands on the same server row. */
   id: string;
   user_id: string;
   flair_id: string;
-  /** The shared workout; one post per workout (unique on the phone and the server). */
-  workout_id: string;
+  /** Which kind of post this is (B22). */
+  kind: PostKind;
+  /** The shared workout (workout posts only); one post per workout (unique on the phone and the server). */
+  workout_id: string | null;
+  /**
+   * Photo posts only (B22): the picture's path in the server's `post-images` bucket,
+   * `<user_id>/<post_id>.<ext>` — the owner's folder, so the server's storage rules can tell
+   * whose it is.
+   */
+  image_path: string | null;
   /** Copied from the workout when the post is made, so the two can't disagree (B20 G7). */
   visibility: WorkoutVisibility;
   created_at: string;
@@ -292,7 +311,7 @@ export const TABLE_COLUMNS: { readonly [T in MirroredTable]: readonly (keyof Mir
     'updated_at',
   ],
   flairs: ['id', 'name', 'position', 'upvotes_only'],
-  posts: ['id', 'user_id', 'flair_id', 'workout_id', 'visibility', 'created_at', 'updated_at'],
+  posts: ['id', 'user_id', 'flair_id', 'kind', 'workout_id', 'image_path', 'visibility', 'created_at', 'updated_at'],
 };
 
 /** Yes/no columns: SQLite stores them as 0/1, the app and server use true/false. */

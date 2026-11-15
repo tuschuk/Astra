@@ -48,7 +48,7 @@ export interface SyncDeps {
 function defaultDeps(): SyncDeps {
   /* eslint-disable @typescript-eslint/no-require-imports -- loaded lazily so importing this hook in tests never loads native modules */
   const { openAppDatabase } = require('@/db/database') as typeof import('@/db/database');
-  const { getSupabase } = require('@/lib/supabase') as typeof import('@/lib/supabase');
+  const { getSupabase, readSupabaseConfig } = require('@/lib/supabase') as typeof import('@/lib/supabase');
   const { createSupabaseTransport } = require('./supabaseTransport') as typeof import('./supabaseTransport');
   const { AppState } = require('react-native') as typeof import('react-native');
   const Network = require('expo-network') as typeof import('expo-network');
@@ -56,7 +56,8 @@ function defaultDeps(): SyncDeps {
   /* eslint-enable @typescript-eslint/no-require-imports */
   return {
     openDatabase: openAppDatabase,
-    createTransport: () => createSupabaseTransport(getSupabase()),
+    // The address and key also go to the photo upload (B22), which talks to Storage directly.
+    createTransport: () => createSupabaseTransport(getSupabase(), readSupabaseConfig()),
     triggers: () => ({ appState: AppState, network: Network }),
     settings: { hydrate: unitStore.hydrate, applyPulled: unitStore.applyPulled, reset: unitStore.reset },
   };

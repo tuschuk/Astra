@@ -145,8 +145,7 @@ describe('migrate', () => {
 
     await migrate(db);
 
-    expect(SCHEMA_VERSION).toBe(8);
-    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 8 });
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: SCHEMA_VERSION });
     expect(await db.getFirstAsync('select count(*) as n from workouts')).toEqual({ n: 1 });
     expect(await db.getFirstAsync('select count(*) as n from outbox')).toEqual({ n: 1 });
     expect(await db.getFirstAsync('select count(*) as n from flairs')).toEqual({ n: 0 });
@@ -154,6 +153,46 @@ describe('migrate', () => {
     const insertPost = "insert into posts (id, user_id, flair_id, workout_id, visibility, created_at, updated_at) values (?, 'u', 'wod', 'w', 'public', 't', 't')";
     await db.runAsync(insertPost, ['p1']);
     await expect(db.runAsync(insertPost, ['p2'])).rejects.toThrow(/UNIQUE/);
+  });
+
+  it('B22: upgrades a version-8 phone to version 9, keeping its posts as workout posts and letting photo posts in', async () => {
+    const db = createNodeSqliteDriver();
+    for (const migration of MIGRATIONS.slice(0, 8)) await db.execAsync(migration);
+    await db.execAsync('pragma user_version = 8');
+    await db.runAsync(
+      "insert into posts (id, user_id, flair_id, workout_id, visibility, created_at, updated_at) values ('p1', 'u', 'wod', 'w', 'public', 't1', 't2')",
+    );
+    await db.runAsync("insert into outbox (tbl, row_id, queued_at) values ('posts', 'p1', 't')");
+
+    await migrate(db);
+
+    expect(SCHEMA_VERSION).toBe(9);
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 9 });
+    expect(await db.getAllAsync('select * from posts')).toEqual([
+      {
+        id: 'p1',
+        user_id: 'u',
+        flair_id: 'wod',
+        kind: 'workout',
+        workout_id: 'w',
+        image_path: null,
+        visibility: 'public',
+        created_at: 't1',
+        updated_at: 't2',
+      },
+    ]);
+    expect(await db.getFirstAsync('select count(*) as n from outbox')).toEqual({ n: 1 });
+    // Photo posts have no workout — any number of them fit beside the unique rule…
+    const insertPhoto =
+      "insert into posts (id, user_id, flair_id, kind, image_path, visibility, created_at, updated_at) values (?, 'u', 'new-pr', 'pr', ?, 'public', 't', 't')";
+    await db.runAsync(insertPhoto, ['p2', 'u/p2.jpg']);
+    await db.runAsync(insertPhoto, ['p3', 'u/p3.jpg']);
+    // …while one post per workout still holds.
+    await expect(
+      db.runAsync(
+        "insert into posts (id, user_id, flair_id, workout_id, visibility, created_at, updated_at) values ('p4', 'u', 'wod', 'w', 'public', 't', 't')",
+      ),
+    ).rejects.toThrow(/UNIQUE/);
   });
 
   it('upgrades a version-1 phone through every later version (sets.score), keeping the sets already there', async () => {

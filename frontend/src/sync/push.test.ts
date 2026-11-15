@@ -2,7 +2,7 @@
  * B07's definition of done, proven with a fake server and a real on-device
  * SQLite database: a workout logged offline lands on the server exactly once
  * after reconnecting, and a retried upload creates no duplicates. Plus the
- * deletes phase (B14) and the settings phase (B15).
+ * deletes phase (B14), the settings phase (B15), the posts phase (B21) and its photo leg (B22).
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,7 +14,9 @@ import { prepareDatabase } from '@/db/database';
 import { deleteLocalRowsTx, writeLocal, type SetRow } from '@/db/dao';
 import { replaceFlairsTx } from '@/db/flairs';
 import { createUnitStore } from '@/settings/unitStore';
-import { createWorkoutPost } from '@/social/createPost';
+import { createImagePost, createWorkoutPost } from '@/social/createPost';
+import { localPostImageUri } from '@/social/postImages';
+import { FakePostImageFiles } from '@/test-utils/fakePostImageFiles';
 import { FakeServer } from '@/test-utils/fakeTransport';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { ENTRIES, makeSet, SETS, USER_ID, WORKOUT } from '@/test-utils/workoutFixtures';
@@ -427,7 +429,9 @@ describe('B21: the posts phase', () => {
       id: otherPostId,
       user_id: USER_ID,
       flair_id: 'wod',
+      kind: 'workout',
       workout_id: WORKOUT.id,
+      image_path: null,
       visibility: 'public',
       created_at: WORKOUT.created_at,
     });
@@ -469,5 +473,131 @@ describe('B21: the posts phase', () => {
     await db.withTransactionAsync((tx) => deleteLocalRowsTx(tx, 'workouts', [WORKOUT.id], '2026-11-15T00:00:00.000Z'));
     await pushOutbox(db, server);
     expect(server.posts.size).toBe(0);
+  });
+});
+
+describe('B22: photo posts upload in the background, with retry', () => {
+  const PIC_ID = 'd0000000-0000-4000-8000-0000000000a1';
+  const PR_ID = 'd0000000-0000-4000-8000-0000000000a2';
+  const JPEG = { uri: 'file:///cache/picked.jpg', byteSize: 3_000_000, mimeType: 'image/jpeg' };
+  const picPath = `${USER_ID}/${PIC_ID}.jpg`;
+
+  /** A phone with the flairs synced and a progress pic queued (the server offline, like airplane mode). */
+  async function phoneWithQueuedPhoto() {
+    const db = await prepareDatabase(createNodeSqliteDriver());
+    const server = new FakeServer();
+    const files = new FakePostImageFiles();
+    server.offline = true;
+    await db.withTransactionAsync((tx) => replaceFlairsTx(tx, server.flairs));
+    await createImagePost(db, USER_ID, 'progress-pic', JPEG, { newId: () => PIC_ID, saveImage: files.save });
+    return { db, server, files };
+  }
+
+  it('offline it waits; reconnected, one push uploads the photo THEN the post, once, and deletes the phone’s copy', async () => {
+    const { db, server, files } = await phoneWithQueuedPhoto();
+    await expect(pushOutbox(db, server, files)).rejects.toThrow('Network request failed');
+    expect(await pendingRows(db, 'posts')).toHaveLength(1);
+    expect(files.files.has(localPostImageUri(picPath))).toBe(true);
+
+    server.offline = false;
+    expect((await pushOutbox(db, server, files)).posts).toBe(1);
+    expect(server.requestLog.slice(-2)).toEqual([`image:${picPath}`, `post:${PIC_ID}`]);
+    expect(server.objects.get(picPath)).toEqual({ fileUri: localPostImageUri(picPath), mimeType: 'image/jpeg' });
+    expect(server.posts.get(PIC_ID)).toMatchObject({
+      kind: 'progress-pic',
+      workout_id: null,
+      image_path: picPath,
+      visibility: 'private',
+      flair_id: 'physique-check',
+    });
+    expect(await outboxSize(db)).toBe(0);
+    expect(files.files.size).toBe(0);
+
+    // A second push changes nothing.
+    expect((await pushOutbox(db, server, files)).posts).toBe(0);
+    expect(server.objects.size).toBe(1);
+    expect(server.posts.size).toBe(1);
+  });
+
+  it('retry: the photo lands but the post is refused → the next push re-uploads to the SAME path and lands the post; nothing duplicated', async () => {
+    const { db, server, files } = await phoneWithQueuedPhoto();
+    server.offline = false;
+    server.failPosts = true;
+    await expect(pushOutbox(db, server, files)).rejects.toThrow(/refused/);
+    expect(server.objects.has(picPath)).toBe(true);
+    expect(server.posts.size).toBe(0);
+    expect(files.files.size).toBe(1); // kept for the retry
+
+    server.failPosts = false;
+    expect((await pushOutbox(db, server, files)).posts).toBe(1);
+    expect(server.imageUploads).toEqual([picPath, picPath]);
+    expect(server.objects.size).toBe(1);
+    expect(server.posts.size).toBe(1);
+  });
+
+  it('a refused photo (e.g. over the bucket’s limit) stops the push before the post row, keeping the line', async () => {
+    const { db, server, files } = await phoneWithQueuedPhoto();
+    server.offline = false;
+    server.failImageUploads = true;
+    await expect(pushOutbox(db, server, files)).rejects.toThrow(/413/);
+    expect(server.postPushes).toEqual([]);
+    expect(await pendingRows(db, 'posts')).toHaveLength(1);
+  });
+
+  it('a lost reply on the photo is retried with no duplicate', async () => {
+    const { db, server, files } = await phoneWithQueuedPhoto();
+    server.offline = false;
+    server.loseNextResponse();
+    await expect(pushOutbox(db, server, files)).rejects.toThrow(/response lost/);
+    await pushOutbox(db, server, files);
+    expect(server.objects.size).toBe(1);
+    expect(server.posts.size).toBe(1);
+  });
+
+  it('the phone’s copy has vanished: the post can never upload, so it is dropped and the posts behind it still go', async () => {
+    const { db, server, files } = await phoneWithQueuedPhoto();
+    await createImagePost(db, USER_ID, 'pr', JPEG, { newId: () => PR_ID, saveImage: files.save });
+    files.files.delete(localPostImageUri(picPath)); // the phone cleared the folder
+    server.offline = false;
+
+    expect((await pushOutbox(db, server, files)).posts).toBe(1);
+    expect([...server.posts.keys()]).toEqual([PR_ID]);
+    expect(server.imageUploads).toEqual([`${USER_ID}/${PR_ID}.jpg`]);
+    expect(await db.getAllAsync('select id from posts')).toEqual([{ id: PR_ID }]);
+    expect(await outboxSize(db)).toBe(0);
+  });
+
+  it('a photo post queued offline survives the app dying, then uploads exactly once', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'astra-b22-'));
+    const file = join(dir, 'astra.db');
+    try {
+      const files = new FakePostImageFiles();
+      const before = await prepareDatabase(createNodeSqliteDriver(file));
+      await before.withTransactionAsync((tx) => replaceFlairsTx(tx, new FakeServer().flairs));
+      await createImagePost(before, USER_ID, 'pr', JPEG, { newId: () => PR_ID, saveImage: files.save });
+      const after = await prepareDatabase(createNodeSqliteDriver(file));
+      expect(await pendingRows(after, 'posts')).toEqual([{ rowId: PR_ID, mark: expect.any(Number) }]);
+      const server = new FakeServer();
+      expect((await pushOutbox(after, server, files)).posts).toBe(1);
+      expect((await pushOutbox(after, server, files)).posts).toBe(0);
+      expect([...server.posts.keys()]).toEqual([PR_ID]);
+      expect([...server.objects.keys()]).toEqual([`${USER_ID}/${PR_ID}.jpg`]);
+    } finally {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // Windows keeps a still-open SQLite file locked; the OS temp folder is cleaned later.
+      }
+    }
+  });
+
+  it('workout posts never touch the bucket', async () => {
+    const { db, server } = await deviceWithOfflineWorkout();
+    await db.withTransactionAsync((tx) => replaceFlairsTx(tx, server.flairs));
+    await createWorkoutPost(db, USER_ID, WORKOUT.id, 'wod');
+    server.offline = false;
+    const files = new FakePostImageFiles();
+    expect((await pushOutbox(db, server, files)).posts).toBe(1);
+    expect(server.imageUploads).toEqual([]);
   });
 });

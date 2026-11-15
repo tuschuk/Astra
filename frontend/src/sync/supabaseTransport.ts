@@ -15,7 +15,8 @@
  * and saved with a plain update (see `pushUserSettings`). Analyses (B18) are never uploaded:
  * the phone asks the `analyze-workout` server function to make one (`requestAnalysis`) and
  * downloads them like any bookmarked table. Posts (B21) are upload-only — one upsert per post —
- * and flairs (B21) download-only, read whole each time.
+ * and flairs (B21) download-only, read whole each time. A photo post's picture (B22) is uploaded
+ * straight to Storage, streamed from the phone's file (see `uploadPostImage`).
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 
@@ -28,7 +29,9 @@ import {
   type WorkoutAnalysisRow,
 } from '@/db/dao';
 import { parseUnit } from '@/db/userSettings';
+import type { SupabaseConfig } from '@/lib/supabase';
 import { throwIfError } from '@/lib/throwIfError';
+import { postImageUploadUrl, uploadFile } from '@/social/postImages';
 
 import { PostAlreadyExistsError, type PullCursor, type SyncTransport, type TombstoneRow } from './transport';
 
@@ -65,8 +68,19 @@ export function toAnalysisRow(raw: Record<string, unknown>): WorkoutAnalysisRow 
   };
 }
 
-/** Builds a `SyncTransport` that talks to Supabase through `client`. */
-export function createSupabaseTransport(client: SupabaseClient): SyncTransport {
+/** How the photo upload reaches Storage; replaceable in tests (the real one streams the file natively). */
+export type UploadFileFn = typeof uploadFile;
+
+/**
+ * Builds a `SyncTransport` that talks to Supabase through `client`. `config` (the project's
+ * address and publishable key) is needed only by the photo upload (B22), which goes to Storage
+ * directly rather than through the client — see `uploadPostImage`.
+ */
+export function createSupabaseTransport(
+  client: SupabaseClient,
+  config?: SupabaseConfig,
+  upload: UploadFileFn = uploadFile,
+): SyncTransport {
   /** One page of a table after a cursor, optionally narrowed to one user. */
   async function page<T extends 'workouts' | 'exercises' | 'personal_records' | 'workout_analyses'>(
     tbl: T,
@@ -165,6 +179,26 @@ export function createSupabaseTransport(client: SupabaseClient): SyncTransport {
         throw new PostAlreadyExistsError(row.workout_id);
       }
       throwIfError(error, 'Upload of post failed');
+    },
+
+    async uploadPostImage(imagePath, localFileUri, mimeType) {
+      // Straight to Storage's upload endpoint with the phone's native uploader instead of the
+      // client's `storage.upload`: the client would need the whole photo in memory first, while
+      // this streams it from the file. `x-upsert: true` makes a retry replace the same file.
+      // The bucket's own rules still apply: too big or the wrong format is refused (4xx).
+      if (!config) throw new Error('Upload of post photo failed: no Supabase address configured');
+      const { data, error } = await client.auth.getSession();
+      const token = data.session?.access_token;
+      if (error || !token) throw new Error('Upload of post photo failed: not signed in');
+      const reply = await upload(postImageUploadUrl(config.url, imagePath), localFileUri, {
+        Authorization: `Bearer ${token}`,
+        apikey: config.anonKey,
+        'Content-Type': mimeType,
+        'x-upsert': 'true',
+      });
+      if (reply.status < 200 || reply.status >= 300) {
+        throw new Error(`Upload of post photo failed: ${reply.status} ${reply.body}`.trim());
+      }
     },
 
     async pullFlairs() {

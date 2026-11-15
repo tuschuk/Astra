@@ -233,10 +233,56 @@ describe('createSupabaseTransport', () => {
     id: 'p1',
     user_id: 'u1',
     flair_id: 'wod',
+    kind: 'workout' as const,
     workout_id: 'w1',
+    image_path: null,
     visibility: 'public' as const,
     created_at: '2026-11-15T10:00:00.000Z',
   };
+
+  describe('B22: uploadPostImage', () => {
+    const CONFIG = { url: 'https://proj.supabase.co', anonKey: 'anon-key' };
+
+    /** A client whose auth hands out `token` (or no session at all). */
+    function clientWithSession(token: string | null) {
+      return {
+        auth: { getSession: async () => ({ data: { session: token ? { access_token: token } : null }, error: null }) },
+      } as unknown as SupabaseClient;
+    }
+
+    it('streams the phone’s file to Storage at the object path, as the signed-in user, replacing any earlier upload', async () => {
+      const calls: unknown[][] = [];
+      const upload = async (...args: unknown[]) => {
+        calls.push(args);
+        return { status: 200, body: '{"Key":"post-images/u1/p1.jpg"}' };
+      };
+      await createSupabaseTransport(clientWithSession('tok'), CONFIG, upload).uploadPostImage(
+        'u1/p1.jpg',
+        'file:///docs/post-images/p1.jpg',
+        'image/jpeg',
+      );
+      expect(calls).toEqual([
+        [
+          'https://proj.supabase.co/storage/v1/object/post-images/u1/p1.jpg',
+          'file:///docs/post-images/p1.jpg',
+          { Authorization: 'Bearer tok', apikey: 'anon-key', 'Content-Type': 'image/jpeg', 'x-upsert': 'true' },
+        ],
+      ]);
+    });
+
+    it('throws on a refusal (the bucket’s size limit answers 413), with no session, and with no address configured', async () => {
+      const refused = async () => ({ status: 413, body: 'Payload too large' });
+      await expect(
+        createSupabaseTransport(clientWithSession('tok'), CONFIG, refused).uploadPostImage('u1/p.jpg', 'f', 'image/jpeg'),
+      ).rejects.toThrow('Upload of post photo failed: 413 Payload too large');
+      await expect(
+        createSupabaseTransport(clientWithSession(null), CONFIG, refused).uploadPostImage('u1/p.jpg', 'f', 'image/jpeg'),
+      ).rejects.toThrow('not signed in');
+      await expect(
+        createSupabaseTransport(clientWithSession('tok'), undefined, refused).uploadPostImage('u1/p.jpg', 'f', 'image/jpeg'),
+      ).rejects.toThrow('no Supabase address');
+    });
+  });
 
   it('B21: uploads a post as an upsert on its id, without updated_at', async () => {
     const { client, requests } = recordingClient([{ data: null }]);
