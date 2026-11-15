@@ -15,7 +15,9 @@ Source migrations: `20261114100000_identity.sql`, `20261114100100_training.sql`,
 its storage policies), `20261115114409_votes_comments.sql` and
 `20261115115739_comments_body_not_blank.sql` (B23, both applied live — votes, comments, the
 `post_scores` view, the upvote-only triggers), `20261115122437_post_hot_scores.sql` (B24, applied
-live — the `post_hot_scores` ranking view),
+live — the `post_hot_scores` ranking view), `20261115130809_profile_reads_and_avatars.sql` (B25,
+applied live — `follow_counts`, the widened `personal_records` read rule, the public `avatars`
+bucket, the own-folder `avatar_url` CHECK),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -47,6 +49,7 @@ erDiagram
   workouts |o--o| posts : "workout_id shared (cascade); workout posts only; one post per workout"
   flairs ||--o{ posts : "flair_id: exactly one per post"
   posts |o..o| storage_objects : "image_path = object name (photo posts; no FK)"
+  profiles |o..o| storage_objects : "avatar_url = object name in avatars (no FK; own folder by CHECK, B25)"
   posts ||--o{ votes : "post_id (cascade)"
   profiles ||--o{ votes : "user_id casts; one per post (cascade)"
   posts ||--o{ comments : "post_id (cascade)"
@@ -64,7 +67,7 @@ erDiagram
     citext username UK "3-30 chars, letters digits underscore; null until onboarding"
     text display_name "max 50; seeded from the email's local part"
     text bio "max 300"
-    text avatar_url
+    text avatar_url "path in the avatars bucket, <id>/<uuid>.<ext>; CHECK: own folder (B25)"
     timestamptz created_at
     timestamptz updated_at "trigger-maintained"
   }
@@ -202,7 +205,7 @@ erDiagram
   }
 
   storage_objects {
-    text bucket_id "post-images (private; 10 MiB cap; jpeg, png, webp)"
+    text bucket_id "post-images (private; 10 MiB) or avatars (public read; 5 MiB, B25); jpeg, png, webp"
     text name "object path; first folder = owner's user id"
     uuid owner "uploader (Supabase-managed)"
   }
@@ -324,6 +327,47 @@ reads photos through `/storage/v1/object/authenticated/post-images/<path>` with 
 — there are no public URLs. Live-probed as two users at build time: B's progress pic and its object
 invisible to A, B's PR photo and object visible to A, A refused uploading into B's folder, citing
 B's object, a public progress pic, an imageless photo post and a workoutless workout post.
+
+## Profiles: counts, PRs and avatars (B25)
+
+Migration `20261115130809_profile_reads_and_avatars.sql` gives a profile what it couldn't read
+before:
+
+- **Follower / following counts** — `public.follow_counts(profile_id uuid) returns table
+  (followers bigint, following bigint)`, `security definer`, `search_path = ''`, called as
+  `rpc('follow_counts', { profile_id })`. It counts **every** `follows` row for that id in each
+  direction (the `follows` read rule only shows a viewer the rows they are part of, so the app
+  could never count someone else's) and returns only those two numbers — never a row, so nobody
+  learns who follows whom. Execute is revoked from `public`/`anon` and granted to `authenticated`.
+  It does not look at blocks: anyone signed in can read anyone's two counts, as anyone signed in
+  can read any `profiles` row. Both directions are indexed (the `follows` primary key and
+  `follows_followee_idx`).
+- **Another lifter's PRs** — the `personal_records` read policy is now `"records readable with
+  their source workout"`: `user_id = auth.uid() or private.can_view_set(source_set_id)`. The new
+  helper `private.can_view_set(sid)` (security definer) asks `private.can_view_workout` about the
+  workout holding the set, so a record is visible exactly when the workout that proves it is:
+  public → any signed-in user, followers → followers, private → owner only, a block in either
+  direction → hidden. The owner clause comes first, so the sync download (always filtered to the
+  signed-in user) never runs the helper and never receives anyone else's rows. Write policies are
+  unchanged.
+- **The `avatars` bucket** — a `storage.buckets` row with `public = true`, `file_size_limit =
+  5242880` (5 MiB — mirrored by `MAX_AVATAR_BYTES` in `frontend/src/social/mediaLimits.ts`; change
+  both together), `allowed_mime_types = jpeg, png, webp`. Public means anyone can fetch an avatar
+  from `/storage/v1/object/public/avatars/<path>` with no token: an avatar is the account's public
+  face and not one of the sensitive classes (progress pics stay in the private `post-images`).
+  Policies on `storage.objects`, scoped to `bucket_id = 'avatars'`: **select** (through the
+  authenticated API — the Storage API needs it to delete), **insert**, **update** and **delete**,
+  each only in your own folder (`(storage.foldername(name))[1] = auth.uid()`). Every upload uses a
+  new `<user_id>/<uuid>.<ext>` name, so a changed photo has a new address.
+- **`profiles_avatar_in_own_folder`** — CHECK `avatar_url is null or avatar_url like id || '/%'`:
+  `avatar_url` holds a bucket path in the owner's own folder, never someone else's upload or an
+  arbitrary URL.
+- **Live-probed at build time** (synthetic users, rolled back): of three PRs from a public, a
+  followers-only and a private workout, the owner read all three, a follower the first two, a
+  stranger only the public one, a blocked lifter none; `follow_counts` equalled `count(*)` per
+  direction for all four viewers; `anon` has no execute right; an `avatar_url` in another's folder
+  was refused by the CHECK, one in the owner's folder accepted; an object insert into another's
+  avatars folder was refused (42501), into one's own allowed.
 
 ## Posts and the feed (B20)
 
@@ -503,12 +547,14 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `exercises` | launch library (`owner_id` null) plus your own | create, update, delete only your own |
 | `workouts` | per the visibility rule below | insert, update, delete only your own |
 | `workout_exercises`, `sets` | visible when their workout is | only the workout's owner |
-| `personal_records` | only your own (B25 will widen this for public profiles) | only your own, and `source_set_id` must be a set in one of your workouts (`private.owns_set`) |
+| `personal_records` | your own, plus any record whose source set's workout you may see (`private.can_view_set`, B25) | only your own, and `source_set_id` must be a set in one of your workouts (`private.owns_set`) |
 | `sync_tombstones` | only your own | nobody — only the `record_tombstone` trigger inserts |
 | `workout_analyses` | only your own | nobody — no write policies; only the `analyze-workout` function (service role) upserts |
 | `flairs` | any signed-in user | nobody — new flairs arrive by migration |
 | `posts` | per the visibility rule below (same helper as workouts) | insert and update only as yourself **and**, for a workout post, only for a workout you own (`private.owns_workout`; photo posts have no workout); delete only your own |
 | `storage.objects` in `post-images` (B22) | your own folder, or cited by a post you may see | insert, update, delete only in your own folder — see the photo posts section |
+| `storage.objects` in `avatars` (B25) | anyone through the bucket's public URL; through the API, your own folder | insert, update, delete only in your own folder — see the profiles section |
+| `follow_counts(profile_id)` (function, B25) | any signed-in user, for any profile: two counts, no rows | — |
 | `votes` (B23) | every vote on a post you may see (`private.can_view_post`) — so the tally is the same for everyone | insert and update only as yourself, on a post you may see; delete only your own |
 | `comments` (B23) | every comment on a post you may see | insert only as yourself, on a post you may see; no updates; delete only your own |
 | `post_scores` (view, B23) | `security_invoker`: whatever the posts / votes / comments rules above let you read | — |

@@ -1,20 +1,19 @@
 /**
- * UserCard — one lifter in a list of people (today: the Find lifters search; later the profile
- * screens reuse it).
+ * UserCard — one lifter in a list of people (today: the Find lifters search).
  *
- * What it shows: a letter avatar, the lifter's display name and @username, and a Follow /
- * Following button.
+ * What it shows: their profile photo (or letter avatar), display name and @username, and a
+ * Follow / Following button.
  *
- * What the user can do: tap Follow to follow them, or Following to unfollow. Following is one
- * way (SOC-7) — no request, no approval. The button flips straight away so it feels instant;
- * if the server refuses (for example, one of you has blocked the other) or the connection
- * drops, it flips back and a short message explains.
+ * What the user can do: tap the card to open the lifter's profile (B25), and tap Follow to follow
+ * them or Following to unfollow (the button keeps its own press — `FollowButton`: it flips at once
+ * and flips back with a short message if the server refuses, e.g. a block, or the connection
+ * drops). Following is one way (SOC-7) — no request, no approval.
  */
-import React, { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import React from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
 
-import { LetterAvatar } from '@/components/social/LetterAvatar';
-import { Button } from '@/components/ui/Button';
+import { Avatar } from '@/components/social/Avatar';
+import { FollowButton } from '@/components/social/FollowButton';
 import { Body } from '@/components/ui/Text';
 import type { FollowResult, LifterResult } from '@/social/follows';
 import { personLabels } from '@/social/names';
@@ -24,49 +23,31 @@ interface UserCardProps {
   lifter: LifterResult;
   /** Follow (`true`) or unfollow (`false`) this lifter; resolves to how it went. */
   onSetFollowing: (following: boolean) => Promise<FollowResult>;
+  /** Opens this lifter's profile (B25). Left out, the card isn't tappable. */
+  onOpenProfile?: () => void;
 }
 
-export function UserCard({ lifter, onSetFollowing }: UserCardProps) {
-  const [following, setFollowing] = useState(lifter.following);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+export function UserCard({ lifter, onSetFollowing, onOpenProfile }: UserCardProps) {
   const who = personLabels(lifter);
-
-  /** Flips the button at once, asks the server, and flips back with a message if it said no. */
-  async function toggle(): Promise<void> {
-    const next = !following;
-    setFollowing(next);
-    setMessage(null);
-    setBusy(true);
-    const result = await onSetFollowing(next);
-    setBusy(false);
-    if (!result.ok) {
-      setFollowing(!next);
-      setMessage(result.message);
-    }
-  }
 
   return (
     <View style={styles.root}>
       <View style={styles.row}>
-        <LetterAvatar initial={who.initial} />
-        <View style={styles.text}>
-          <Body style={styles.name}>{who.name}</Body>
-          {who.handle ? <Body variant="small">{who.handle}</Body> : null}
-        </View>
-        <Button
-          label={following ? 'Following' : 'Follow'}
-          variant={following ? 'ghost' : 'primary'}
-          onPress={() => void toggle()}
-          disabled={busy}
-          style={styles.button}
-        />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Open ${who.name}’s profile`}
+          disabled={!onOpenProfile}
+          onPress={onOpenProfile}
+          style={styles.person}
+        >
+          <Avatar path={lifter.avatarPath} initial={who.initial} />
+          <View style={styles.text}>
+            <Body style={styles.name}>{who.name}</Body>
+            {who.handle ? <Body variant="small">{who.handle}</Body> : null}
+          </View>
+        </Pressable>
+        <FollowButton initialFollowing={lifter.following} onSetFollowing={onSetFollowing} />
       </View>
-      {message ? (
-        <Body variant="small" style={styles.message}>
-          {message}
-        </Body>
-      ) : null}
     </View>
   );
 }
@@ -79,9 +60,14 @@ const styles = StyleSheet.create({
     borderRadius: radii.lg,
     padding: spacing.md,
     marginBottom: spacing.sm,
-    gap: spacing.xs,
   },
   row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  person: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
@@ -91,11 +77,5 @@ const styles = StyleSheet.create({
   },
   name: {
     color: colors.text,
-  },
-  button: {
-    paddingHorizontal: spacing.lg,
-  },
-  message: {
-    color: colors.error,
   },
 });

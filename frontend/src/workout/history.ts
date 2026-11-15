@@ -17,7 +17,7 @@
 import { fromSqlRow, TABLE_COLUMNS, type SetRow, type WorkoutExerciseRow, type WorkoutRow } from '@/db/dao';
 import { placeholders, type SqlExecutor } from '@/db/driver';
 
-/** How many past workouts the Workout tab lists (full history browsing is the profile's, B25). */
+/** How many past workouts the Workout tab lists (the profile pages through the full history, B25). */
 export const PAST_WORKOUT_LIMIT = 100;
 
 /** One row of the Workout tab's history list. */
@@ -66,26 +66,40 @@ async function setsOfEntries(db: SqlExecutor, entryIds: readonly string[]): Prom
   return rows.map((r) => fromSqlRow('sets', r));
 }
 
+/** Where a page of past workouts ended: the oldest one's start time and id (B25). */
+export interface PastWorkoutCursor {
+  started_at: string;
+  id: string;
+}
+
 /**
  * The user's finished workouts, newest first (at most `limit`, default 100), each with its
  * exercise and set counts. Workouts still in progress are never listed — they are the active
  * workout, offered as "Resume" instead.
+ *
+ * `before` (B25) continues a list: only workouts older than that bookmark — an earlier start, or
+ * the same start and a smaller id, the same order the list is sorted in, so no workout is skipped
+ * or repeated. The profile's history pages through it to reach the very first workout (YOU-2's
+ * "complete history"); the Workout tab leaves it out and lists the latest 100.
  */
 export async function listPastWorkouts(
   db: SqlExecutor,
   userId: string,
   limit: number = PAST_WORKOUT_LIMIT,
+  before: PastWorkoutCursor | null = null,
 ): Promise<PastWorkoutSummary[]> {
+  const after = before ? 'and (w.started_at < ? or (w.started_at = ? and w.id < ?))' : '';
+  const params = before ? [userId, before.started_at, before.started_at, before.id, limit] : [userId, limit];
   const rows = await db.getAllAsync<Record<string, unknown>>(
     `select ${columnsOf('workouts', 'w')},
        (select count(*) from workout_exercises we where we.workout_id = w.id) as exercise_count,
        (select count(*) from sets s join workout_exercises we on we.id = s.workout_exercise_id
           where we.workout_id = w.id) as set_count
      from workouts w
-     where w.user_id = ? and w.ended_at is not null
+     where w.user_id = ? and w.ended_at is not null ${after}
      order by w.started_at desc, w.id desc
      limit ?`,
-    [userId, limit],
+    params,
   );
   return rows.map(({ exercise_count, set_count, ...workout }) => ({
     workout: fromSqlRow('workouts', workout),

@@ -43,6 +43,22 @@ beforeEach(() => {
   mockUnit = 'lb';
 });
 
+describe('PostCard — the author header (B25)', () => {
+  it('opens the author’s profile when tapped', async () => {
+    const onOpenProfile = jest.fn();
+    const post = shaped(rawPost({ id: 'p1', author, createdAt: '2026-11-15T08:00:00.000Z' }));
+    await render(<PostCard post={post} now={NOW} onOpenProfile={onOpenProfile} />);
+    await fireEvent.press(screen.getByLabelText('Open Wendy’s profile'));
+    expect(onOpenProfile).toHaveBeenCalledWith('u1');
+  });
+
+  it('is not tappable without a handler', async () => {
+    const post = shaped(rawPost({ id: 'p1', author, createdAt: '2026-11-15T08:00:00.000Z' }));
+    await render(<PostCard post={post} now={NOW} />);
+    expect(screen.getByLabelText('Open Wendy’s profile')).toBeDisabled();
+  });
+});
+
 describe('PostCard', () => {
   it('shows the author, the date, the flair row’s name, the title and the summary line', async () => {
     const post = shaped(

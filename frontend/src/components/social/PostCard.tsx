@@ -3,8 +3,8 @@
  * photo — a progress pic or a PR moment (SOC-2).
  *
  * What it shows, top to bottom:
- *   - who posted it (a letter avatar, their display name and @username) and when ("Today",
- *     "Yesterday" or the date);
+ *   - who posted it (their profile photo or letter avatar, display name and @username) and when
+ *     ("Today", "Yesterday" or the date) — tapping it opens their profile (B25);
  *   - the post's flair chip ("WOD", "New PR", "Physique Check", …) — the name comes from the
  *     flair row on the server, so a new flair needs no app change (SOC-3);
  *   - for a workout post: the workout's title (or its date), "58 min · 3 exercises · 12 sets",
@@ -31,7 +31,7 @@ import React, { useRef, useState } from 'react';
 import { Image, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
-import { LetterAvatar } from '@/components/social/LetterAvatar';
+import { Avatar } from '@/components/social/Avatar';
 import { Card } from '@/components/ui/Card';
 import { Body, SectionLabel } from '@/components/ui/Text';
 import { useDisplayUnit } from '@/settings/displayUnit';
@@ -81,9 +81,11 @@ interface PostCardProps {
   onVote?: (postId: string, vote: VoteValue | null) => Promise<VoteResult>;
   /** Opens this post's comments (B23). Left out, the comment count only shows. */
   onOpenComments?: (postId: string) => void;
+  /** Opens the author's profile (B25) when their name or photo is tapped. Left out, the header only shows. */
+  onOpenProfile?: (userId: string) => void;
 }
 
-export function PostCard({ post, now, viewerId, photoSource, onVote, onOpenComments }: PostCardProps) {
+export function PostCard({ post, now, viewerId, photoSource, onVote, onOpenComments, onOpenProfile }: PostCardProps) {
   const { author, flair } = post;
   const who = personLabels(author);
   // The owner's own progress pic (private by rule until B26) says so; other cards are unchanged.
@@ -93,11 +95,19 @@ export function PostCard({ post, now, viewerId, photoSource, onVote, onOpenComme
   return (
     <Card style={styles.card}>
       <View style={styles.header}>
-        <LetterAvatar initial={who.initial} />
-        <View style={styles.headerText}>
-          <Body style={styles.name}>{who.name}</Body>
-          <Body variant="small">{[who.handle, postDateLabel(post.createdAt, now)].filter(Boolean).join(' · ')}</Body>
-        </View>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Open ${who.name}’s profile`}
+          disabled={!onOpenProfile || !author.id}
+          onPress={() => onOpenProfile?.(author.id)}
+          style={styles.author}
+        >
+          <Avatar path={author.avatarPath} initial={who.initial} />
+          <View style={styles.headerText}>
+            <Body style={styles.name}>{who.name}</Body>
+            <Body variant="small">{[who.handle, postDateLabel(post.createdAt, now)].filter(Boolean).join(' · ')}</Body>
+          </View>
+        </Pressable>
         <View style={styles.flair} accessibilityLabel={`Flair: ${flair.name}`}>
           <SectionLabel size="small" style={styles.flairText}>
             {flair.name}
@@ -316,6 +326,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.md,
     marginBottom: spacing.sm,
+  },
+  author: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
   },
   headerText: {
     flex: 1,

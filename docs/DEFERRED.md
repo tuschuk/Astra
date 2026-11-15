@@ -408,3 +408,25 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - Pre-existing: three "overlapping act()" console warnings in older `home-feed.test.tsx` tests
     (present on main before B24); the B24 tests add none.
   - `mmdc` not run for this build either; diagrams not render-checked.
+- B25 profile follow-ups (`profile`):
+  - **Two live probes not run by the builder**: an avatar object fetched from
+    `/storage/v1/object/public/avatars/<path>` with no auth header, and an over-limit (> 5 MiB)
+    avatar upload refused by `file_size_limit` — both need a real signed-in upload. The bucket row
+    (`public = true`, `file_size_limit = 5242880`) was confirmed live. Gate 2 / Tristen's device
+    run: change the photo on Edit profile, open the public URL in a browser, try a > 5 MB photo.
+  - **Follower / following lists** (tapping a count) — not in B25's scope; another user's lists
+    aren't readable under `follows` RLS. A later SOC step decides the RLS (plan, Out of scope).
+  - **No "remove photo"** on Edit profile (`avatar_url` can only be replaced); add with B26's
+    privacy settings or a tidy-up pass if wanted.
+  - **Another lifter's workout rows aren't tappable** — no online workout detail screen yet (B20
+    stance).
+  - **`follow_counts` ignores blocks**: a blocked lifter can still read the blocker's two counts,
+    just as they can read the `profiles` row. Product reading for Tristen; B27 (block / mute) can
+    add a `workout_visible`-style check if it should hide them.
+  - Review judgement calls left as-is: `ProfileView` branches on the tab in several places and its
+    three loaders share a generation-guard shape (a per-tab table would collapse them — refactor if
+    a fourth tab arrives); the own / others' History rows are two renderers by design (plan G8);
+    `router.push('/profile/[id]')` is spelled in Home and Find lifters (one line each).
+  - When both the header and the open tab fail offline, the profile shows two Retry buttons (the
+    header's reloads both); merge into one if it reads oddly on device.
+  - `mmdc` not permitted for the headless builder; neither diagram was render-checked.

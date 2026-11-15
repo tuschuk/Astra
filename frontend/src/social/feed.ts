@@ -97,7 +97,8 @@ interface FeedPostBase {
   createdAt: string;
   /** The post's one flair, straight from the `flairs` table — the app never spells flair names itself. */
   flair: FeedFlair;
-  author: PersonName & { id: string };
+  /** Who posted it; `avatarPath` (B25) is their photo's path in the avatars bucket, or null. */
+  author: PersonName & { id: string; avatarPath: string | null };
   /** Who may see it (B22: the card tells the owner when a post is private). */
   visibility: WorkoutVisibility;
   /** The net score — upvotes minus downvotes — from the server's `post_scores` view (B23). */
@@ -143,7 +144,7 @@ export interface FeedPage {
 export const FEED_SELECT =
   'id,created_at,kind,image_path,visibility,' +
   'flair:flairs(id,name,upvotes_only),' +
-  'author:profiles!posts_user_id_fkey(id,username,display_name),' +
+  'author:profiles!posts_user_id_fkey(id,username,display_name,avatar_url),' +
   'workout:workouts(id,title,notes,started_at,ended_at,' +
   'workout_exercises(id,position,superset_group,exercise:exercises(name),' +
   'sets(id,position,reps,weight_kg,rpe,is_warmup,drop_set_position,duration_seconds,score))),' +
@@ -173,7 +174,8 @@ export interface RawFeedPost {
   visibility: WorkoutVisibility;
   /** `upvotes_only` is optional only so a reply missing it shapes to "takes downvotes", never a crash. */
   flair: { id: string; name: string; upvotes_only?: boolean } | null;
-  author: { id: string; username: string | null; display_name: string | null } | null;
+  /** `avatar_url` (B25) is optional only so a reply without it shapes to "no photo", never a crash. */
+  author: { id: string; username: string | null; display_name: string | null; avatar_url?: string | null } | null;
   /** Null for a photo post, or a workout post whose workout the viewer may not see. */
   workout: {
     id: string;
@@ -264,6 +266,7 @@ export function toFeedPost(raw: RawFeedPost, scores?: RawPostScore): FeedPost | 
       id: raw.author?.id ?? '',
       username: raw.author?.username ?? null,
       displayName: raw.author?.display_name ?? null,
+      avatarPath: raw.author?.avatar_url ?? null,
     },
     visibility: raw.visibility,
     score: scores?.score ?? 0,

@@ -61,6 +61,30 @@ describe('listPastWorkouts', () => {
     const list = await listPastWorkouts(db, USER_ID, 2);
     expect(list.map((s) => s.workout.started_at)).toEqual(['2026-11-03T09:00:00.000Z', '2026-11-02T09:00:00.000Z']);
   });
+
+  it('pages with a before-cursor all the way to the first workout, no repeats or gaps (B25, YOU-2)', async () => {
+    const db = await createPreparedDb();
+    const ids: string[] = [];
+    for (let day = 1; day <= 7; day += 1) {
+      ids.push(await logWorkout(db, USER_ID, `2026-11-0${day}T09:00:00.000Z`, [{ exerciseId: BENCH, reps: [5] }]));
+    }
+    // A same-start pair: the id breaks the tie, so neither is skipped at a page edge.
+    ids.push(await logWorkout(db, USER_ID, '2026-11-04T09:00:00.000Z', [{ exerciseId: SQUAT, reps: [5] }]));
+    await logWorkout(db, OTHER_USER_ID, '2026-11-05T09:00:00.000Z', [{ exerciseId: BENCH, reps: [1] }]);
+
+    const walked: string[] = [];
+    let before: { started_at: string; id: string } | null = null;
+    for (;;) {
+      const page = await listPastWorkouts(db, USER_ID, 3, before);
+      walked.push(...page.map((s) => s.workout.id));
+      if (page.length < 3) break;
+      const last = page[page.length - 1].workout;
+      before = { started_at: last.started_at, id: last.id };
+    }
+    const all = (await listPastWorkouts(db, USER_ID)).map((s) => s.workout.id);
+    expect(walked).toEqual(all);
+    expect(new Set(walked)).toEqual(new Set(ids));
+  });
 });
 
 describe('readWorkout', () => {

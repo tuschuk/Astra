@@ -368,7 +368,44 @@ claim verified in the repo, not assumed.
   by user id (B07 account-switch rule); a set username can be changed but not cleared; a
   profile id with no row renders a calm not-found state; counts re-read after the header's
   own follow/unfollow so the number never contradicts the button.
-- **Scope verdict:** right as written, with one flagged inclusion (username, G1) and one
+- **Scope verdict (planner):** right as written, with one flagged inclusion (username, G1) and one
   argued loosening (public avatar bucket, G6 — invited by the handoff). The Edit profile
   screen is the minimal surface that makes the five facts settable at all; follower lists,
   privacy settings and block UI stay with their steps. Nothing narrowed.
+
+## Build notes and deviations (builder)
+
+Migration applied live as `20261115130809_profile_reads_and_avatars.sql` (version recorded by
+Supabase; file renamed to match).
+
+- **D1 — an owner-folder `select` policy on `avatars` objects.** The plan said "no select policy
+  needed" (public read is by bucket configuration). True for reading, but the Storage API needs
+  select rights on `storage.objects` to *delete* an object (it reads the row it removes), and
+  the plan's best-effort cleanup of the replaced photo depends on delete. The policy is scoped to
+  `bucket_id = 'avatars'` and the caller's own folder, so it opens nothing beyond the public URL.
+- **D2 — `FollowButton` extracted** (`components/social/FollowButton.tsx`) from `UserCard`, so the
+  profile header reuses the exact optimistic flip + refusal (the plan's "same … as `UserCard`")
+  instead of copying it; `onSettled` fires only on an accepted change and drives the count re-read.
+- **D3 — `usePostPhotoSource` hook** lifted out of Home so profile post cards fetch photos the
+  same way (behaviour-preserving).
+- **D4 — `groupPrs` lives in `workout/prList.ts`**, not `social/profile.ts` (review finding: the
+  offline PR module must not depend on the online social module). Both `allCurrentPrs` and
+  `loadProfilePrs` group through it.
+- **D5 — `loadProfileRow`** split out of `loadProfileHeader`; Edit profile reads only the row (no
+  `follow_counts` call), so a failed count read can't block editing (review finding).
+- **D6 — `checkPostImage` and `checkAvatarImage` share one private `checkImage`**; the post-photo
+  wording is unchanged (its tests pass untouched).
+- **D7 — a newly uploaded avatar is deleted best-effort if the profile update then fails**, so a
+  refused save leaves no stray object (same stray-file stance as the plan).
+- **D8 — a 23505 maps to "username taken" only when the constraint named is the username one**
+  (review finding: a future unique column must not be reported as a taken username).
+- **D9 — the B15 You-tab assertions** (gear → Settings, no email, no Sign out) moved from
+  `screens.test.tsx` to `you-profile.test.tsx`, since the You tab now needs the database, the
+  server and focus effects.
+
+Live probes run at build time (synthetic users, rolled back): the PR visibility matrix (owner all
+three, follower public + followers, stranger public only, blocked none), `follow_counts` equal to
+`count(*)` per direction for all four viewers, `anon` has no execute right, the own-folder
+`avatar_url` CHECK, and a foreign-folder object insert refused (42501). **Not run** (need a real
+signed-in upload): the no-auth public URL fetch and the over-limit upload refusal — recorded in
+`docs/DEFERRED.md`.

@@ -36,23 +36,19 @@ edit-delete-workouts (LOG-9), B13 exercise-history-and-prs (LOG-4, LOG-5), B12 w
 logger-screen (LOG-2, NFR-2), B08 active-workout-store (NFR-3), B07 local-store-and-sync
 (FND-3), B06 training-math, B05 auth-and-signup. Details in each plan file.
 
-**B25 profile** (planning now): own and others' profiles — avatar (storage bucket), name, bio,
-follower and following counts, follow button, posts, workout history, PRs by exercise. DoD: all
-five header facts render, counts equal the `follows` rows, PRs equal B13's records. Standing
-inputs for its planner: `profiles` has `username` (citext, unique), `display_name` ≤ 50, `bio`
-≤ 300, `avatar_url`, owner-update RLS and select for all authenticated (B02); **`follows` select
-RLS shows only rows the viewer is part of** (B20 G12), so another user's follower / following
-*counts* need a `security_invoker`-safe aggregate the viewer may read or a `private.*` definer
-helper that returns only counts — never widen row visibility just to count; **`personal_records`
-select is owner-only** (B13) and B13 recorded "the select policy widens in B25 with the profile
-privacy model in hand" — any widening must respect the workout visibility of the source set
-(PRs derive from workouts the viewer may or may not see; body data stays owner-only under the
-privacy rule) and be probed live as two users; "workout history on the profile, respecting post
-privacy" = other users' workouts through `private.workout_visible` (server-side, read online,
-never mirrored); the avatar bucket follows the B22 pattern (free tier, owner-folder paths,
-`mediaLimits.ts` cap home) but avatars are not sensitive — a public-read bucket is acceptable if
-the planner argues it; the You tab is still the B01 placeholder skeleton with a gear button and
-reuses `UserCard`'s follow logic; migrations applied live via MCP and renamed.
+**B25 profile (built on branch `profile`, awaiting Gate 2):** migration
+`20261115130809_profile_reads_and_avatars.sql` applied live — `public.follow_counts(profile_id)`
+(security definer, two counts only, execute for `authenticated`), `personal_records` select widened
+to "own, or the source set's workout is visible to you" (`private.can_view_set` →
+`can_view_workout`), a public-read `avatars` bucket (5 MiB, jpeg/png/webp, owner-folder writes +
+an owner-folder select so deletes work — deviation D1), and the `profiles_avatar_in_own_folder`
+CHECK. Probed live at build (rolled back): PR matrix owner 3 / follower 2 / stranger 1 / blocked 0,
+counts = `count(*)` for every viewer, anon refused, foreign folder refused (CHECK and 42501). Not
+probed: the no-auth public URL fetch and an over-limit upload (need a real upload — Gate 2 or the
+device run). App: the You tab and `profile/[id]` share `ProfileView` (five facts, Follow with a
+count re-read, Posts / History / PRs tabs; own History + PRs from SQLite, others' online);
+`edit-profile` (name, username, bio, photo). Builder's checks: typed routes regenerated → `tsc`
+clean → lint clean → Jest 105 suites / 1095 tests. Plan deviations D1–D9 are in the plan file.
 
 **Dev server for Tristen's phone:** worktree `C:\Users\trist\Astra\Astra-main` on a detached HEAD
 (never `main` — see `docs/PIPELINE.md`), Expo dev server detached on port 8081 (`--lan`), QR at
@@ -83,7 +79,8 @@ Email → turn "Confirm email" off (plan of record; the session's toggle was dec
 permission layer). (3) The six external blockers. (4) Whether to grant `mmdc` (and Deno) to
 headless runs. (5) Product readings to confirm or overrule: no bodyweight rep-record PR book
 (B10/B13); the bare "e1RM" label (B13); muscle shading by max (B19); one post per workout and own
-posts on Home (B20); post visibility inherits the workout's, no caption (B21); progress pics
+posts on Home (B20); post visibility inherits the workout's, no caption (B21); PRs on a profile follow the
+source workout's visibility, avatars are public, blocked lifters still see counts (B25); progress pics
 always private until B26, 10 MiB cap (B22); votes and comments online-only, 500-char comments,
 individual votes visible to post viewers (B23); feed preference kept per phone, not roamed; the
 flair filter is sticky (B24).

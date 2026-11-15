@@ -24,6 +24,11 @@
  * number cells as numbers (a hot score is a float). The view also refuses an un-hinted
  * `profiles(` embed, as the live server does (see `FEED_SELECT`).
  *
+ * B25 adds what a profile reads and writes: `workouts` and `personal_records` tables (seeded
+ * already nested, like posts), `update` (with the `profiles` table's unique and CHECK refusals),
+ * `not(column, 'is', null)`, and `rpc('follow_counts', …)` counting every follow row the way the
+ * server's definer function does.
+ *
  * What it does NOT do: row-level security or general embedding. Posts are seeded already shaped
  * the way the server's embed returns them (author, flair and workout nested in), and the follow
  * insert imitates the one RLS refusal the app handles (a block in either direction). Server-side
@@ -48,6 +53,14 @@ export interface FakeSocialTables {
   votes: Row[];
   /** Comment rows: `{ id, post_id, user_id, body, created_at }` (B23). */
   comments: Row[];
+  /**
+   * Workouts as another lifter's profile History reads them (B25): `{ id, user_id, title,
+   * started_at, ended_at, workout_exercises: [...] }`, already nested the way `HISTORY_SELECT`
+   * returns them. Seed only what the viewer may see — RLS is not imitated.
+   */
+  workouts: Row[];
+  /** Record rows as the profile's PR read returns them (B25): with `exercise: { name }` nested in. */
+  personal_records: Row[];
 }
 
 /** What a request can name: the tables, plus the computed `post_scores` and (B24) `post_hot_scores` views. */
@@ -163,6 +176,8 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     posts: [...(seed.posts ?? [])],
     votes: [...(seed.votes ?? [])],
     comments: [...(seed.comments ?? [])],
+    workouts: [...(seed.workouts ?? [])],
+    personal_records: [...(seed.personal_records ?? [])],
   };
   const requests: FakeCall[][] = [];
   let offline = options.offline ?? false;
@@ -198,6 +213,45 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     return { ...comment, author };
   }
 
+  /**
+   * The `profiles` table's server rules on an update (B25), imitated: a username another profile
+   * holds (any case — the column is citext) is 23505; the B02 CHECKs and the B25 own-folder
+   * avatar CHECK are 23514, named the way Postgres names them.
+   */
+  function profileRefusal(change: Row, targets: Row[]): { code: string; message: string } | null {
+    const username = change.username;
+    if (typeof username === 'string') {
+      const taken = tables.profiles.some(
+        (p) => !targets.includes(p) && typeof p.username === 'string' && p.username.toLowerCase() === username.toLowerCase(),
+      );
+      if (taken) return { code: '23505', message: 'duplicate key value violates unique constraint "profiles_username_key"' };
+      if (!/^[A-Za-z0-9_]{3,30}$/.test(username)) {
+        return { code: '23514', message: 'new row violates check constraint "profiles_username_check"' };
+      }
+    }
+    const check = (name: string) => ({ code: '23514', message: `new row violates check constraint "${name}"` });
+    if (typeof change.display_name === 'string' && Array.from(change.display_name).length > 50) return check('profiles_display_name_check');
+    if (typeof change.bio === 'string' && Array.from(change.bio).length > 300) return check('profiles_bio_check');
+    const avatar = change.avatar_url;
+    if (typeof avatar === 'string' && targets.some((t) => !avatar.startsWith(`${String(t.id)}/`))) {
+      return check('profiles_avatar_in_own_folder');
+    }
+    return null;
+  }
+
+  /**
+   * `follow_counts` (B25), computed like the server function: every follow row, whoever the
+   * caller is — the server's definer function sees past follows RLS, and so does this.
+   */
+  function followCounts(profileId: unknown): Row[] {
+    return [
+      {
+        followers: tables.follows.filter((f) => f.followee_id === profileId).length,
+        following: tables.follows.filter((f) => f.follower_id === profileId).length,
+      },
+    ];
+  }
+
   /** Runs one finished request against the tables. */
   function execute(table: FakeSource, calls: FakeCall[]): { data: unknown; error: { message: string; code?: string } | null } {
     if (offline) return { data: null, error: { message: 'Network request failed' } };
@@ -207,6 +261,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     const orders: { column: string; ascending: boolean }[] = [];
     let limit = Infinity;
     let insert: Row | null = null;
+    let update: Row | null = null;
     let upsert: { row: Row; onConflict: string[] } | null = null;
     let isDelete = false;
     let single = false;
@@ -224,8 +279,13 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       if (method === 'eq') filters.push((r) => r[args[0] as string] === args[1]);
       if (method === 'neq') filters.push((r) => r[args[0] as string] !== args[1]);
       if (method === 'in') filters.push((r) => (args[1] as unknown[]).includes(r[args[0] as string]));
+      if (method === 'not' && args[1] === 'is' && args[2] === null) {
+        // not(column, 'is', null) — "has a value" (B25: finished workouts only).
+        filters.push((r) => r[args[0] as string] != null);
+        continue;
+      }
       if (method === 'not') {
-        // Only the form the app uses: not(column, 'in', '(a,b,c)').
+        // The other form the app uses: not(column, 'in', '(a,b,c)').
         if (args[1] !== 'in') throw new Error(`fake: unsupported not() operator ${String(args[1])}`);
         const excluded = String(args[2]).replace(/^\(|\)$/g, '').split(',');
         filters.push((r) => !excluded.includes(String(r[args[0] as string])));
@@ -234,6 +294,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       if (method === 'order') orders.push({ column: args[0] as string, ascending: (args[1] as { ascending: boolean }).ascending });
       if (method === 'limit') limit = args[0] as number;
       if (method === 'insert') insert = args[0] as Row;
+      if (method === 'update') update = args[0] as Row;
       if (method === 'delete') isDelete = true;
     }
     if (table === 'post_scores') {
@@ -296,6 +357,14 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       return { data: null, error: null };
     }
     const matching = rows.filter((r) => filters.every((f) => f(r)));
+    if (update) {
+      if (table === 'profiles') {
+        const refused = profileRefusal(update, matching);
+        if (refused) return { data: null, error: refused };
+      }
+      for (const row of matching) Object.assign(row, update);
+      return { data: null, error: null };
+    }
     if (isDelete) {
       if (table === 'post_hot_scores') throw new Error('fake: a view cannot be deleted from');
       tables[table] = rows.filter((r) => !matching.includes(r));
@@ -328,7 +397,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       const calls: FakeCall[] = [['from', table]];
       requests.push(calls);
       const builder: Record<string, unknown> = {};
-      for (const method of ['select', 'eq', 'neq', 'in', 'not', 'or', 'order', 'limit', 'insert', 'upsert', 'delete', 'single']) {
+      for (const method of ['select', 'eq', 'neq', 'in', 'not', 'or', 'order', 'limit', 'insert', 'update', 'upsert', 'delete', 'single']) {
         builder[method] = (...args: unknown[]) => {
           calls.push([method, ...args]);
           return builder;
@@ -343,6 +412,13 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
         }
       };
       return builder;
+    },
+    /** A server function call (B25): only `follow_counts` exists. Recorded like a request. */
+    rpc(fn: string, params: Record<string, unknown>) {
+      requests.push([['rpc', fn, params]]);
+      if (offline) return Promise.resolve({ data: null, error: { message: 'Network request failed' } });
+      if (fn !== 'follow_counts') return Promise.resolve({ data: null, error: { code: 'PGRST202', message: `fake: no function ${fn}` } });
+      return Promise.resolve({ data: followCounts(params.profile_id), error: null });
     },
   };
 

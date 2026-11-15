@@ -82,8 +82,9 @@ export default function RootLayout() {
  *   exercise-history/[exerciseId] (one exercise's past sessions and PRs),
  *   settings (units and account, B15), find-lifters (search people and follow
  *   them, B20), new-post (Share a photo — a progress pic or PR photo, B22) and
- *   post-comments/[id] (one post's comments, B23): the signed-in app — only
- *   with a session.
+ *   post-comments/[id] (one post's comments, B23), profile/[id] (a lifter's
+ *   profile, B25) and edit-profile (changing your own, B25): the signed-in
+ *   app — only with a session.
  * - (auth): sign-in / sign-up — only without one.
  * When the session appears or disappears, expo-router moves the user to
  * whichever half is now allowed, so screens never navigate on sign-in/out.
@@ -134,6 +135,8 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
           <Stack.Screen name="find-lifters" />
           <Stack.Screen name="new-post" />
           <Stack.Screen name="post-comments/[id]" />
+          <Stack.Screen name="profile/[id]" />
+          <Stack.Screen name="edit-profile" />
         </Stack.Protected>
         <Stack.Protected guard={!signedIn}>
           <Stack.Screen name="(auth)" />

@@ -3,26 +3,17 @@
  * primary content. These live outside src/app because expo-router would
  * otherwise register *.test.tsx files as routes.
  */
-import { describe, expect, it, jest } from '@jest/globals';
+import { describe, expect, it } from '@jest/globals';
 import React from 'react';
 import { fireEvent, render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { AuthProvider } from '@/auth/AuthProvider';
-import { createFakeAppState, createFakeAuthClient, fakeSession } from '@/test-utils/fakeAuthClient';
 import { TEST_SAFE_AREA_METRICS } from '@/test-utils/renderWithAuth';
 import { ALL_EXERCISES } from '@/library/catalog';
 
 import MarketplaceScreen from '@/app/(tabs)/marketplace';
 import CommunitiesScreen from '@/app/(tabs)/communities';
 import LibraryScreen from '@/app/(tabs)/library';
-import YouScreen from '@/app/(tabs)/you';
-
-// The You screen navigates via expo-router; stub the router.
-const mockPush = jest.fn();
-jest.mock('expo-router', () => ({
-  useRouter: () => ({ push: mockPush }),
-}));
 
 function renderScreen(element: React.ReactElement) {
   return render(<SafeAreaProvider initialMetrics={TEST_SAFE_AREA_METRICS}>{element}</SafeAreaProvider>);
@@ -87,29 +78,6 @@ describe('tab screens', () => {
     expect(screen.getByText(/No exercises match/)).toBeTruthy();
   });
 
-  it('You renders the profile skeleton with both follow counts (the email lives in Settings since B15)', async () => {
-    const client = createFakeAuthClient({ storedSession: fakeSession('me@example.com') });
-    const screen = await renderScreen(
-      <AuthProvider client={client} appState={createFakeAppState()}>
-        <YouScreen />
-      </AuthProvider>,
-    );
-    expect(screen.getByText('Your profile')).toBeTruthy();
-    expect(screen.getByText('Followers')).toBeTruthy();
-    expect(screen.getByText('Following')).toBeTruthy();
-    expect(screen.queryByText('me@example.com')).toBeNull();
-  });
-
-  it('B15: You has a Settings (gear) button that opens Settings, and no Sign out of its own', async () => {
-    const client = createFakeAuthClient({ storedSession: fakeSession() });
-    const screen = await renderScreen(
-      <AuthProvider client={client} appState={createFakeAppState()}>
-        <YouScreen />
-      </AuthProvider>,
-    );
-    await fireEvent.press(screen.getByLabelText('Settings'));
-    expect(mockPush).toHaveBeenCalledWith('/settings');
-    // Sign-out moved to Settings (one home for it).
-    expect(screen.queryByLabelText('Sign out')).toBeNull();
-  });
+  // You is the real profile since B25 (it reads the server and the phone); its tests — including
+  // the B15 gear button, no email and no Sign out of its own — live in you-profile.test.tsx.
 });

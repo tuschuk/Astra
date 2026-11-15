@@ -59,9 +59,15 @@ describe('searchLifters', () => {
       id: 'a',
       username: 'samantha',
       displayName: 'Samantha Squats',
+      avatarPath: null,
       following: true,
     });
     expect(results.find((r) => r.id === 'b')?.following).toBe(false);
+  });
+
+  it('B25: brings each result’s photo path for its avatar', async () => {
+    const fake = createFakeSocialClient({ profiles: [profile('p', 'pic_person', null, { avatar_url: 'p/face.jpg' })] });
+    expect((await searchLifters(fake.client, ME, 'pic'))[0]?.avatarPath).toBe('p/face.jpg');
   });
 
   it('matches `_` and `%` literally, not as wildcards', async () => {
