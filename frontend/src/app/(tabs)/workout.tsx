@@ -6,7 +6,9 @@
  *     logger) and **Start from a program** (disabled until programs arrive, B35);
  *   - with a workout in progress on this phone (even one left behind when the app was killed):
  *     **Resume workout** and **Discard** instead — never a second workout on top of the first;
- *   - a preview of the Tool Kit (TK-1..TK-5; the tiles are still placeholders);
+ *   - the Tool Kit tiles: 1RM, RPE, %1RM and Plates each open the Tool Kit panel straight at
+ *     that calculator (TK-1..TK-4, B16), so a lifter can plan at home without starting a
+ *     workout; the Timer tile is still a placeholder (TK-5, B17);
  *   - the lifter's finished workouts, newest first (the latest 100), each opening the saved
  *     workout with every set.
  *
@@ -15,7 +17,7 @@
  * shown comes from the phone, so it works with no signal.
  */
 import React, { useCallback, useState } from 'react';
-import { FlatList, StyleSheet, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 
 import { useAuth } from '@/auth/AuthProvider';
@@ -25,6 +27,8 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { FormError } from '@/components/ui/FormError';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
+import { TOOL_OPTIONS, ToolKitSheet } from '@/components/toolkit/ToolKitSheet';
+import type { ToolId } from '@/toolkit/session';
 import { WorkoutListItem } from '@/components/workout/WorkoutListItem';
 import { confirmDiscardWorkout } from '@/components/workout/confirmDiscardWorkout';
 import { useAppDatabase } from '@/db/useAppDatabase';
@@ -32,9 +36,6 @@ import { clearSessionWorkout, resumeSessionWorkout, startSessionWorkout } from '
 import { listPastWorkouts, type PastWorkoutSummary } from '@/workout/history';
 import { useSessionWorkout } from '@/workout/useActiveWorkout';
 import { colors, fonts, spacing } from '@/theme';
-
-/** The five Tool Kit utilities, in the order they'll ship (TK-1..TK-5). */
-const TOOL_KIT = ['1RM', 'RPE', '%1RM', 'Plates', 'Timer'] as const;
 
 export default function WorkoutScreen() {
   const router = useRouter();
@@ -46,6 +47,8 @@ export default function WorkoutScreen() {
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Which calculator's tile was tapped (the Tool Kit is open at it), or null when closed.
+  const [openTool, setOpenTool] = useState<ToolId | null>(null);
 
   /** Re-reads the workout in progress (into the session slot) and the history list. */
   const refresh = useCallback(async () => {
@@ -133,14 +136,28 @@ export default function WorkoutScreen() {
 
       <SectionLabel style={styles.toolkitLabel}>Tool Kit</SectionLabel>
       <View style={styles.toolkitRow}>
-        {TOOL_KIT.map((tool) => (
-          <Card key={tool} tier="deep" style={styles.toolCard}>
-            <Body style={styles.toolText}>{tool}</Body>
-          </Card>
+        {TOOL_OPTIONS.map((tool) => (
+          <Pressable
+            key={tool.value}
+            accessibilityRole="button"
+            accessibilityLabel={`Open ${tool.spoken}`}
+            onPress={() => setOpenTool(tool.value)}
+            style={({ pressed }) => [styles.toolTile, pressed && styles.toolTilePressed]}
+          >
+            <Card tier="deep" style={styles.toolCard}>
+              <Body style={styles.toolText}>{tool.label}</Body>
+            </Card>
+          </Pressable>
         ))}
+        {/* The timer arrives with B17; until then its tile is a placeholder. */}
+        <View style={styles.toolTile}>
+          <Card tier="deep" style={[styles.toolCard, styles.toolCardSoon]}>
+            <Body style={styles.toolText}>Timer</Body>
+          </Card>
+        </View>
       </View>
       <Body variant="small" style={styles.toolkitHint}>
-        Calculators, plate math and timers — one tap away during any workout, even offline.
+        Calculators and plate math — tap one here, or the Tool Kit button during any workout. Works offline.
       </Body>
 
       <SectionLabel style={styles.historyLabel}>Past workouts</SectionLabel>
@@ -166,6 +183,11 @@ export default function WorkoutScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
       />
+      <ToolKitSheet
+        visible={openTool !== null}
+        initialTool={openTool ?? undefined}
+        onClose={() => setOpenTool(null)}
+      />
     </Screen>
   );
 }
@@ -187,11 +209,19 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
+  toolTile: {
+    flexGrow: 1,
+  },
+  toolTilePressed: {
+    opacity: 0.7,
+  },
   toolCard: {
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
-    flexGrow: 1,
     alignItems: 'center',
+  },
+  toolCardSoon: {
+    opacity: 0.5,
   },
   toolText: {
     fontFamily: fonts.subBold,

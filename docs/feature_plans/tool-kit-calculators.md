@@ -303,3 +303,49 @@ overrules.
   cite because no performance claim is made.
 - **Scope verdict:** right as written, with the one declared widening (tab tiles) and the one
   declared interpretation (rack unit). Nothing else moved.
+
+## Build deviations (recorded by the builder)
+
+All are additions or tightenings; none changes a settled decision above.
+
+1. **`frontend/src/toolkit/inputs.ts` (+ test), not in the file table.** One home for reading
+   the calculators' boxes (empty / invalid with a message / ok), the lb → kg edge (`lbToKg`)
+   and the loadable snap (`kgToLb` + `roundToIncrement`, `LOADABLE_STEP` 2.5 kg / 5 lb). No math
+   lives there; it calls the module. Added so four screens share one set of error wordings and
+   the parsing is unit-tested outside components. The review moved the plate loader's bar
+   reader in as `readZeroOrMore`.
+2. **`ChoiceChips.tsx` (shared radio-chip row).** The plan foresaw "extract only when a third
+   copy appears": the tool switcher, RPE reps, RPE value and the rack-unit toggle are four uses
+   from the start, so it was extracted up front (the B15 radio-group accessibility pattern).
+3. **`WeightField.tsx` also exports `NumberField`** (the reps and percent boxes); file name kept
+   as the plan's.
+4. **Rack unit is persisted** in the rack JSON (`unit: null` until the lifter toggles = follow
+   the display unit; after a toggle the choice sticks). So the rack *follows* the display unit
+   until first chosen, then stops — a slight refinement of Risk 1's "defaults to — but not
+   following". Each unit still has its own remembered rack.
+5. **Bounds the plan didn't fix**, chosen to bound `loadBar`'s per-hundredth search: ≤ 20 plates
+   per side, ≤ 12 plate sizes, plate and bar ≤ 100, target ≤ 2000 (rack unit); weight boxes in the
+   other calculators ≤ 10000 (display unit). Measured at all maxima at once: ~20 ms on desktop
+   Node 22; real racks far less. The solver runs in `useMemo` on the numbers and rack only.
+6. **RPE result also shows "about N % of your 1RM"** (`percentOfOneRm`, display-rounded) — the
+   module's own number, one line.
+7. **Floating button clearance** adds the bottom safe-area inset to the list's bottom padding
+   (review finding), since the button sits above that inset.
+8. **Calculator test for "module never called out of domain"** asserts no answer and the inline
+   bounds message rather than spying on the module (a spy on the re-exported ESM function is
+   brittle under jest-expo); out-of-domain input reaching the module would throw and fail the
+   render.
+
+## Review (mattpocock-skills:code-review, two axes) — what was fixed
+
+- ResultCard's screen-reader label omitted the second line ("Load …", "Short by …") — fixed,
+  tests now assert the full spoken phrase.
+- Plate loader said "Enter a target weight." when the *bar* box was the empty one — fixed.
+- The Timer-tile test was vacuous — now presses it and asserts no panel opens.
+- `setToolKitTool` ran inside a `useState` initializer (side effect in render) — moved to an
+  effect on the shown tool.
+- Not changed (judgement calls, recorded): the repeated `useState(session…)` + update pattern
+  across calculators (a hook would save ~10 lines, not worth an abstraction yet); the
+  `tool === …` render chain in the sheet (four static tools); "RPE 8 means about 2 reps left"
+  is the scale's definition, not a performance claim; the in-memory session isn't cleared on
+  sign-out (deferred — see DEFERRED.md).
