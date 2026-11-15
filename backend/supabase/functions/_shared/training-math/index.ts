@@ -27,12 +27,18 @@ export type { BarLoad, PlateCount, PlateInventoryItem } from './plates.ts';
 export {
   assertValidEntryNotes,
   assertValidExerciseName,
+  assertValidProgramName,
+  assertValidProgramPosition,
+  assertValidProgramTargets,
+  assertValidProgramWorkoutName,
   assertValidSetFields,
   assertValidSupersetGroup,
   assertValidWorkoutNotes,
   assertValidWorkoutTitle,
   MAX_ENTRY_NOTES_LENGTH,
   MAX_EXERCISE_NAME_LENGTH,
+  MAX_PROGRAM_NAME_LENGTH,
+  MAX_PROGRAM_WORKOUT_NAME_LENGTH,
   MAX_SET_NOTES_LENGTH,
   MAX_SET_SCORE_LENGTH,
   MAX_WORKOUT_NOTES_LENGTH,
@@ -40,7 +46,7 @@ export {
   roundRpeForStorage,
   roundWeightKgForStorage,
 } from './limits.ts';
-export type { SetFieldsToCheck } from './limits.ts';
+export type { ProgramTargetsToCheck, SetFieldsToCheck } from './limits.ts';
 export { beatsRecord, classifyPrs, compareRecordBooks, recordBooks, recordsFromSets } from './prs.ts';
 export type { PrCandidateSet, PrEvent, PrKind, PrRecords, RecordBook, RefSet } from './prs.ts';
 export { sessionVolumeKg, setVolumeKg } from './volume.ts';

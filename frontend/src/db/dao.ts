@@ -219,9 +219,73 @@ export interface PostRow {
 }
 
 /**
- * The row shape of each synced table: the five training tables, uploaded and downloaded through
- * the generic machinery. (The phone also uploads its settings row and its own posts, each through
- * a small path of its own — see `OutboxTable` in sync/outbox.ts.)
+ * One of the lifter's training programs (server table `programs`, B34) — the top of the
+ * week → workout → exercise tree. Only its author can read or change it (server security rules).
+ * Removing a program stamps `deleted_at`; the row stays (soft delete — see `programs/programs.ts`).
+ */
+export interface ProgramRow {
+  id: string;
+  /** The author — the only person who can see it. */
+  user_id: string;
+  /** 1–100 characters. */
+  name: string;
+  /** When it was deleted; null while it is live. */
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One week of a program (server table `program_weeks`, B34). Shown as "Week N" by position. */
+export interface ProgramWeekRow {
+  id: string;
+  program_id: string;
+  /** Order among the program's weeks, lowest first. Gaps are fine. */
+  position: number;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** One workout inside a program week (server table `program_workouts`, B34). */
+export interface ProgramWorkoutRow {
+  id: string;
+  program_week_id: string;
+  /** Up to 100 characters; null shows as "Workout N". */
+  name: string | null;
+  /** Order within the week, lowest first. */
+  position: number;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * One exercise slot of a program workout, with what the lifter should aim for (server table
+ * `program_exercises`, B34): how many sets, and optionally how many reps, at what load (always
+ * kg, like `sets.weight_kg`) and at what RPE.
+ */
+export interface ProgramExerciseRow {
+  id: string;
+  program_workout_id: string;
+  /** A library (uuidv5 of its slug) or custom exercise id; null if that exercise was removed for good. */
+  exercise_id: string | null;
+  /** Order within the workout, lowest first. */
+  position: number;
+  /** At least 1. */
+  target_sets: number;
+  target_reps: number | null;
+  target_weight_kg: number | null;
+  target_rpe: number | null;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * The row shape of each synced table: the five training tables and (B34) the four program
+ * tables, uploaded and downloaded through the generic machinery. (The phone also uploads its
+ * settings row and its own posts, each through a small path of its own — see `OutboxTable` in
+ * sync/outbox.ts.)
  */
 export interface RowByTable {
   exercises: ExerciseRow;
@@ -229,10 +293,20 @@ export interface RowByTable {
   workout_exercises: WorkoutExerciseRow;
   sets: SetRow;
   personal_records: PersonalRecordRow;
+  programs: ProgramRow;
+  program_weeks: ProgramWeekRow;
+  program_workouts: ProgramWorkoutRow;
+  program_exercises: ProgramExerciseRow;
 }
 
-/** The five tables mirrored on the device and kept in sync with the server (both directions). */
+/** The tables mirrored on the device and kept in sync with the server (both directions). */
 export type SyncedTable = keyof RowByTable;
+
+/** The four program tables (B34), parents first. */
+export const PROGRAM_TABLES = ['programs', 'program_weeks', 'program_workouts', 'program_exercises'] as const;
+
+/** One of the four program tables (B34). */
+export type ProgramTable = (typeof PROGRAM_TABLES)[number];
 
 /**
  * Every server table copied onto the phone: the five synced ones plus the download-only
@@ -253,7 +327,10 @@ export type MirroredTable = keyof MirrorRowByTable;
 /**
  * Parents before children: the order rows must reach the server in, so a set
  * never arrives before the entry it belongs to, and a personal record never
- * before the set it cites (the server checks both).
+ * before the set it cites (the server checks both). The program tables (B34)
+ * come last, parents first too; their one link outside the family is
+ * `program_exercises.exercise_id`, and `exercises` is already first — so a
+ * custom exercise always lands before a program slot that names it.
  */
 export const SYNC_ORDER: readonly SyncedTable[] = [
   'exercises',
@@ -261,6 +338,7 @@ export const SYNC_ORDER: readonly SyncedTable[] = [
   'workout_exercises',
   'sets',
   'personal_records',
+  ...PROGRAM_TABLES,
 ];
 
 /** Every column of each table, as named on both the device and the server. */
@@ -310,6 +388,22 @@ export const TABLE_COLUMNS: { readonly [T in MirroredTable]: readonly (keyof Mir
     'reps',
     'value_kg',
     'source_set_id',
+    'created_at',
+    'updated_at',
+  ],
+  programs: ['id', 'user_id', 'name', 'deleted_at', 'created_at', 'updated_at'],
+  program_weeks: ['id', 'program_id', 'position', 'deleted_at', 'created_at', 'updated_at'],
+  program_workouts: ['id', 'program_week_id', 'name', 'position', 'deleted_at', 'created_at', 'updated_at'],
+  program_exercises: [
+    'id',
+    'program_workout_id',
+    'exercise_id',
+    'position',
+    'target_sets',
+    'target_reps',
+    'target_weight_kg',
+    'target_rpe',
+    'deleted_at',
     'created_at',
     'updated_at',
   ],

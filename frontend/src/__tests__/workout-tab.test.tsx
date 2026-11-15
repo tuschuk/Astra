@@ -66,6 +66,13 @@ describe('Workout tab', () => {
     for (const tool of ['1RM', 'RPE', '%1RM', 'Plates', 'Timer']) expect(screen.getByText(tool)).toBeTruthy();
   });
 
+  it('Your programs opens the program builder (B34)', async () => {
+    await renderSignedIn(<WorkoutScreen />);
+    await screen.findByText('Finished workouts show up here.');
+    await fireEvent.press(screen.getByLabelText('Your programs'));
+    expect(mockRouter.push).toHaveBeenCalledWith('/programs');
+  });
+
   it('Start empty workout starts a blank workout and opens the logger', async () => {
     await renderSignedIn(<WorkoutScreen />);
     await screen.findByText('Finished workouts show up here.');

@@ -34,6 +34,17 @@
  *
  *   exercises.name text not null check (char_length(name) between 1 and 80) → 1 … 80 characters
  *
+ * And the four program tables (B34, `20261115193156_programs.sql`):
+ *
+ *   programs.name                text not null check (char_length between 1 and 100) → 1 … 100 characters
+ *   program_workouts.name        text check (char_length(name) <= 100)               → at most 100, or none
+ *   program_weeks / program_workouts / program_exercises.position
+ *                                smallint not null check (position >= 0)             → whole, 0 … 32767
+ *   program_exercises.target_sets      smallint not null check (>= 1)                → whole, 1 … 32767
+ *   program_exercises.target_reps      integer check (>= 0)                          → whole, 0 … 2147483647
+ *   program_exercises.target_weight_kg numeric(6, 2) check (>= 0)                    → 0 ≤ w < 10000
+ *   program_exercises.target_rpe       numeric(3, 1) check (between 1 and 10)        → 1 … 10
+ *
  * The upper bounds come from the column types (a value bigger than the column holds is refused
  * just like a broken CHECK). Weight and RPE are checked after rounding to their column's
  * decimals — see `roundWeightKgForStorage` / `roundRpeForStorage`.
@@ -181,6 +192,79 @@ export function assertValidExerciseName(name: string): void {
   if (length > MAX_EXERCISE_NAME_LENGTH) {
     throw new RangeError(`name must be at most ${MAX_EXERCISE_NAME_LENGTH} characters, got ${length}`);
   }
+}
+
+/** Longest name of a program (`programs.name`, CHECK between 1 and 100). */
+export const MAX_PROGRAM_NAME_LENGTH = 100;
+/** Longest name of one workout inside a program (`program_workouts.name`, CHECK ≤ 100). */
+export const MAX_PROGRAM_WORKOUT_NAME_LENGTH = 100;
+
+/**
+ * Throws a `RangeError` unless `name` is a name the server will store for a program: 1 to 100
+ * characters, counted the server's way. Pass it already trimmed, so a name of only spaces is
+ * refused as empty. Call it before saving a program (B34).
+ */
+export function assertValidProgramName(name: string): void {
+  const length = textLength(name);
+  if (length < 1) throw new RangeError('name must not be empty');
+  if (length > MAX_PROGRAM_NAME_LENGTH) {
+    throw new RangeError(`name must be at most ${MAX_PROGRAM_NAME_LENGTH} characters, got ${length}`);
+  }
+}
+
+/**
+ * Throws a `RangeError` if a program workout's name is longer than the server accepts (100
+ * characters). `null` (no name — the workout shows as "Workout N") is always fine (B34).
+ */
+export function assertValidProgramWorkoutName(name: string | null): void {
+  if (name != null) assertTextLength(name, MAX_PROGRAM_WORKOUT_NAME_LENGTH, 'name');
+}
+
+/**
+ * One program exercise slot's prescription as it will be stored (B34): how many sets (required),
+ * and optionally the reps, the load in kg and the RPE to aim for, plus its place in the workout.
+ */
+export interface ProgramTargetsToCheck {
+  position: number;
+  targetSets: number;
+  targetReps?: number | null;
+  /** Already rounded with `roundWeightKgForStorage`. */
+  targetWeightKg?: number | null;
+  /** Already rounded with `roundRpeForStorage`. */
+  targetRpe?: number | null;
+}
+
+/**
+ * Throws a `RangeError` naming the first target the server would refuse (sets below 1, half a
+ * rep, a weight too big for its column, an RPE of 11…); returns quietly if the slot is fine.
+ * The program writer calls it before every save, so a poisoned row never reaches the upload queue.
+ */
+export function assertValidProgramTargets(fields: ProgramTargetsToCheck): void {
+  assertWholeInRange(fields.position, 0, MAX_SMALLINT, 'position');
+  assertWholeInRange(fields.targetSets, 1, MAX_SMALLINT, 'targetSets');
+  if (fields.targetReps != null) assertWholeInRange(fields.targetReps, 0, MAX_INTEGER, 'targetReps');
+  if (fields.targetWeightKg != null) {
+    assertFinite(fields.targetWeightKg, 'targetWeightKg');
+    if (fields.targetWeightKg < 0 || fields.targetWeightKg >= MAX_WEIGHT_KG_EXCLUSIVE) {
+      throw new RangeError(
+        `targetWeightKg must be at least 0 and below ${MAX_WEIGHT_KG_EXCLUSIVE}, got ${fields.targetWeightKg}`,
+      );
+    }
+  }
+  if (fields.targetRpe != null) {
+    assertFinite(fields.targetRpe, 'targetRpe');
+    if (fields.targetRpe < MIN_SET_RPE || fields.targetRpe > MAX_SET_RPE) {
+      throw new RangeError(`targetRpe must be from ${MIN_SET_RPE} to ${MAX_SET_RPE}, got ${fields.targetRpe}`);
+    }
+  }
+}
+
+/**
+ * Throws a `RangeError` if `position` can't be stored as a program row's place among its siblings
+ * (a smallint ≥ 0) — used for weeks and workouts, whose only number is their position (B34).
+ */
+export function assertValidProgramPosition(position: number): void {
+  assertWholeInRange(position, 0, MAX_SMALLINT, 'position');
 }
 
 /**

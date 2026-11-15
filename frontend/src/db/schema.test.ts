@@ -21,6 +21,10 @@ describe('migrate', () => {
       'outbox',
       'personal_records',
       'posts',
+      'program_exercises',
+      'program_weeks',
+      'program_workouts',
+      'programs',
       'sets',
       'sync_state',
       'user_settings',
@@ -223,9 +227,26 @@ describe('migrate', () => {
 
     await migrate(db);
 
-    expect(SCHEMA_VERSION).toBe(11);
-    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 11 });
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: SCHEMA_VERSION });
     expect(await db.getFirstAsync('select name, deleted_at from exercises')).toEqual({ name: 'My Curl', deleted_at: null });
+  });
+
+  it('B34: upgrades a version-11 phone to version 12 with the four empty program tables', async () => {
+    const db = createNodeSqliteDriver();
+    for (const migration of MIGRATIONS.slice(0, 11)) await db.execAsync(migration);
+    await db.execAsync('pragma user_version = 11');
+    await db.runAsync("insert into workouts (id, user_id, started_at, created_at, updated_at) values ('w', 'u', 't', 't', 't')");
+
+    await migrate(db);
+
+    expect(SCHEMA_VERSION).toBe(12);
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 12 });
+    expect(await db.getFirstAsync('select count(*) as n from workouts')).toEqual({ n: 1 });
+    for (const tbl of ['programs', 'program_weeks', 'program_workouts', 'program_exercises'] as const) {
+      expect(await db.getFirstAsync(`select count(*) as n from ${tbl}`)).toEqual({ n: 0 });
+      const columns = await db.getAllAsync<{ name: string }>(`pragma table_info(${tbl})`);
+      expect(columns.map((c) => c.name).sort()).toEqual([...TABLE_COLUMNS[tbl]].sort());
+    }
   });
 
   it('upgrades a version-1 phone through every later version (sets.score), keeping the sets already there', async () => {

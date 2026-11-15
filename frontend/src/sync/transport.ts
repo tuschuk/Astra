@@ -1,5 +1,5 @@
 /**
- * The sync engine's view of the server: fifteen operations, nothing more.
+ * The sync engine's view of the server: sixteen operations, nothing more.
  *
  * Why an interface: the real implementation (`supabaseTransport.ts`) talks to
  * Supabase over the network; tests use an in-memory fake server
@@ -18,6 +18,7 @@ import type {
   FlairRow,
   PersonalRecordRow,
   PostRow,
+  ProgramTable,
   RowByTable,
   SetRow,
   SyncedTable,
@@ -83,6 +84,20 @@ export interface SyncTransport {
    * (updated_at, id) — the records another device (or the server's keep-best rule) changed.
    */
   pullPersonalRecords(userId: string, after: PullCursor | null, limit: number): Promise<PersonalRecordRow[]>;
+
+  /**
+   * One page of one of the user's program tables (B34) changed after `after`, ordered by
+   * (updated_at, id). `programs` is narrowed to `userId`; the three child tables rely on the
+   * server's author-only security rules, which return only the caller's own rows (they have no
+   * user column to filter by). Deleted rows come too — a delete is a `deleted_at` stamp, and the
+   * other devices must download it.
+   */
+  pullProgramRows<T extends ProgramTable>(
+    tbl: T,
+    userId: string,
+    after: PullCursor | null,
+    limit: number,
+  ): Promise<RowByTable[T][]>;
 
   /**
    * Deletes rows on the server by id (B14). The server's foreign keys take a deleted

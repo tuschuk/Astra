@@ -84,8 +84,10 @@ export default function RootLayout() {
  *   settings (units and account, B15), find-lifters (search people and follow
  *   them, B20), new-post (Share a photo — a progress pic or PR photo, B22) and
  *   post-comments/[id] (one post's comments, B23), profile/[id] (a lifter's
- *   profile, B25) and edit-profile (changing your own, B25): the signed-in
- *   app — only with a session.
+ *   profile, B25) and edit-profile (changing your own, B25), delete-account
+ *   (B32), and the program builder (B34): programs (the list), program/[id]
+ *   (one program's weeks and workouts) and program-workout/[id] (one program
+ *   workout's exercises and targets): the signed-in app — only with a session.
  * - (auth): sign-in / sign-up — only without one.
  * When the session appears or disappears, expo-router moves the user to
  * whichever half is now allowed, so screens never navigate on sign-in/out.
@@ -141,6 +143,9 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
           <Stack.Screen name="profile/[id]" />
           <Stack.Screen name="edit-profile" />
           <Stack.Screen name="delete-account" />
+          <Stack.Screen name="programs" />
+          <Stack.Screen name="program/[id]" />
+          <Stack.Screen name="program-workout/[id]" />
         </Stack.Protected>
         <Stack.Protected guard={!signedIn}>
           <Stack.Screen name="(auth)" />

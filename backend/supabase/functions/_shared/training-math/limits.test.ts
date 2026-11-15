@@ -4,12 +4,18 @@ import { describe, expect, it } from '@jest/globals';
 import {
   assertValidEntryNotes,
   assertValidExerciseName,
+  assertValidProgramName,
+  assertValidProgramPosition,
+  assertValidProgramTargets,
+  assertValidProgramWorkoutName,
   assertValidSetFields,
   assertValidSupersetGroup,
   assertValidWorkoutNotes,
   assertValidWorkoutTitle,
   MAX_ENTRY_NOTES_LENGTH,
   MAX_EXERCISE_NAME_LENGTH,
+  MAX_PROGRAM_NAME_LENGTH,
+  MAX_PROGRAM_WORKOUT_NAME_LENGTH,
   MAX_INTEGER,
   MAX_SET_NOTES_LENGTH,
   MAX_SET_SCORE_LENGTH,
@@ -175,5 +181,62 @@ describe('assertValidSupersetGroup', () => {
   it.each([0, -1, 1.5, MAX_SMALLINT + 1, NaN])('refuses %p, naming the field', (group) => {
     expect(() => assertValidSupersetGroup(group)).toThrow(RangeError);
     expect(() => assertValidSupersetGroup(group)).toThrow(/supersetGroup/);
+  });
+});
+
+describe('program limits (B34)', () => {
+  it('mirror the server caps of 100', () => {
+    expect(MAX_PROGRAM_NAME_LENGTH).toBe(100);
+    expect(MAX_PROGRAM_WORKOUT_NAME_LENGTH).toBe(100);
+  });
+
+  it('assertValidProgramName accepts 1…100 characters and refuses empty or 101', () => {
+    expect(() => assertValidProgramName('x')).not.toThrow();
+    expect(() => assertValidProgramName('🏋'.repeat(100))).not.toThrow();
+    expect(() => assertValidProgramName('')).toThrow(/name/);
+    expect(() => assertValidProgramName('x'.repeat(101))).toThrow(RangeError);
+  });
+
+  it('assertValidProgramWorkoutName allows none, refuses 101', () => {
+    expect(() => assertValidProgramWorkoutName(null)).not.toThrow();
+    expect(() => assertValidProgramWorkoutName('x'.repeat(100))).not.toThrow();
+    expect(() => assertValidProgramWorkoutName('x'.repeat(101))).toThrow(/name/);
+  });
+
+  it('assertValidProgramTargets accepts full and sets-only prescriptions and the edges', () => {
+    expect(() =>
+      assertValidProgramTargets({ position: 0, targetSets: 3, targetReps: 8, targetWeightKg: 102.06, targetRpe: 8.5 }),
+    ).not.toThrow();
+    expect(() => assertValidProgramTargets({ position: MAX_SMALLINT, targetSets: 1 })).not.toThrow();
+    expect(() =>
+      assertValidProgramTargets({
+        position: 0,
+        targetSets: MAX_SMALLINT,
+        targetReps: 0,
+        targetWeightKg: 9999.99,
+        targetRpe: 10,
+      }),
+    ).not.toThrow();
+  });
+
+  it.each([
+    [{ position: -1, targetSets: 3 }, /position/],
+    [{ position: 0, targetSets: 0 }, /targetSets/],
+    [{ position: 0, targetSets: 2.5 }, /targetSets/],
+    [{ position: 0, targetSets: MAX_SMALLINT + 1 }, /targetSets/],
+    [{ position: 0, targetSets: 3, targetReps: -1 }, /targetReps/],
+    [{ position: 0, targetSets: 3, targetReps: 1.5 }, /targetReps/],
+    [{ position: 0, targetSets: 3, targetWeightKg: 10000 }, /targetWeightKg/],
+    [{ position: 0, targetSets: 3, targetWeightKg: -1 }, /targetWeightKg/],
+    [{ position: 0, targetSets: 3, targetRpe: 11 }, /targetRpe/],
+    [{ position: 0, targetSets: 3, targetRpe: 0.5 }, /targetRpe/],
+  ])('assertValidProgramTargets refuses %o, naming the field', (fields, name) => {
+    expect(() => assertValidProgramTargets(fields)).toThrow(RangeError);
+    expect(() => assertValidProgramTargets(fields)).toThrow(name);
+  });
+
+  it('assertValidProgramPosition refuses negatives, fractions and overflow', () => {
+    expect(() => assertValidProgramPosition(0)).not.toThrow();
+    for (const bad of [-1, 0.5, MAX_SMALLINT + 1]) expect(() => assertValidProgramPosition(bad)).toThrow(/position/);
   });
 });

@@ -26,7 +26,9 @@ votes and comments), `20261115154653_reshares.sql` and `20261115160346_reshare_t
 (B28, both applied live — `posts.shared_post_id`, the `reshare` kind, the re-share shape and
 flair-stamp trigger, the both-posts read rule, `post_hot_scores` recreated with the new column),
 `20261115173827_exercises_soft_delete.sql` (B31, applied live — `exercises.deleted_at` and the
-customs-only CHECK; see "Custom exercises"),
+customs-only CHECK; see "Custom exercises"), `20261115193156_programs.sql` (B34, applied live —
+`programs`, `program_weeks`, `program_workouts`, `program_exercises`, author-only RLS through
+`private.owns_program`; see "Programs"),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -73,6 +75,11 @@ erDiagram
   profiles ||--o{ reports : "reported_user_id, trigger-stamped (cascade, B27)"
   posts ||..o{ reports : "target_id when target_kind = post (no FK: reports outlive content)"
   comments ||..o{ reports : "target_id when target_kind = comment (no FK)"
+  profiles ||--o{ programs : "user_id authors (cascade, B34)"
+  programs ||--o{ program_weeks : "contains, in position order (cascade)"
+  program_weeks ||--o{ program_workouts : "contains, in position order (cascade)"
+  program_workouts ||--o{ program_exercises : "contains, in position order (cascade)"
+  exercises |o--o{ program_exercises : "exercise_id (set null if the exercise is hard-deleted)"
 
   auth_users {
     uuid id PK "managed by Supabase Auth"
@@ -288,7 +295,78 @@ erDiagram
     text status "open (default), resolved, dismissed"
     timestamptz created_at
   }
+
+  programs {
+    uuid id PK "client-generated (authored offline, B34)"
+    uuid user_id FK "the author; the only person who can read or change it"
+    text name "1-100 chars"
+    timestamptz deleted_at "soft delete; null while live"
+    timestamptz created_at
+    timestamptz updated_at
+  }
+
+  program_weeks {
+    uuid id PK "client-generated"
+    uuid program_id FK
+    smallint position "0 or more; Week N by order; not unique (offline edits)"
+    timestamptz deleted_at "soft delete"
+    timestamptz created_at
+    timestamptz updated_at
+  }
+
+  program_workouts {
+    uuid id PK "client-generated"
+    uuid program_week_id FK
+    text name "max 100; null shows as Workout N"
+    smallint position "0 or more; not unique"
+    timestamptz deleted_at "soft delete"
+    timestamptz created_at
+    timestamptz updated_at
+  }
+
+  program_exercises {
+    uuid id PK "client-generated"
+    uuid program_workout_id FK
+    uuid exercise_id FK "library or custom; set null on hard delete"
+    smallint position "0 or more; not unique"
+    smallint target_sets "required, at least 1"
+    integer target_reps "optional, 0 or more"
+    numeric target_weight_kg "optional, 0 or more, kg like sets.weight_kg"
+    numeric target_rpe "optional, 1 to 10"
+    timestamptz deleted_at "soft delete"
+    timestamptz created_at
+    timestamptz updated_at
+  }
 ```
+
+## Programs (B34)
+
+Migration `20261115193156_programs.sql`. A lifter's own training program, authored as **weeks →
+workouts → exercise slots**: `programs` (named, owned by `user_id`) → `program_weeks` (no name,
+shown as "Week N" by `position`) → `program_workouts` (optional name, else "Workout N") →
+`program_exercises` (one library or custom exercise with a required `target_sets` and optional
+`target_reps`, `target_weight_kg` — always kg — and `target_rpe`). Every id is made on the phone;
+the phone authors offline and uploads through the outbox like any training row.
+
+- **Author-only, all four verbs, all four tables.** The rule lives once in
+  `private.owns_program(pid)` (definer: `programs.user_id = auth.uid()`); children reach their
+  program through `private.week_program(week_id)` and `private.workout_week(pwid)`, so e.g.
+  `program_exercises` is guarded by `owns_program(week_program(workout_week(program_workout_id)))`.
+  Live-probed at B34 (rolled back): a second user reads 0 rows by id and unfiltered, updates and
+  deletes 0 rows, and inserting a week or slot into the first user's program — or a program under
+  the first user's id — is refused (42501); RPE 11, 0 sets and an empty name are refused by CHECKs.
+- **No `visibility` column yet** — private is the only state; B39 adds it. **Warning for B39:** the
+  phone downloads the three child tables unfiltered and relies on these select rules returning only
+  the caller's own rows; letting others read children through a visible program would pull other
+  authors' rows into the device mirror (see the migration's header comment).
+- **Deletes are soft.** The app never sends a `DELETE` for a program row: removing a program, week,
+  workout or slot stamps that one row's `deleted_at` and upserts it (children are left alone). A row
+  is live when its own stamp and every ancestor's are null, which is how the app reads the tree. No
+  tombstones (an update syncs like any edit). Account deletion still removes everything:
+  `programs.user_id` cascades from `profiles`, and the chain cascades down.
+- `position` columns order siblings and are not unique (offline edits sync row by row); the app
+  orders by `(position, id)`. `exercise_id` is `on delete set null` (the `workout_exercises`
+  precedent) — a hard-deleted exercise leaves a "Deleted exercise" slot.
 
 ## Moderation and safety (B27)
 
@@ -731,6 +809,7 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `post_hot_scores` (view, B24) | `security_invoker`: the posts you may read, each ranked by the votes you may read on it | — |
 | `mutes` (B27) | only rows where you are the muter | manage your own mute list |
 | `moderators` (B27) | only your own row | nobody — service role / migration only |
+| `programs`, `program_weeks`, `program_workouts`, `program_exercises` (B34) | only the program's author (`private.owns_program`) | only the program's author: insert, update, delete — the app soft-deletes |
 | `reports` (B27) | moderators only (`private.is_moderator()`) | insert only as yourself, about a post or comment you can currently see (each table's own read rule decides), never your own; no updates or deletes — the founder works the queue via service role |
 
 **Workout visibility rule** (`private.workout_visible`): you always see your own; a block in either
@@ -746,7 +825,8 @@ they can see rows the caller's own RLS would hide.
 
 - Deleting an auth user cascades through `profiles` to settings, body data, follows, blocks, mutes,
   a moderator row, reports filed by them and reports about them (B27), owned exercises, workouts,
-  their entries and sets, posts, votes, comments, and the user's tombstones (live-probed at B27).
+  their entries and sets, posts, votes, comments, and the user's tombstones (live-probed at B27),
+  and (B34) their programs with every week, workout and slot under them.
   Storage objects are not rows of this graph — the `moderate` function sweeps them.
   Deleting a post cascades to its votes and comments (B23); reports about it stay (no FK, B27).
 - Deleting a workout cascades to its `workout_exercises` and their `sets` (and the records citing
@@ -779,7 +859,13 @@ unique, visibility, created_at, updated_at)`, the lifter's own posts, upload-onl
 rebuilt `posts` with `kind`, a nullable `workout_id` (still unique) and `image_path` — the photo
 waiting to upload is a file in the app's documents folder, `post-images/<post_id>.<ext>`, not a
 column; version 10 (B26) added `user_settings.progress_pic_visibility` (default `private`);
-version 11 (B31) added `exercises.deleted_at` (text, null while live); versions are append-only,
+version 11 (B31) added `exercises.deleted_at` (text, null while live); version 12 (B34) added the
+four program tables with the same columns (no local foreign keys — parent links and
+`exercise_id` are bare columns, so a child that downloads before its parent just waits unseen),
+synced both ways — uploaded after
+`personal_records`, parents first, and downloaded table by table on their own bookmarks
+(`pull_cursor:programs`, `…:program_weeks`, `…:program_workouts`, `…:program_exercises`), after
+the analyses and before tombstones; versions are append-only,
 upgraded on launch). There is no device copy of `sync_tombstones` — tombstones are applied as
 they download, and `sync_state` keeps the last applied id (`pull_cursor:tombstones`). It has the same column names, but
 uses text for uuids and timestamps and 0/1 for booleans, and it does not repeat the server's

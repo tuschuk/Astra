@@ -16,6 +16,17 @@
  * rule in db/dao.ts), a changed workout means "re-download this whole
  * workout", and one bookmark finds every change.
  *
+ * Programs (B34) are NOT a tree pull: each of the four program tables has its own bookmark and
+ * is downloaded like any stand-alone table, parents first. That is safe only because the server
+ * lets nobody but the author read any program row, so an unfiltered download of a child table
+ * returns exactly the lifter's own rows (the workout tree needs its one-bookmark design because
+ * other people's children are readable through a visible workout). Program deletions are
+ * `deleted_at` stamps — ordinary updates — so they need no tombstones. If another phone uploads a
+ * new program and its first week between this phone's programs pass and weeks pass, the week can
+ * land before its program; the phone's program tables have no local foreign keys for exactly this
+ * reason (db/schema.ts V12), so the week just waits unseen — reads walk down from the program —
+ * until the next sync brings the program.
+ *
  * Deletions (B14) arrive two ways, because a download cannot see a row that
  * no longer exists:
  *   - inside a workout: a removed set or exercise re-stamps its workout, so
@@ -43,7 +54,9 @@ import { timestampMs } from '@analysis';
 import { placeholders, type SqlDriver, type SqlExecutor } from '@/db/driver';
 import {
   deleteWorkoutPostsTx,
+  PROGRAM_TABLES,
   saveServerAnalysesTx,
+  type ProgramTable,
   upsertRowsTx,
   type MirrorRowByTable,
   type RowByTable,
@@ -65,12 +78,16 @@ export const PULL_OVERLAP_MS = 5000;
 /** The lowest possible id, used as the tie-breaker when rewinding a bookmark. */
 const MIN_ID = '00000000-0000-0000-0000-000000000000';
 
-/** `sync_state` keys of the four bookmarks. */
+/** `sync_state` keys of the eight bookmarks (four of them the program tables', B34). */
 export const CURSOR_KEYS = {
   workouts: 'pull_cursor:workouts',
   exercises: 'pull_cursor:exercises',
   personal_records: 'pull_cursor:personal_records',
   workout_analyses: 'pull_cursor:workout_analyses',
+  programs: 'pull_cursor:programs',
+  program_weeks: 'pull_cursor:program_weeks',
+  program_workouts: 'pull_cursor:program_workouts',
+  program_exercises: 'pull_cursor:program_exercises',
 } as const;
 
 type CursorKey = (typeof CURSOR_KEYS)[keyof typeof CURSOR_KEYS];
@@ -146,6 +163,11 @@ export interface PullResult {
   personal_records: number;
   /** Workout analyses saved on the phone (B18). */
   workout_analyses: number;
+  /** Program rows saved on the phone (B34), per table. */
+  programs: number;
+  program_weeks: number;
+  program_workouts: number;
+  program_exercises: number;
   /** Local slots and sets removed because the server's copy of their workout no longer has them (B14). */
   removed: number;
   /** Tombstones that deleted something on the device (B14). */
@@ -171,7 +193,7 @@ export interface PullResult {
  * Analyses (B18) are saved as they come: they never have outbox lines (the
  * phone never writes one of its own), so there is no local change to protect.
  */
-async function pullStandalone<T extends 'exercises' | 'personal_records' | 'workout_analyses'>(
+async function pullStandalone<T extends 'exercises' | 'personal_records' | 'workout_analyses' | ProgramTable>(
   db: SqlDriver,
   tbl: T,
   fetchPage: (after: PullCursor | null) => Promise<MirrorRowByTable[T][]>,
@@ -188,7 +210,7 @@ async function pullStandalone<T extends 'exercises' | 'personal_records' | 'work
         await saveServerAnalysesTx(tx, page as readonly MirrorRowByTable['workout_analyses'][]);
         result.workout_analyses += page.length;
       } else {
-        const synced = tbl as 'exercises' | 'personal_records';
+        const synced = tbl as Exclude<T, 'workout_analyses'>;
         result[synced] += await applyRows(tx, synced, page as readonly RowByTable[typeof synced][]);
       }
       await writeCursor(tx, key, next);
@@ -472,8 +494,8 @@ export interface PullOptions {
 /**
  * Downloads everything new for user `userId`: exercises first (workouts point
  * at them), then workouts with their contents, then the user's personal
- * records (they cite sets), then their workout analyses (B18), then
- * deletions, then their settings row, then the flair list (B21 — whose
+ * records (they cite sets), then their workout analyses (B18), then their
+ * programs table by table (B34), then deletions, then their settings row, then the flair list (B21 — whose
  * failure is recorded in the result, not thrown; see `flairsError`). Throws
  * the transport's error on failure; pages already saved stay saved and their
  * bookmarks stay moved.
@@ -491,6 +513,10 @@ export async function pullChanges(
     sets: 0,
     personal_records: 0,
     workout_analyses: 0,
+    programs: 0,
+    program_weeks: 0,
+    program_workouts: 0,
+    program_exercises: 0,
     removed: 0,
     tombstones: 0,
     userSettings: 0,
@@ -511,6 +537,10 @@ export async function pullChanges(
     (after) => transport.pullWorkoutAnalyses(userId, after, PULL_PAGE_SIZE),
     result,
   );
+  // The lifter's programs (B34), parents first so a child never lands before its parent.
+  for (const tbl of PROGRAM_TABLES) {
+    await pullStandalone(db, tbl, (after) => transport.pullProgramRows(tbl, userId, after, PULL_PAGE_SIZE), result);
+  }
   await pullTombstonePass(db, transport, userId, result);
   const settings = await pullUserSettingsPass(db, transport, userId);
   if (settings) {
