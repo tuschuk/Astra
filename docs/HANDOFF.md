@@ -2,57 +2,47 @@
 
 _Overwritten at the end of every session with where things stand now. Not a log._
 
-## Where things stand (Nov 14, 2026 — B05 and B06 merged, pipeline on B07)
+## Where things stand (Nov 14, 2026 — B05, B06, B07 merged; pipeline on B08)
 
-**Two pipeline steps are merged to `main`; the pipeline is running B07 local-store-and-sync.**
-Gates are delegated to the session (CLAUDE.md, "Autonomous sessions"): it spot-checks each plan,
-approves Gate 1, reruns the checks and does Gate 2. Tristen's remaining hands-on items are at the
-end.
+**Three pipeline steps are merged to `main`; the pipeline is running B08 active-workout-store.**
+Gates are delegated to the session (CLAUDE.md, "Autonomous sessions"). Tristen's hands-on list is
+at the end.
 
-**B06 training-math (merged, Gate 2 record):** the one shared math module at
-`backend/supabase/functions/_shared/training-math/` (units, e1rm, rpe, intensity, plates, prs,
-validate, index — mirror test each), imported in the app as `@training-math` through
-`frontend/metro.config.js`, `tsconfig.json` and `jest.config.js`. No migration. Nothing calls it
-yet (B13/B15/B16/B18 will); the app-flow diagram marks it as scaffolding. Gate 2 found one real
-defect the builder's warm cache hid: Jest could not resolve `@babel/runtime` helpers for files
-outside `frontend/`; fixed with `moduleDirectories` in `jest.config.js` (recorded in the plan
-file). Verified after the fix: Jest 23 suites / 193 tests on a cleared cache and twice warm,
-`expo lint` clean, `tsc --noEmit` clean. Statuses: B06 Built; TK-1..4, LOG-4, LOG-6 In progress
-(math done, screens pending). Two PRD interpretations worth Tristen's glance: Epley at one rep
-returns the lifted weight; the RPE chart is derived from Epley, not a licensed table — both are
-one-function swaps if he disagrees.
+**B07 local-store-and-sync (merged, Gate 2 record):** expo-sqlite device store
+(`frontend/src/db/`: serialized driver, `PRAGMA user_version` schema runner, DAO with the
+touch-the-root invariant), outbox push/pull sync engine (`frontend/src/sync/`) mounted via
+`useSync` in the root layout, library seeded on first launch under the server's uuidv5 ids,
+`uuidv5` moved into `frontend/src/library/uuidv5.ts` (regenerated seed byte-identical to the
+committed migration), session store moved to `expo-sqlite/kv-store` (AsyncStorage removed). No
+server migration. Eight build deviations recorded in the plan file; the two that matter: push omits
+`updated_at` (server stamps it, so offline rows are never behind another device's cursor) and
+roots are re-touched after children land. Gate 2 reran Jest 34 suites / 266 tests on a cold cache,
+lint clean, tsc clean after regenerating the stale `.expo/types/router.d.ts` (the builder prompt
+now tells builders how). Statuses: B07 Built; FND-3 Built; NFR-1, NFR-3 In progress.
 
-**B05 auth-and-signup (merged earlier today):** migration applied and probed live; details in the
-B05 plan file and DEFERRED. B05 / FND-2 / NFR-8 are Built and wait on a device run for Done.
+**B06 training-math (merged):** the one math module at
+`backend/supabase/functions/_shared/training-math/`, imported as `@training-math`; TK-1..4, LOG-4,
+LOG-6 In progress (math proven, screens pending). **B05 auth-and-signup (merged):** migration
+applied and probed live; B05 / FND-2 / NFR-8 Built, device run pending.
 
-**Pipeline operations** (all in `docs/PIPELINE.md`): n8n runs detached with `NODES_EXCLUDE=[]`;
-board `gvu4dg0NPtND4tGG` Active with a POST webhook trigger; `claude` CLI 2.1.325; headless
-allowlist includes `mcp__supabase`; n8n-mcp SSRF fix committed (takes effect next Claude Code
-start). Session helper for the API: `automation/state/pipe.mjs` (gitignored; `latest`, `approve
-<id>`, `retry <id>`, `trigger`). Executions so far: 4 (B05, builder failed on old CLI), 5 (retry,
-success), 6 (B06, success); B07 is the next one.
+**Pipeline operations** (all in `docs/PIPELINE.md`): n8n detached with `NODES_EXCLUDE=[]`; board
+`gvu4dg0NPtND4tGG` Active with a POST webhook trigger; `claude` CLI 2.1.325; headless allowlist
+includes `mcp__supabase`; n8n-mcp SSRF fix committed (effective next Claude Code start). Session
+helper: `automation/state/pipe.mjs` (gitignored; `latest`, `approve <id>`, `retry <id>`,
+`trigger`). Executions: 4/5 (B05), 6 (B06), 7 (B07); B08 is next. Costs so far (as reported by
+`claude -p`): B05 ≈ $12.1, B06 ≈ $8.7, B07 ≈ $14.2.
 
-**B07 local-store-and-sync — built on its branch, waiting for Gate 2.** The builder committed
-`Build B07: local store and sync` on `local-store-and-sync`; it is not merged.
-- **What it built:** the expo-sqlite device store (`frontend/src/db/`), the outbox push/pull sync
-  engine (`frontend/src/sync/`), and `useSync`, mounted in the root layout.
-- **Moves and swaps:** `uuidv5` moved into `frontend/src/library/uuidv5.ts`; the regenerated seed
-  is byte-identical to the committed migration. The session store moved to
-  `expo-sqlite/kv-store`, and AsyncStorage was removed.
-- **Checks run:** Jest 34 suites / 266 tests, tsc and lint are all clean.
-- **Deviations:** eight, recorded in the plan file's "Deviations during the build". The two that
-  matter most: push omits `updated_at`, and push re-touches root workouts after their children
-  land.
-- **Gate 2 should check:**
-  - There is no server migration, so there is nothing to apply live.
-  - The Mermaid edits were not rendered (`mmdc` was declined headless). Render
-    `docs/diagrams/app-flow.md` once.
-  - The new known limits (poison rows, account switch) are in DEFERRED.
+**B08 active-workout-store** — the in-progress workout domain store on top of B07's `writeLocal`:
+resume-on-launch, simulated force-kill test (NFR-3), v4 id minting via `expo-crypto`, repeat-set.
+Rules for it recorded by B07: write only through the DAO (never raw SQL) so touch-the-root holds;
+every UI query filters by the signed-in `user_id`; validate before `writeLocal` through the shared
+training-math `validate` module so a server-refused row never wedges the outbox.
 
 **Tristen's hands-on list:** (1) device runs — sign up under 18 → refused, sign up 18+, kill app,
 reopen still signed in, sign out, sign in — flips B05 / FND-2 / NFR-8 and FND-1 / FND-4 to Done;
-(2) Supabase Dashboard → Authentication → Providers → Email → turn "Confirm email" off (plan of
-record; the session's toggle was declined by the permission layer); (3) the six external blockers;
-(4) whether to grant `mmdc` to headless runs.
+once B09 ships a logger screen, the airplane-mode workout check flips FND-3; (2) Supabase
+Dashboard → Authentication → Providers → Email → turn "Confirm email" off (plan of record; the
+session's toggle was declined by the permission layer); (3) the six external blockers; (4) whether
+to grant `mmdc` to headless runs.
 
-Next pipeline step after B07 merges: **B08 active-workout-store**.
+Next pipeline step after B08 merges: **B09 logger-screen**.
