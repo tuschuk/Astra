@@ -100,6 +100,12 @@ claude -p <prompt> --output-format json --permission-mode acceptEdits
   cell to `Not started` once the decision is made.
 - The builder never hands over failing tests (CLAUDE.md Testing rules); if it cannot get green, it
   must say so in its final report rather than committing broken work.
+- **Other worktrees must not hold `main`.** A second checkout for a stable dev server (e.g.
+  `C:\Users\trist\Astra\Astra-main`, used for the phone's Expo Go session) must stay on a
+  *detached* HEAD (`git checkout --detach main`); git refuses to check out a branch that another
+  worktree has, so a worktree on `main` makes the picker's and Gate 2's `git checkout main` in the
+  pipeline repo fail. Update that worktree with `git checkout --detach main`, never `git pull` on
+  the branch.
 - **Cold-start quirk (n8n 2.x on Windows):** the internal JS task runner that executes Code nodes
   can take longer than the broker's 15-second grant-token window to spawn, after which it loops on
   `Task runner connection attempt failed with status code 403` in the n8n log until n8n's
