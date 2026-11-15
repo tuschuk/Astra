@@ -28,7 +28,10 @@ import type { PersonName } from './names';
 /** How a team lets people in: anyone (`open`, the default) or invited lifters only (`invite`). */
 export type TeamJoinMode = 'open' | 'invite';
 
-/** A member's role. `coach` exists for B37 and grants nothing yet. */
+/**
+ * A member's role. The owner and coaches coach the team (B37): they push content, assign
+ * programs and can read members' training logs. Only the owner changes roles.
+ */
 export type TeamRole = 'owner' | 'coach' | 'member';
 
 /** One team as the app shows it. */
@@ -105,13 +108,13 @@ export function toTeam(raw: RawTeam): Team {
 /** The line any Teams screen shows when it can't reach the server. */
 export const TEAMS_OFFLINE = 'Teams need a connection. Logging workouts and the Tool Kit still work offline.';
 
-/** Postgres's "that row already exists" code (a repeat join or invite). */
-const UNIQUE_VIOLATION = '23505';
-/** Postgres's "a security rule refused this row" code. */
-const RLS_REFUSED = '42501';
+/** Postgres's "that row already exists" code (a repeat join or invite). Shared with teamCoaching.ts. */
+export const UNIQUE_VIOLATION = '23505';
+/** Postgres's "a security rule refused this row" code. Shared with teamCoaching.ts. */
+export const RLS_REFUSED = '42501';
 
 /** Postgres's error code on a refused request, if there is one. */
-function codeOf(error: unknown): string | undefined {
+export function codeOf(error: unknown): string | undefined {
   return (error as { code?: string } | null)?.code;
 }
 
@@ -262,6 +265,38 @@ export async function setJoinMode(client: SupabaseClient, teamId: string, mode: 
   } catch {
     return { ok: false, message: TEAM_FAILED };
   }
+}
+
+/**
+ * The owner makes a member a coach, or a coach a plain member again (TEAM-3, B37). Coaches can
+ * push programs, workouts and announcements to the team, assign programs, and read members'
+ * training logs. The server only lets the team's owner change roles, never touches the owner's
+ * own row, and never makes a second owner — anything else changes nothing, which comes back as
+ * `TEAM_NOT_ALLOWED` (the request asks for the changed row back).
+ */
+export async function setMemberRole(
+  client: SupabaseClient,
+  teamId: string,
+  userId: string,
+  role: 'coach' | 'member',
+): Promise<TeamResult> {
+  try {
+    const { data, error } = await client
+      .from('team_members')
+      .update({ role })
+      .eq('team_id', teamId)
+      .eq('user_id', userId)
+      .select('user_id');
+    if (error) return { ok: false, message: TEAM_FAILED };
+    return ((data ?? []) as unknown[]).length > 0 ? { ok: true } : { ok: false, message: TEAM_NOT_ALLOWED };
+  } catch {
+    return { ok: false, message: TEAM_FAILED };
+  }
+}
+
+/** True for the roles that coach a team: the owner (always a coach) and coaches (B37). */
+export function isCoachRole(role: TeamRole | null): boolean {
+  return role === 'owner' || role === 'coach';
 }
 
 /** The teams that have invited `me` and that `me` hasn't joined yet (joining uses an invite up). Throws on failure. */

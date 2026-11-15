@@ -151,6 +151,7 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
           <Stack.Screen name="team/new" />
           <Stack.Screen name="team/[id]/index" />
           <Stack.Screen name="team/[id]/invite" />
+          <Stack.Screen name="session/[id]" />
         </Stack.Protected>
         <Stack.Protected guard={!signedIn}>
           <Stack.Screen name="(auth)" />

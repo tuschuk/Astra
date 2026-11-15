@@ -53,6 +53,13 @@
  * memberships. Owner-only rights (the mode switch, inviting) and roster visibility are NOT
  * imitated — the fake has no signed-in identity; those were probed live (rolled back) at B36.
  *
+ * B37 adds `team_posts` (a push gets a server id and time; reads embed `author:profiles…(…)`),
+ * `team_assignments` (its primary key refuses a repeat with 23505), the owner's role update on
+ * `team_members` (the owner row never changes and `owner` is never granted — silently, like the
+ * policy; `.update(…).select(…)` answers with the changed rows), and server functions supplied by
+ * the test through the `rpc` option (the payload functions' answers are the test's to choose).
+ * Who may push, assign or read a coach's payload is NOT imitated — probed live at B37.
+ *
  * What it does NOT do: row-level security or general embedding. Posts are seeded already shaped
  * the way the server's embed returns them (author, flair and workout nested in), and the follow
  * insert imitates the one RLS refusal the app handles (a block in either direction). Server-side
@@ -95,6 +102,10 @@ export interface FakeSocialTables {
   team_members: Row[];
   /** Invite rows: `{ team_id, user_id }` (B36). */
   team_invites: Row[];
+  /** Push rows: `{ id, team_id, author_id, kind, body, program_id, program_workout_id, created_at }` (B37). */
+  team_posts: Row[];
+  /** Assignment rows: `{ team_id, user_id, program_id, assigned_by, created_at }` (B37). */
+  team_assignments: Row[];
 }
 
 /** What a request can name: the tables, plus the computed `post_scores` and (B24) `post_hot_scores` views. */
@@ -195,6 +206,11 @@ export function parseOrFilter(filter: string): Predicate {
 interface FakeOptions {
   /** Make every request fail as a dropped connection would. */
   offline?: boolean;
+  /**
+   * (B37) Extra server functions: name → the answer for the given arguments. `follow_counts`
+   * is built in; anything else not listed here answers PGRST202 like a missing function.
+   */
+  rpc?: Record<string, (params: Record<string, unknown>) => unknown>;
 }
 
 /**
@@ -217,11 +233,14 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     teams: [...(seed.teams ?? [])],
     team_members: [...(seed.team_members ?? [])],
     team_invites: [...(seed.team_invites ?? [])],
+    team_posts: [...(seed.team_posts ?? [])],
+    team_assignments: [...(seed.team_assignments ?? [])],
   };
   const requests: FakeCall[][] = [];
   let offline = options.offline ?? false;
   let commentCounter = 0;
   let teamCounter = 0;
+  let pushCounter = 0;
 
   /**
    * (B36) PostgREST's embeds on the team tables, for the two the app asks for: a membership or
@@ -235,6 +254,9 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     }
     if (table === 'team_members' && select.includes('profile:profiles')) {
       out.profile = tables.profiles.find((p) => p.id === row.user_id) ?? null;
+    }
+    if (table === 'team_posts' && select.includes('author:profiles')) {
+      out.author = tables.profiles.find((p) => p.id === row.author_id) ?? null;
     }
     return out;
   }
@@ -439,12 +461,26 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
         tables.team_invites = tables.team_invites.filter((i) => !(i.team_id === row.team_id && i.user_id === row.user_id));
         return { data: null, error: null };
       }
+      if (table === 'team_posts') {
+        // B37: the server's defaults — a fresh id and an ever-later time.
+        pushCounter += 1;
+        rows.push({
+          id: `push-${pushCounter}`,
+          body: null,
+          program_id: null,
+          program_workout_id: null,
+          created_at: new Date(Date.UTC(2026, 10, 15, 23, 0, pushCounter)).toISOString(),
+          ...row,
+        });
+        return { data: null, error: null };
+      }
       // B27: each table's primary / unique key, refused with Postgres's 23505 like the server.
       const uniqueKeys: Partial<Record<FakeSource, string[]>> = {
         blocks: ['blocker_id', 'blocked_id'],
         mutes: ['muter_id', 'muted_id'],
         reports: ['reporter_id', 'target_kind', 'target_id'],
         team_invites: ['team_id', 'user_id'],
+        team_assignments: ['team_id', 'user_id', 'program_id'],
       };
       const key = uniqueKeys[table];
       if (key && rows.some((x) => key.every((k) => x[k] === row[k]))) {
@@ -467,11 +503,14 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
         const refused = profileRefusal(update, matching);
         if (refused) return { data: null, error: refused };
       }
-      for (const row of matching) Object.assign(row, update);
+      // B37: the role policy — the owner row never changes and nobody is made owner (silently).
+      const changing =
+        table === 'team_members' ? (update.role === 'owner' ? [] : matching.filter((r) => r.role !== 'owner')) : matching;
+      for (const row of changing) Object.assign(row, update);
       // `.update(…).select('id')` (B26) returns the changed rows — none when nothing matched,
       // which is how the app learns a post was gone or not the lifter's.
       const returning = calls.some(([m]) => m === 'select');
-      return { data: returning ? matching.map((r) => ({ id: r.id })) : null, error: null };
+      return { data: returning ? changing.map((r) => ({ id: r.id, user_id: r.user_id })) : null, error: null };
     }
     if (isDelete) {
       if (table === 'post_hot_scores') throw new Error('fake: a view cannot be deleted from');
@@ -501,7 +540,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       });
     }
     if (table === 'comments') out = out.map(withAuthor);
-    if (table === 'team_members' || table === 'team_invites') {
+    if (table === 'team_members' || table === 'team_invites' || table === 'team_posts') {
       const select = calls.find(([m]) => m === 'select')?.[1];
       out = out.map((r) => withTeamEmbeds(table, r, select));
     }
@@ -529,10 +568,12 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       };
       return builder;
     },
-    /** A server function call (B25): only `follow_counts` exists. Recorded like a request. */
+    /** A server function call (B25): `follow_counts`, plus any the test supplies (B37). Recorded like a request. */
     rpc(fn: string, params: Record<string, unknown>) {
       requests.push([['rpc', fn, params]]);
       if (offline) return Promise.resolve({ data: null, error: { message: 'Network request failed' } });
+      const extra = options.rpc?.[fn];
+      if (extra) return Promise.resolve({ data: extra(params), error: null });
       if (fn !== 'follow_counts') return Promise.resolve({ data: null, error: { code: 'PGRST202', message: `fake: no function ${fn}` } });
       return Promise.resolve({ data: followCounts(params.profile_id), error: null });
     },

@@ -261,6 +261,93 @@ export async function loadWorkoutHistory(
   };
 }
 
+/** One set of a workout read from the server (B37), with every field the set formatters print. */
+export interface WorkoutDetailSet {
+  id: string;
+  position: number;
+  reps: number | null;
+  weight_kg: number | null;
+  rpe: number | null;
+  is_warmup: boolean;
+  duration_seconds: number | null;
+  score: string | null;
+  drop_set_position: number | null;
+  notes: string | null;
+}
+
+/** One exercise of a workout read from the server, its sets in logged order. */
+export interface WorkoutDetailEntry {
+  id: string;
+  position: number;
+  superset_group: number | null;
+  notes: string | null;
+  /** Null when the viewer can't read the exercise row (someone's own custom exercise). */
+  exerciseName: string | null;
+  sets: WorkoutDetailSet[];
+}
+
+/** One whole workout read from the server: someone else's log, opened from their profile History. */
+export interface WorkoutDetail {
+  id: string;
+  userId: string;
+  title: string | null;
+  notes: string | null;
+  started_at: string;
+  ended_at: string | null;
+  entries: WorkoutDetailEntry[];
+}
+
+/** A workout exactly as the server sends it for `WORKOUT_DETAIL_SELECT`. */
+interface RawWorkoutDetail {
+  id: string;
+  user_id: string;
+  title: string | null;
+  notes: string | null;
+  started_at: string;
+  ended_at: string | null;
+  workout_exercises: (Omit<WorkoutDetailEntry, 'exerciseName' | 'sets'> & {
+    exercise: { name: string } | null;
+    sets: WorkoutDetailSet[];
+  })[];
+}
+
+/** The columns one workout's full log needs: every entry, its exercise's name, every set. */
+export const WORKOUT_DETAIL_SELECT =
+  'id,user_id,title,notes,started_at,ended_at,' +
+  'workout_exercises(id,position,superset_group,notes,exercise:exercises(name),' +
+  'sets(id,position,reps,weight_kg,rpe,is_warmup,duration_seconds,score,drop_set_position,notes))';
+
+/**
+ * One workout with all its exercises and sets, read from the server (B37 — TEAM-5), or null
+ * when the viewer may not see it (or it doesn't exist). The server decides: the workout's own
+ * visibility, plus — for a team's coaches — every member's log, private ones included, unless
+ * there is a block. Entries and sets come back sorted by their positions. Throws on failure.
+ *
+ * Why this exists: a coach can't coach from a list of dates; opening a row of a member's profile
+ * History shows the whole session. It serves any workout the viewer may see, not only coaches'.
+ */
+export async function loadWorkoutDetail(client: SupabaseClient, workoutId: string): Promise<WorkoutDetail | null> {
+  const { data, error } = await client.from('workouts').select(WORKOUT_DETAIL_SELECT).eq('id', workoutId).limit(1);
+  throwIfError(error, 'Loading the workout failed');
+  const raw = ((data ?? []) as unknown as RawWorkoutDetail[])[0];
+  if (!raw) return null;
+  return {
+    id: raw.id,
+    userId: raw.user_id,
+    title: raw.title,
+    notes: raw.notes,
+    started_at: raw.started_at,
+    ended_at: raw.ended_at,
+    entries: [...raw.workout_exercises]
+      .sort((a, b) => a.position - b.position)
+      .map(({ exercise, sets, ...entry }) => ({
+        ...entry,
+        exerciseName: exercise?.name ?? null,
+        sets: [...sets].sort((a, b) => a.position - b.position),
+      })),
+  };
+}
+
 /** A record row exactly as the server sends it for the PR read. */
 interface RawProfileRecord {
   id: string;

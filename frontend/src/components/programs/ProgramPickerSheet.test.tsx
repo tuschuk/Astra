@@ -54,6 +54,20 @@ describe('ProgramPickerSheet', () => {
     expect((await readActiveRun(db, USER))?.nextSession?.workout.label).toBe('Day A');
   });
 
+  it('(B37) pick mode reports the program and starts nothing, under its own heading', async () => {
+    const db = await createPreparedDb();
+    const p = await createProgram(db, USER, 'Strength Block', { now: '2026-11-15T10:00:00.000Z' });
+    const week = await addWeek(db, USER, p.id);
+    await addProgramWorkout(db, USER, week.id, 'Day A');
+    const onPick = jest.fn<(id: string) => void>();
+    await renderSheet({ db, onPick, onStarted: undefined, title: 'Assign a program', intro: 'Pick one.' });
+    expect(await screen.findByText('Assign a program')).toBeTruthy();
+    expect(screen.getByText('Pick one.')).toBeTruthy();
+    await fireEvent.press(await screen.findByLabelText('Pick Strength Block'));
+    expect(onPick).toHaveBeenCalledWith(p.id);
+    expect(await readActiveRun(db, USER)).toBeNull();
+  });
+
   it('with no programs, offers Your programs', async () => {
     const db = await createPreparedDb();
     const onOpenPrograms = jest.fn();

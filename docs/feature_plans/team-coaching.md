@@ -482,3 +482,39 @@ attacked and what changed:
   literal reading (assignment activates on the member's tap, G3, per the handoff's own
   anticipation). Nothing else widened: no notifications, no moderation, no visibility column,
   no Marketplace machinery.
+
+## Build deviations (builder, B37)
+
+Recorded by the builder run; each is deliberate.
+
+- **D1 — the coach arm does NOT go into `private.can_view_workout`.** The plan (§3) said to
+  `create or replace` `can_view_workout` with the coach arm. But `personal_records`' select policy
+  reads through `private.can_view_set` → `can_view_workout` (`20261115130809_profile_reads_and_avatars.sql`),
+  so that edit would have shown coaches members' PRs — which §3 and the probe list explicitly
+  forbid. Instead a sibling `private.can_read_workout_log(wid)` (= `workout_visible` ∨
+  `coach_reads_logs`) is used by the **workout_exercises** and **sets** select policies (dropped
+  and recreated under their names); `can_view_workout` is untouched. Probed live: coach reads the
+  private workout, its entry and its set, and 0 PRs, 0 posts.
+- **D2 — migration version.** Applied via MCP as `20261115222643_team_coaching` and the file
+  carries that prefix. Three extra FK indexes on `team_posts` (author, program, program workout)
+  and two on `team_assignments` (program, assigned_by) beyond the plan's one each.
+- **D3 — two UI files the files table didn't list:** `components/teams/useTeamCoaching.tsx` (the
+  team page's coaching state, actions and modals, so the route stays readable) and
+  `components/teams/CoachPushSheet.tsx` (the announcement box and the "pick a day" list for a
+  workout push). No tests of their own; they are exercised through `__tests__/team.test.tsx`
+  (member view, assignment Start → active run, pushed program Save once, owner Make coach +
+  Announce).
+- **D4 — card names come from the payloads.** Members can't read the coach's `programs` rows, so
+  the team page fetches each referenced program / workout payload once per load (in parallel) to
+  name the cards and the assignment banner, and the sheet reuses them.
+- **D5 — refusal wording for program pushes and assignments.** A program made moments ago that
+  hasn't synced fails `owns_program` (42501) exactly like a foreign one, so program / workout push
+  refusals and assignment refusals say "If you just made it, wait for it to sync and try again."
+  The error-code helpers (`codeOf`, `RLS_REFUSED`, `UNIQUE_VIOLATION`) are now exported from
+  `social/teams.ts` and shared.
+- **D6 — review fixes.** The sheet's footer action is spent after a successful copy (a second tap
+  would have made a second copy and, for Start, restarted the run); a copy that saved but whose
+  run failed to start now says so ("Saved to your programs, but it couldn't be started here");
+  the two push senders share one helper; a failed `listPrograms` is logged. `startPushedWorkout`
+  returns its skipped count but the team page navigates straight to the logger without showing it
+  (recorded in DEFERRED).

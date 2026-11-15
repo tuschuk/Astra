@@ -8,7 +8,14 @@
  *     team that invited you), a line saying the team is invite-only (no invite), or **Leave**
  *     for a member. The owner can't leave — a team always keeps its owner;
  *   - for the owner only: the **join-mode switch** (Open | Invite only) and **Invite lifters**;
- *   - the **Members** list (tap a name for their profile);
+ *   - (B37) for members: the notice that the team's coaches can see their training log, any
+ *     **program a coach assigned** them (View → Start / Dismiss), and the **Coach's corner** —
+ *     the coaches' pushes, newest first (announcements, and programs / workouts that open in a
+ *     sheet to save or start). Coaches (the owner counts as one) also get **Announce**, **Push a
+ *     program** and **Push a workout**, and can remove their own pushes;
+ *   - the **Members** list (tap a name for their profile — a coach sees the member's whole
+ *     training log there). The owner can **Make coach** / **Remove coach**; coaches can **Assign
+ *     a program** to a member and see or **Revoke** what each member has been assigned;
  *   - the **Team feed** — the members' posts, newest first, twenty at a time, as the same post
  *     cards Home uses (vote, comment, re-share, report, change your own post's audience).
  *
@@ -21,7 +28,7 @@
  * Teams live on the server, so the page needs a connection; without one it says so, with Retry.
  * It reloads each time it comes into view, and after every join, leave or switch.
  */
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
@@ -30,7 +37,9 @@ import { Screen } from '@/components/Screen';
 import { PostCard } from '@/components/social/PostCard';
 import { usePostListActions } from '@/components/social/usePostListActions';
 import { usePostPhotoSource } from '@/components/social/usePostPhotoSource';
+import { COACH_LOG_NOTICE, useTeamCoaching } from '@/components/teams/useTeamCoaching';
 import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
 import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
@@ -40,7 +49,9 @@ import { getSupabase } from '@/lib/supabase';
 import { appendPage, loadFeedPage, type FeedCursor, type FeedPost } from '@/social/feed';
 import { personLabels } from '@/social/names';
 import { withPostVisibility } from '@/social/postPrivacy';
+import type { TeamPost } from '@/social/teamCoaching';
 import {
+  isCoachRole,
   joinTeam,
   leaveTeam,
   loadTeam,
@@ -55,6 +66,7 @@ import {
   type TeamResult,
 } from '@/social/teams';
 import { colors, spacing } from '@/theme';
+import { postDateLabel } from '@/workout/format';
 
 /** The owner's switch (TEAM-1). */
 const MODE_OPTIONS: readonly ChoiceOption<TeamJoinMode>[] = [
@@ -98,6 +110,10 @@ export default function TeamScreen() {
   // Each load gets a number; an answer that lands after a newer load started is ignored.
   const generation = useRef(0);
   const pageInFlight = useRef(false);
+  // The latest `load`, for the coaching hook's "something changed — re-read" (B37).
+  const loadRef = useRef<() => Promise<void>>(async () => {});
+  const coaching = useTeamCoaching({ client, db, me, teamId, onChanged: () => void loadRef.current() });
+  const reloadCoaching = coaching.reload;
 
   /**
    * Reads the team, the roster the server lets me see and my invite; then, if the team's
@@ -116,7 +132,12 @@ export default function TeamScreen() {
       const [members, invites] = await Promise.all([loadTeamMembers(client, teamId), myInvites(client, me)]);
       if (mine !== generation.current) return;
       setPage({ status: 'ready', team, members, invited: invites.some((t) => t.id === teamId) });
-      const isMember = members.some((m) => m.userId === me);
+      const myRow = members.find((m) => m.userId === me);
+      const isMember = myRow !== undefined;
+      // Coaching (B37): its own failure never blanks the rest of the page.
+      reloadCoaching(isMember, isCoachRole(myRow?.role ?? null)).catch((error: unknown) =>
+        console.warn('Team: coaching could not be loaded', error),
+      );
       if (!isMember && team.joinMode !== 'open') {
         setFeed({ status: 'idle' });
         return;
@@ -134,7 +155,10 @@ export default function TeamScreen() {
       setPage((prev) => (prev.status === 'ready' ? prev : { status: 'error' }));
       setFeed((prev) => (prev.status === 'ready' ? prev : { status: 'error' }));
     }
-  }, [client, me, teamId]);
+  }, [client, me, teamId, reloadCoaching]);
+  useEffect(() => {
+    loadRef.current = load;
+  }, [load]);
 
   useFocusEffect(
     useCallback(() => {
@@ -225,7 +249,43 @@ export default function TeamScreen() {
   const { team, members, invited } = page;
   const myRole = members.find((m) => m.userId === me)?.role ?? null;
   const isOwner = myRole === 'owner';
+  const isCoach = isCoachRole(myRole);
   const canSee = myRole !== null || team.joinMode === 'open';
+
+  /** One push in the Coach's corner: the text, or a card that opens the program / workout. */
+  function renderPush(post: TeamPost) {
+    const who = personLabels(post.author).name;
+    const opens = post.kind !== 'announcement';
+    const title =
+      post.kind === 'announcement'
+        ? post.body
+        : post.kind === 'program'
+          ? `Program: ${(post.programId && coaching.programName(post.programId)) ?? 'No longer available'}`
+          : `Workout: ${(post.programWorkoutId && coaching.workoutName(post.programWorkoutId)) ?? 'No longer available'}`;
+    const card = (
+      <Card style={styles.push}>
+        <Body style={styles.pushText}>{title}</Body>
+        <Body variant="small">
+          {who} · {postDateLabel(post.createdAt)}
+        </Body>
+        {post.authorId === me ? (
+          <Button label="Remove" variant="ghost" disabled={coaching.busy} onPress={() => coaching.deletePost(post)} />
+        ) : null}
+      </Card>
+    );
+    return opens ? (
+      <Pressable
+        key={post.id}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${title}`}
+        onPress={() => coaching.openPost(post)}
+      >
+        {card}
+      </Pressable>
+    ) : (
+      <View key={post.id}>{card}</View>
+    );
+  }
 
   const header = (
     <View style={styles.header}>
@@ -279,10 +339,44 @@ export default function TeamScreen() {
         </View>
       ) : null}
 
-      {message ? (
+      {message || coaching.message ? (
         <Body variant="small" style={styles.message}>
-          {message}
+          {message ?? coaching.message}
         </Body>
+      ) : null}
+
+      {myRole ? (
+        <Body variant="small" style={styles.message}>
+          {COACH_LOG_NOTICE}
+        </Body>
+      ) : null}
+
+      {coaching.myAssignments.map((a) => (
+        <Card key={a.programId} accent style={styles.assignment}>
+          <Body style={styles.pushText}>Your coach assigned {coaching.programName(a.programId) ?? 'a program'}</Body>
+          <View style={styles.rowActions}>
+            <Button label="View" onPress={() => coaching.openAssignment(a)} disabled={coaching.busy} />
+            <Button label="Dismiss" variant="ghost" onPress={() => coaching.dismissAssignment(a)} disabled={coaching.busy} />
+          </View>
+        </Card>
+      ))}
+
+      {myRole ? (
+        <View style={styles.members}>
+          <SectionLabel>Coach’s corner</SectionLabel>
+          {isCoach ? (
+            <View style={styles.rowActions}>
+              <Button label="Announce" variant="outline" onPress={coaching.startPushAnnouncement} />
+              <Button label="Push a program" variant="outline" onPress={coaching.startPushProgram} />
+              <Button label="Push a workout" variant="outline" onPress={coaching.startPushWorkout} />
+            </View>
+          ) : null}
+          {coaching.posts.length === 0 ? (
+            <Body variant="small">Nothing from the coaches yet.</Body>
+          ) : (
+            coaching.posts.map(renderPush)
+          )}
+        </View>
       ) : null}
 
       {canSee ? (
@@ -290,17 +384,50 @@ export default function TeamScreen() {
           <SectionLabel>{members.length === 1 ? '1 member' : `${members.length} members`}</SectionLabel>
           {members.map((m) => {
             const who = personLabels({ username: m.username, displayName: m.displayName });
+            const assigned = isCoach ? coaching.assignmentsOf(m.userId) : [];
             return (
-              <Pressable
-                key={m.userId}
-                accessibilityRole="button"
-                accessibilityLabel={`Open ${who.name}'s profile`}
-                onPress={() => router.push({ pathname: '/profile/[id]', params: { id: m.userId } })}
-                style={styles.memberRow}
-              >
-                <Body style={styles.memberName}>{who.name}</Body>
-                <Body variant="small">{roleLabel(m.role)}</Body>
-              </Pressable>
+              <View key={m.userId} style={styles.memberBlock}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open ${who.name}'s profile`}
+                  onPress={() => router.push({ pathname: '/profile/[id]', params: { id: m.userId } })}
+                  style={styles.memberRow}
+                >
+                  <Body style={styles.memberName}>{who.name}</Body>
+                  <Body variant="small">{roleLabel(m.role)}</Body>
+                </Pressable>
+                {(isOwner && m.role !== 'owner') || (isCoach && m.userId !== me) ? (
+                  <View style={styles.rowActions}>
+                    {isOwner && m.role !== 'owner' ? (
+                      <Button
+                        label={m.role === 'coach' ? 'Remove coach' : 'Make coach'}
+                        variant="ghost"
+                        disabled={coaching.busy}
+                        onPress={() => coaching.setRole(m.userId, m.role === 'coach' ? 'member' : 'coach')}
+                      />
+                    ) : null}
+                    {isCoach && m.userId !== me ? (
+                      <Button
+                        label="Assign a program"
+                        variant="ghost"
+                        accessibilityLabel={`Assign a program to ${who.name}`}
+                        onPress={() => coaching.startAssign(m.userId)}
+                      />
+                    ) : null}
+                  </View>
+                ) : null}
+                {assigned.map((a) => (
+                  <View key={a.programId} style={styles.rowActions}>
+                    <Body variant="small">Assigned: {coaching.programName(a.programId) ?? 'a program'}</Body>
+                    <Button
+                      label="Revoke"
+                      variant="ghost"
+                      disabled={coaching.busy}
+                      onPress={() => coaching.revokeAssignment(a)}
+                    />
+                  </View>
+                ))}
+              </View>
             );
           })}
           <SectionLabel style={styles.feedLabel}>Team feed</SectionLabel>
@@ -364,6 +491,7 @@ export default function TeamScreen() {
         }
         showsVerticalScrollIndicator={false}
       />
+      {coaching.modals}
     </Screen>
   );
 }
@@ -393,13 +521,31 @@ const styles = StyleSheet.create({
     marginTop: spacing.xl,
     gap: spacing.xs,
   },
+  memberBlock: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  rowActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  assignment: {
+    marginTop: spacing.md,
+    gap: spacing.sm,
+  },
+  push: {
+    gap: spacing.xs,
+  },
+  pushText: {
+    color: colors.text,
+  },
   memberRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     minHeight: 44,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
   },
   memberName: {
     color: colors.text,

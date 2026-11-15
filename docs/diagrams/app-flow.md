@@ -59,7 +59,7 @@ flowchart TD
     PrivacyQ["postPrivacy.ts (B26): setPostVisibility(client, db, me, target, next) →<br/>posts.update({visibility}).eq(id).eq(user_id, me).select(id); 0 rows → 'can't be changed right now',<br/>error / offline → 'Couldn't change who can see this post…'; never throws; online only, nothing queued.<br/>On success: astra.db posts row + (workout post) workouts row get the new visibility, no outbox lines,<br/>then notifyLocalWrite; VISIBILITY_WORDS / VISIBILITY_ORDER: the one spelling of the three audiences"]
     CommentQ["comments.ts (B23): loadComments → comments.select(…, author:profiles) eq post_id<br/>order created_at, id asc, limit 200; addComment → commentBodyError first<br/>(commentLimits.ts: 500 chars, not blank — mirrors the CHECK), then insert(…).select().single()"]
     FollowQ["follows.ts: searchLifters (sanitized ilike on username / display_name,<br/>not me, not in my blocks, limit 20, + which I follow);<br/>follow = insert follows row (duplicate = ok; RLS refusal → 'You can't follow this lifter.');<br/>unfollow = delete my row; results carry avatar_url (B25)"]
-    ProfileQ["profile.ts (B25): loadProfileRow (profiles row) · loadProfileHeader = row + rpc follow_counts<br/>+ (others) my follows row → viewerFollows; updateProfile → profiles.update eq id = me<br/>(23505 username → 'That username is taken.', 23514 → the box's message, else the calm line);<br/>loadWorkoutHistory → workouts.select(HISTORY_SELECT) eq user_id, ended_at not null,<br/>[.or(beforeStartedFilter)] order started_at, id desc, limit 20;<br/>loadProfilePrs → personal_records.select(…, exercise:exercises(name)) eq user_id → groupPrs"]
+    ProfileQ["profile.ts (B25): loadProfileRow (profiles row) · loadProfileHeader = row + rpc follow_counts<br/>+ (others) my follows row → viewerFollows; updateProfile → profiles.update eq id = me<br/>(23505 username → 'That username is taken.', 23514 → the box's message, else the calm line);<br/>loadWorkoutHistory → workouts.select(HISTORY_SELECT) eq user_id, ended_at not null,<br/>[.or(beforeStartedFilter)] order started_at, id desc, limit 20;<br/>loadProfilePrs → personal_records.select(…, exercise:exercises(name)) eq user_id → groupPrs;<br/>B37 loadWorkoutDetail → workouts.select(WORKOUT_DETAIL_SELECT: entries, exercise name, sets) eq id<br/>(RLS: visibility, or the coach arm) → entries / sets sorted by position, or null"]
     ModQ["moderation.ts (B27, SOC-8): report(client, me, {kind, id}, reason, details) → reports.insert<br/>(reporter_id, target_kind, target_id, reason, trimmed details or null — never the reported user);<br/>23505 (already reported) = thanks; else 'That report didn't go through…'; reportPost / reportComment wrap it;<br/>muteUser / unmuteUser → insert / delete mutes (muter_id = me); blockUser / unblockUser → blocks;<br/>re-tap 23505 = ok; relationTo → my blocks + mutes rows for one profile → {blocking, muting}"]
   end
   ModQ -->|"insert reports (RLS: as me, content I can see, not my own; trigger stamps the author);<br/>insert / delete mutes, blocks (own rows; block trigger removes follows both ways)"| DB
@@ -106,7 +106,20 @@ flowchart TD
   StartSess -->|"opens on the prefilled session"| Logger
   Tabs --> Communities["Communities (app/(tabs)/communities.tsx, B36: TEAM-1)<br/>Teams: Invites (Join / Decline) · Your teams (TeamListItem → team page) ·<br/>Create a team · Find teams (searchTeams, debounced; Join on rows I can join now);<br/>offline → TEAMS_OFFLINE + Retry; reloads on focus<br/>Gyms: still a placeholder card (B50)"]
   Communities -->|"Create a team: router.push('/team/new')"| NewTeamScr["New team (app/team/new.tsx, B36)<br/>name 1–80 via assertValidTeamName (says when too long);<br/>Create team → createTeam → router.replace team/[id]; Back"]
-  Communities -->|"tap a team: router.push('/team/[id]')"| TeamScr["Team page (app/team/[id]/index.tsx, B36: TEAM-1, TEAM-2)<br/>name + mode; Join team / 'You're invited — Join' / closed line / Leave team (not the owner);<br/>owner only: Who can join chips (Open | Invite only → setJoinMode) + Invite lifters;<br/>Members (tap → profile) and Team feed (PostCards, 20 a page, pull to refresh)<br/>— both only for members or open teams; missing → 'isn't available'; offline → Retry"]
+  Communities -->|"tap a team: router.push('/team/[id]')"| TeamScr["Team page (app/team/[id]/index.tsx, B36: TEAM-1, TEAM-2)<br/>name + mode; Join team / 'You're invited — Join' / closed line / Leave team (not the owner);<br/>owner only: Who can join chips (Open | Invite only → setJoinMode) + Invite lifters;<br/>Members (tap → profile) and Team feed (PostCards, 20 a page, pull to refresh)<br/>— both only for members or open teams; missing → 'isn't available'; offline → Retry<br/>B37 (TEAM-3, TEAM-5), members only: 'Coaches of this team can see your training log.';<br/>assignment banners (View / Dismiss); Coach's corner = pushes newest 20 (announcement text,<br/>program / workout cards → TeamProgramSheet; author: Remove); coaches (owner ∪ coach):<br/>Announce · Push a program · Push a workout; roster: owner Make coach / Remove coach,<br/>coaches Assign a program + 'Assigned: X' rows with Revoke"]
+  TeamScr -->|"on load (after the roster): reload(isMember, isCoach); every action → page re-read"| CoachHook["useTeamCoaching (components/teams, B37)<br/>loadTeamPosts + myAssignments (+ teamAssignments, listPrograms for names if coach);<br/>then each referenced program / workout payload fetched once (names the cards);<br/>hosts ProgramPickerSheet (onPick mode), CoachPushSheet, TeamProgramSheet"]
+  CoachHook -->|"Push a program / Push a workout / Assign: ProgramPickerSheet onPick (no run started)"| PickerSheet
+  CoachHook --> PushSheet["CoachPushSheet (components/teams, B37, a Modal)<br/>announcement box (≤ 2000) → Push; or the picked program's workouts<br/>(readProgramTree on the coach's phone) → tap one to push; refusal line"]
+  PushSheet -->|"readProgramTree(db, me, programId)"| LocalDB
+  CoachHook --> TeamSheetC["TeamProgramSheet (components/teams, B37, a Modal)<br/>payload weeks → workouts → slots + targets (display unit); null → 'no longer available';<br/>footer: assignment → Start program · pushed program → Save to my programs ·<br/>pushed workout → Start this workout; button gone once done"]
+  TeamSheetC -->|"Start program / Save: createProgramFromPayload (one transaction, member-owned,<br/>coach's customs → no exercise) → [Start] startProgramRun → removeAssignment"| CopyProg["programs/copyProgram.ts (B37)<br/>payload → new program, weeks, workouts, slots (fresh ids, positions 0..n)<br/>via writeLocalRowsTx ×4 → outbox → normal program sync"]
+  CopyProg --> LocalDB
+  TeamSheetC -->|"Start this workout: startPushedWorkout (title, exercises + target notes,<br/>no program link, skips what canLogExercise refuses) → router.push('/active-workout')"| Logger
+  CoachHook --> CoachMod["social/teamCoaching.ts (B37) — online only<br/>loadTeamPosts · pushAnnouncement (assertValidTeamAnnouncement) · pushProgram · pushWorkout ·<br/>deleteTeamPost · assignProgram · removeAssignment · myAssignments · teamAssignments ·<br/>fetchProgramPayload / fetchWorkoutPayload (parsed, never trusted raw); 42501 → calm sentence"]
+  CoachHook -->|"Make coach / Remove coach: setMemberRole"| TeamsMod
+  CoachMod -->|"team_posts, team_assignments (RLS decides);<br/>rpc team_program_payload / team_workout_payload (null unless pushed/assigned here)"| DB
+  ProfileView -->|"others' History row tap (B37): router.push('/session/[id]')"| SessionScr["Someone's workout (app/session/[id].tsx, B37, TEAM-5)<br/>read-only, online: title, details, notes, supersets, every set (formatDropSet), notes;<br/>unreadable custom → 'Custom exercise'; withheld → 'isn't available'; offline → Retry"]
+  SessionScr -->|"loadWorkoutDetail(client, id)"| ProfileQ
   NewTeamScr --> TeamScr
   Home -->|"Your teams chip (B36, SOC-10): router.push('/team/[id]');<br/>'N team invites' chip → Communities"| TeamScr
   ProfileView -->|"Teams section row (B36, YOU-6): router.push('/team/[id]')"| TeamScr
@@ -128,7 +141,7 @@ flowchart TD
   Home -->|"card author tap (B25): router.push('/profile/[id]')"| ProfileScr["Profile (app/profile/[id].tsx, B25)<br/>ProfileView for the route id (my own id → my own view); Back"]
   FindScr -->|"card tap (B25): router.push('/profile/[id]')"| ProfileScr
   ProfileScr --> ProfileView
-  ProfileView["ProfileView (components/profile, B25)<br/>header: Avatar (public avatars URL, else letter) · display name · @username · bio<br/>(own null → 'Add a bio…', other null → 'No bio yet.') · Followers / Following counts ('—' while unknown);<br/>own: Edit profile · other: FollowButton (optimistic; refusal flips back + line) → header re-read so counts match;<br/>header offline → 'Counts and posts need a connection.' + Retry; no profile row → 'This lifter isn't available.';<br/>tabs Posts | History | PRs (ChoiceChips), reloaded on focus, Posts / History page at the list end:<br/>B27, others only: Mute / Unmute and Block / Unblock under Follow (Follow + Mute hidden while blocking);<br/>'You muted this lifter…' / 'You blocked this lifter…' line; refusal → calm line;<br/>Posts = PostCards (vote, comments, others' ⋯ report; own: the B26 visibility chip, success rewrites the tab's list) · History own = WorkoutListItem → workout/[id], other = not tappable rows<br/>· PRs = one card per exercise, formatPrLine in the viewer's unit"]
+  ProfileView["ProfileView (components/profile, B25)<br/>header: Avatar (public avatars URL, else letter) · display name · @username · bio<br/>(own null → 'Add a bio…', other null → 'No bio yet.') · Followers / Following counts ('—' while unknown);<br/>own: Edit profile · other: FollowButton (optimistic; refusal flips back + line) → header re-read so counts match;<br/>header offline → 'Counts and posts need a connection.' + Retry; no profile row → 'This lifter isn't available.';<br/>tabs Posts | History | PRs (ChoiceChips), reloaded on focus, Posts / History page at the list end:<br/>B27, others only: Mute / Unmute and Block / Unblock under Follow (Follow + Mute hidden while blocking);<br/>'You muted this lifter…' / 'You blocked this lifter…' line; refusal → calm line;<br/>Posts = PostCards (vote, comments, others' ⋯ report; own: the B26 visibility chip, success rewrites the tab's list) · History own = WorkoutListItem → workout/[id], other = rows → session/[id] (B37)<br/>· PRs = one card per exercise, formatPrLine in the viewer's unit"]
   ProfileView -->|"own header: saveOwnProfile on load; read first at mount (offline identity)"| OwnProfileStore[("kv-store key astra.social.ownProfile.userId<br/>JSON v1: username, displayName, bio, avatarPath<br/>(no counts); per account, not synced")]
   ProfileView -->|"own History: listPastWorkouts(db, me, 20, before-cursor) · own PRs: allCurrentPrs (workout/prs.ts + prList.groupPrs)"| LocalDB
   ProfileView --> ProfileQ
@@ -676,7 +689,18 @@ flowchart TD
    posts as the usual cards, showing only what you could see anyway. An invite-only team you
    aren't in shows just its name. Home shows a **Your teams** chip per team (→ its page), and
    every profile has a **Teams** section of the lifter's teams you may see.
-26. Everything else is a placeholder that renders its final layout with inert controls
+26. **Team coaching (B37, TEAM-3, TEAM-5) — needs a connection.** The owner taps **Make coach**
+   on a member's row (and **Remove coach** to undo); the owner always counts as a coach. Coaches
+   get **Announce**, **Push a program** and **Push a workout** in the team page's **Coach's
+   corner**, where every member sees the pushes newest first. Tapping a pushed program opens it
+   (weeks, workouts, targets) with **Save to my programs**; a pushed workout offers **Start this
+   workout** (the logger opens prefilled, linked to no program). A coach taps **Assign a program**
+   on a member's row; the member sees "Your coach assigned …" → **View** → **Start program**: the
+   program is copied into their own programs and becomes their active run (Workout tab); or
+   **Dismiss**. Members are told "Coaches of this team can see your training log": a coach opening
+   a member's profile sees their whole History — private workouts too — and a row opens the full
+   session (`/session/[id]`). Not PRs, posts, photos or body data. A block or leaving ends it.
+27. Everything else is a placeholder that renders its final layout with inert controls
    (Marketplace, and the Gyms half of Communities).
 
 ## Data path today
@@ -1016,7 +1040,15 @@ flowchart TD
   votes; teams are never stored on the phone, so no device table, outbox or sync change. Every
   rule (who may join, switch, invite, leave, see a roster) is the server's RLS; the module maps
   refusals to sentences and retries "am I already a member?" after a refused join (a double tap on
-  an invite-only team). The Team feed is `loadFeedPage` with the roster's ids.
+  an invite-only team). The Team feed is `loadFeedPage` with the roster's ids. Since B37 it also
+  has `setMemberRole` and `isCoachRole`.
+- **Team coaching** (B37): `social/teamCoaching.ts` is the one home of pushes, assignments and the
+  two payload functions (online only). `components/teams/useTeamCoaching.tsx` is the team page's
+  coaching state and actions; `CoachPushSheet` and `TeamProgramSheet` are its two modals, and it
+  reuses `ProgramPickerSheet` in its `onPick` mode. `programs/copyProgram.ts` turns a payload into
+  a member-owned program in one transaction (the only new write path is the ordinary
+  `writeLocalRowsTx`); `workout/startPushedWorkout.ts` starts one pushed workout in the logger.
+  `app/session/[id].tsx` is the read-only, online view of anyone's workout the server lets you see.
 - `components/auth/` holds SignInForm, SignUpForm, BirthdateInput and their shared layout styles.
   The route files in `app/(auth)/` only wire them to the router.
 - `components/workout/` holds EntryCard (one exercise in the logger), ExercisePicker (the

@@ -32,6 +32,9 @@ customs-only CHECK; see "Custom exercises"), `20261115193156_programs.sql` (B34,
 `program_runs` with owner-only RLS and `workouts.program_workout_id`; see "Program runs"),
 `20261115212541_teams.sql` (B36, applied live — `teams`, `team_members`, `team_invites`, the
 `team_join_mode` / `team_role` enums, the owner-row and invite-consume triggers; see "Teams"),
+`20261115222643_team_coaching.sql` (B37, applied live — role update policy, `team_posts`,
+`team_assignments`, the `team_post_kind` enum, coach log access on workouts / entries / sets, and
+the two payload functions; see "Team coaching"),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -92,6 +95,14 @@ erDiagram
   teams ||--o{ team_invites : "invites (cascade)"
   profiles ||--o{ team_invites : "user_id invited (cascade)"
   team_members ||..o{ posts : "Team feed: posts where user_id in the roster (no FK; posts RLS decides)"
+  teams ||--o{ team_posts : "pushes (cascade, B37)"
+  profiles ||--o{ team_posts : "author_id pushes (cascade)"
+  programs |o--o{ team_posts : "program_id: a pushed program (cascade)"
+  program_workouts |o--o{ team_posts : "program_workout_id: a pushed workout (cascade)"
+  teams ||--o{ team_assignments : "assigns (cascade, B37)"
+  profiles ||--o{ team_assignments : "user_id assignee / assigned_by coach (both cascade)"
+  programs ||--o{ team_assignments : "program_id: the coach's program (cascade)"
+  team_members ||..o{ workouts : "coach log access: a coach reads members' workouts (no FK; RLS arm)"
 
   auth_users {
     uuid id PK "managed by Supabase Auth"
@@ -375,7 +386,7 @@ erDiagram
   team_members {
     uuid team_id PK,FK "PK (team_id, user_id): one row per lifter per team"
     uuid user_id PK,FK
-    team_role role "owner (trigger only), coach (B37), member"
+    team_role role "owner (trigger only), coach (set by the owner, B37), member"
     timestamptz joined_at
   }
 
@@ -384,7 +395,68 @@ erDiagram
     uuid user_id PK,FK "the invitee; row deleted when they join"
     timestamptz created_at
   }
+
+  team_posts {
+    uuid id PK "server default gen_random_uuid (online-only)"
+    uuid team_id FK
+    uuid author_id FK "the coach who pushed it"
+    team_post_kind kind "announcement, program or workout"
+    text body "announcement only; 1 to 2000 characters (CHECK)"
+    uuid program_id FK "program pushes only (CHECK)"
+    uuid program_workout_id FK "workout pushes only (CHECK)"
+    timestamptz created_at "immutable: no update policy"
+  }
+
+  team_assignments {
+    uuid team_id PK,FK "PK (team_id, user_id, program_id)"
+    uuid user_id PK,FK "the assignee"
+    uuid program_id PK,FK "the coach's program"
+    uuid assigned_by FK "the coach"
+    timestamptz created_at "row deleted when the member starts or dismisses it"
+  }
 ```
+
+## Team coaching (B37)
+
+Migration `20261115222643_team_coaching.sql`. Online-only like the rest of Teams.
+
+- **Coaches.** The owner always counts as a coach (`private.is_team_coach(tid)` = caller's role is
+  `owner` or `coach` — the one home of the rule). Policy `owners change member roles` on
+  `team_members` (update): only the owner, never on the owner row (`using role <> 'owner'`), and
+  the new role must be `coach` or `member` (`with check`). UPDATE is revoked at table level and
+  granted back on `(role)` only, so `user_id` / `team_id` can't be rewritten (42501, probed).
+- **`team_posts`** (pushes). Insert: as yourself, a coach of the team, and a `program_id` /
+  `program_workout_id` you own (`owns_program`, walking `workout_week` → `week_program` for a
+  workout). Read: any member of the team (`is_team_member`). Delete: the author. No update. Three
+  CHECKs make the payload match the kind exactly.
+- **`team_assignments`.** Insert: `assigned_by` = you, a coach of the team, your own program, an
+  assignee who is on the team (`private.user_in_team(tid, uid)`), no block either way. Read and
+  delete: the assignee or any coach of the team. The member's phone copies the program and starts
+  its run, then deletes the row (no status column, no trigger).
+- **Payload functions** (`public`, security definer, `stable`, EXECUTE revoked from public/anon,
+  granted to authenticated): `team_program_payload(p_team, p_program)` returns the live program
+  tree as JSON (`{name, weeks:[{position, workouts:[{name, position, exercises:[{exercise_id,
+  exercise_name, position, target_*}]}]}]}`, ordered (position, id) at every level) — or **null**
+  unless the caller is a member of the team AND the program was pushed to it (a `program` post) or
+  assigned to the caller there, AND the program is not soft-deleted.
+  `team_workout_payload(p_team, p_program_workout)` returns one live program workout plus
+  `program_name`, same gate with a `workout` post. Both share `private.program_workout_json(pwid)`
+  (definer, no gate of its own — `private` is not exposed). The program tables' own RLS is
+  untouched (still author-only), so nothing of the coach's program reaches a member's sync mirror.
+- **Coach log access (TEAM-5).** `private.coach_reads_logs(owner)`: the caller is owner/coach of a
+  team that `owner` is a member of, and no block either way. It is OR'd into the **workouts**
+  select policy and into `private.can_read_workout_log(wid)`, which the **workout_exercises** and
+  **sets** select policies now use. It ignores visibility — a coach sees `private` workouts — and
+  mutes. Deliberately NOT widened: `private.workout_visible` (posts use it), `private.can_view_workout`
+  (personal records read through it via `can_view_set`), analyses, body data, storage. Access ends
+  the moment the membership or role row changes.
+- Live-probed at B37 (one rolled-back DO block; owner, coach, two members, outsider): member
+  self-promote 0 rows; owner promotes 1; promote-to-owner, `user_id` rewrite, pushing someone else's
+  program or workout, a malformed post, assigning an outsider and a member's push all refused; the
+  coach reads the member's private workout, its entry and its set but 0 PRs and 0 posts; the other
+  member and the outsider read 0; members read 3 pushes, the outsider 0; the member's payloads
+  return the tree, a never-pushed / someone else's / soft-deleted program and the outsider's calls
+  return null; anon has no EXECUTE; after a block the coach reads 0.
 
 ## Teams (B36)
 
@@ -396,9 +468,9 @@ and every create / join / switch / invite is a direct API call (the votes preced
   `invite` mode only a lifter holding a `team_invites` row may join. Inviting works in both modes.
 - **Owner = creator.** Inserting a `teams` row fires `on_team_created` (`private.handle_new_team`,
   security definer), which writes the creator's `owner` membership row in the same transaction. No
-  client can write an owner or coach row (the join policy allows `role = 'member'` only), and no
-  B36 policy changes roles, so the owner is always the creator. `coach` exists in the enum for B37
-  and grants nothing yet.
+  client can write an owner or coach row (the join policy allows `role = 'member'` only), and the
+  B37 role policy never touches the owner row, so the owner is always the creator. `coach` is set
+  by the owner from B37 (see "Team coaching").
 - **Joining uses the invite up.** Inserting a `team_members` row fires `on_team_member_created`
   (`private.handle_new_team_member`, security definer), which deletes that lifter's invite to that
   team. So an invite row always means "may join and hasn't yet".
@@ -829,8 +901,9 @@ does not own, so another user's public workout can never be analysed over its ow
 - `pr_kind`: `true1rm`, `repMax`, `e1rm`. These are exactly the app's `PrKind` names in
   `@training-math`. Used by `personal_records.kind`.
 - `team_join_mode` (B36): `open`, `invite`. Used by `teams.join_mode`.
-- `team_role` (B36): `owner`, `coach`, `member`. Used by `team_members.role`; `coach` is unused
-  until B37.
+- `team_role` (B36): `owner`, `coach`, `member`. Used by `team_members.role`; `coach` is granted
+  by the owner (B37).
+- `team_post_kind` (B37): `announcement`, `program`, `workout`. Used by `team_posts.kind`.
 
 ## What happens automatically (triggers)
 
@@ -907,8 +980,8 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `follows` | rows you are part of | follow as yourself; remove follows you are part of |
 | `blocks` | only rows where you are the blocker | manage your own block list |
 | `exercises` | launch library (`owner_id` null) plus your own | create, update, delete only your own |
-| `workouts` | per the visibility rule below | insert, update, delete only your own |
-| `workout_exercises`, `sets` | visible when their workout is | only the workout's owner |
+| `workouts` | per the visibility rule below, **or** (B37) you coach a team its owner is on and no block either way (`private.coach_reads_logs`) — private workouts included | insert, update, delete only your own |
+| `workout_exercises`, `sets` | visible when their workout is, or by the same coach arm (`private.can_read_workout_log`, B37) | only the workout's owner |
 | `personal_records` | your own, plus any record whose source set's workout you may see (`private.can_view_set`, B25) | only your own, and `source_set_id` must be a set in one of your workouts (`private.owns_set`) |
 | `sync_tombstones` | only your own | nobody — only the `record_tombstone` trigger inserts |
 | `workout_analyses` | only your own | nobody — no write policies; only the `analyze-workout` function (service role) upserts |
@@ -926,14 +999,18 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `programs`, `program_weeks`, `program_workouts`, `program_exercises` (B34) | only the program's author (`private.owns_program`) | only the program's author: insert, update, delete — the app soft-deletes |
 | `program_runs` (B35) | only your own (`user_id = auth.uid()`) | insert, update, delete only your own — the app never deletes, it stamps `ended_at` |
 | `teams` (B36) | any signed-in user (discoverable) | insert only as yourself (`created_by`); update only the owner (`private.is_team_owner`), and only `name` / `join_mode` (column grant); no deletes |
-| `team_members` (B36) | your own rows; the whole roster if you are a member; any open team's roster | insert only yourself, only as `member`, only when the team is open or you hold an invite; no updates; delete only your own row and never the owner's (leave) |
+| `team_members` (B36) | your own rows; the whole roster if you are a member; any open team's roster | insert only yourself, only as `member`, only when the team is open or you hold an invite; update (B37) only the owner, only `role`, never the owner row, only to `coach` / `member`; delete only your own row and never the owner's (leave) |
+| `team_posts` (B37) | members of the team | insert only as yourself, as a coach of the team, pushing only your own program / program workout; no updates; delete only your own |
+| `team_assignments` (B37) | the assignee, and the team's coaches | insert only as `assigned_by` yourself, a coach, your own program, to a team member, never across a block; delete by the assignee or a coach |
+| `team_program_payload`, `team_workout_payload` (functions, B37) | signed-in members of the team, for content pushed to it (or a program assigned to you there) and still live; null otherwise | — |
 | `team_invites` (B36) | invites to you, and the owner sees their team's | insert only the owner, never across a block (`private.blocked_either`); delete by the invitee (decline) or the owner (cancel) |
 | `reports` (B27) | moderators only (`private.is_moderator()`) | insert only as yourself, about a post or comment you can currently see (each table's own read rule decides), never your own; no updates or deletes — the founder works the queue via service role |
 
 **Workout visibility rule** (`private.workout_visible`): you always see your own; a block in either
 direction hides everything; a lifter you muted is hidden from you (B27, one way); otherwise `public` is open to any signed-in user, `followers` requires
-that you follow the owner, `private` is owner-only. Child tables ask the same question through the
-workout they belong to; `posts` asks it directly with the post's own author and visibility;
+that you follow the owner, `private` is owner-only. (B37: for `workouts`, `workout_exercises` and
+`sets` only, a team coach's arm is OR'd beside this rule — see "Team coaching".) Child tables ask
+the same question through the workout they belong to; `posts` asks it directly with the post's own author and visibility;
 `votes` and `comments` ask it through their post (`private.can_view_post(post_id)`, B23).
 Another user's **custom exercise** stays hidden (exercises RLS), so in someone else's shared
 workout its name embeds as null and the feed card says "Custom exercise". These checks run as `security definer` helpers in the `private` schema so

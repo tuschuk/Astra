@@ -21,6 +21,7 @@ import {
   HISTORY_PAGE_SIZE,
   loadProfileHeader,
   loadProfilePrs,
+  loadWorkoutDetail,
   loadWorkoutHistory,
   PROFILE_SAVE_FAILED,
   updateProfile,
@@ -125,6 +126,51 @@ function workout(i: number, start: string, finished = true) {
     ],
   };
 }
+
+describe('loadWorkoutDetail (B37)', () => {
+  const set = (id: string, position: number) => ({
+    id,
+    position,
+    reps: 5,
+    weight_kg: 100,
+    rpe: null,
+    is_warmup: false,
+    duration_seconds: null,
+    score: null,
+    drop_set_position: null,
+    notes: null,
+  });
+  const workout = {
+    id: 'w1',
+    user_id: 'member',
+    title: 'Squats',
+    notes: null,
+    started_at: '2026-11-15T09:00:00.000Z',
+    ended_at: '2026-11-15T10:00:00.000Z',
+    workout_exercises: [
+      { id: 'e2', position: 1, superset_group: null, notes: null, exercise: null, sets: [] },
+      { id: 'e1', position: 0, superset_group: 1, notes: 'Belt', exercise: { name: 'Squat' }, sets: [set('s2', 1), set('s1', 0)] },
+    ],
+  };
+
+  it('reads one workout, entries and sets sorted by position, names flattened', async () => {
+    const fake = createFakeSocialClient({ workouts: [workout] });
+    const detail = await loadWorkoutDetail(fake.client, 'w1');
+    expect(detail).toMatchObject({ id: 'w1', userId: 'member', title: 'Squats' });
+    expect(detail?.entries.map((e) => [e.id, e.exerciseName])).toEqual([
+      ['e1', 'Squat'],
+      ['e2', null],
+    ]);
+    expect(detail?.entries[0].sets.map((s) => s.id)).toEqual(['s1', 's2']);
+  });
+
+  it('answers null for a workout the server withholds, and throws offline', async () => {
+    const fake = createFakeSocialClient({ workouts: [workout] });
+    expect(await loadWorkoutDetail(fake.client, 'nope')).toBeNull();
+    fake.setOffline(true);
+    await expect(loadWorkoutDetail(fake.client, 'w1')).rejects.toThrow();
+  });
+});
 
 describe('loadWorkoutHistory', () => {
   it('walks the complete history, newest first, finished only, to the very first workout (YOU-2)', async () => {

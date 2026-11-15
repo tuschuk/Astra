@@ -49,6 +49,10 @@
  *
  *   teams.name text not null check (char_length(name) between 1 and 80)    → 1 … 80 characters
  *
+ * And the `team_posts` table (B37, `20261115222643_team_coaching.sql`):
+ *
+ *   team_posts.body text check (char_length(body) between 1 and 2000)     → 1 … 2000 characters
+ *
  * The upper bounds come from the column types (a value bigger than the column holds is refused
  * just like a broken CHECK). Weight and RPE are checked after rounding to their column's
  * decimals — see `roundWeightKgForStorage` / `roundRpeForStorage`.
@@ -285,6 +289,23 @@ export function assertValidTeamName(name: string): void {
   if (length < 1) throw new RangeError('name must not be empty');
   if (length > MAX_TEAM_NAME_LENGTH) {
     throw new RangeError(`name must be at most ${MAX_TEAM_NAME_LENGTH} characters, got ${length}`);
+  }
+}
+
+/** Longest announcement a coach can push to a team (`team_posts.body`, CHECK between 1 and 2000). */
+export const MAX_TEAM_ANNOUNCEMENT_LENGTH = 2000;
+
+/**
+ * Throws a `RangeError` unless `body` is an announcement the server will store: 1 to 2000
+ * characters, counted the server's way. Pass it already trimmed, so an announcement of only
+ * spaces is refused as empty. Pushes are online-only, so this lets the coach's box say "too long"
+ * before the request instead of after a refusal (B37).
+ */
+export function assertValidTeamAnnouncement(body: string): void {
+  const length = textLength(body);
+  if (length < 1) throw new RangeError('announcement must not be empty');
+  if (length > MAX_TEAM_ANNOUNCEMENT_LENGTH) {
+    throw new RangeError(`announcement must be at most ${MAX_TEAM_ANNOUNCEMENT_LENGTH} characters, got ${length}`);
   }
 }
 

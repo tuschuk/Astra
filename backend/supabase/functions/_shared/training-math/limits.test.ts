@@ -10,8 +10,10 @@ import {
   assertValidProgramWorkoutName,
   assertValidSetFields,
   assertValidSupersetGroup,
+  assertValidTeamAnnouncement,
   assertValidTeamName,
   assertValidWorkoutNotes,
+  MAX_TEAM_ANNOUNCEMENT_LENGTH,
   assertValidWorkoutTitle,
   MAX_ENTRY_NOTES_LENGTH,
   MAX_TEAM_NAME_LENGTH,
@@ -253,5 +255,13 @@ describe('team limits (B36)', () => {
     expect(() => assertValidTeamName('🏋'.repeat(80))).not.toThrow();
     expect(() => assertValidTeamName('')).toThrow(/empty/);
     expect(() => assertValidTeamName('x'.repeat(81))).toThrow(RangeError);
+  });
+
+  it('assertValidTeamAnnouncement accepts 1…2000 characters (an emoji counted once) and refuses empty or 2001', () => {
+    expect(MAX_TEAM_ANNOUNCEMENT_LENGTH).toBe(2000);
+    expect(() => assertValidTeamAnnouncement('x')).not.toThrow();
+    expect(() => assertValidTeamAnnouncement('🏋'.repeat(2000))).not.toThrow();
+    expect(() => assertValidTeamAnnouncement('')).toThrow(/empty/);
+    expect(() => assertValidTeamAnnouncement('x'.repeat(2001))).toThrow(RangeError);
   });
 });
