@@ -37,6 +37,12 @@
  * reports, so "tapped twice" paths can be tested. The server's report trigger and the RLS that
  * makes muted/blocked content disappear are not imitated — they were probed live.
  *
+ * B28 adds the re-share insert's one refusal the app handles: a second re-share of the same post
+ * by the same lifter is 23505 (the partial unique index). Re-shares are seeded with
+ * `shared_post_id` (feedFixtures `rawReshare`), and the app reads their originals back from
+ * `posts` by id. The server's re-share trigger (chains, self re-shares, the flair stamp) and the
+ * read rule that hides a re-share whose original you can't see are not imitated — probed live.
+ *
  * What it does NOT do: row-level security or general embedding. Posts are seeded already shaped
  * the way the server's embed returns them (author, flair and workout nested in), and the follow
  * insert imitates the one RLS refusal the app handles (a block in either direction). Server-side
@@ -376,6 +382,14 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       const key = uniqueKeys[table];
       if (key && rows.some((x) => key.every((k) => x[k] === row[k]))) {
         return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } };
+      }
+      // B28: one re-share per lifter per post (the partial unique index `posts_reshare_unique`).
+      if (
+        table === 'posts' &&
+        row.shared_post_id != null &&
+        rows.some((x) => x.user_id === row.user_id && x.shared_post_id === row.shared_post_id)
+      ) {
+        return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "posts_reshare_unique"' } };
       }
       rows.push(row);
       return { data: null, error: null };

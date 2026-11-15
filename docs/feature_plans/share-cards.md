@@ -250,6 +250,50 @@ Jest + fakes for everything below; live probes at Gate 2 / device:
    message, never a crash. If Expo Go still can't capture, the card screen ships and LOG-8
    stays Built-not-Done until a dev build — recorded rather than worked around.
 
+## Build record (builder, Nov 15, 2026) — deviations from the plan
+
+- **Migrations:** `20261115154653_reshares.sql` (everything under "Server migration";
+  `posts_kind_check` verified in `pg_constraint` before the drop) and
+  `20261115160346_reshare_trigger_columns.sql` (review fix, below). Both applied live, files
+  renamed to the recorded versions.
+- **D1 — originals come in a second request (Risk 1's fallback).** Probed live with the publishable
+  key: `original:posts!posts_shared_post_id_fkey(…)` is refused on `posts` (PGRST200 — the
+  constraint-name hint finds no self-relationship) and through `post_hot_scores` the relationship is
+  ambiguous both ways under one name (PGRST201); a `!shared_post_id` column hint parses on `posts`
+  but not through the view. So `FEED_SELECT` carries only `shared_post_id`, and `loadOriginals`
+  reads `posts?select=POST_CONTENT_SELECT&id=in.(…)` beside the scores request, only when the page
+  has re-shares — one code path for both orders. RLS still decides: an original the viewer can't
+  see doesn't come back and the re-share is dropped (it is already hidden by the read rule).
+- **D2 — the trigger also guards updates.** `posts_reshare_shape` fires before insert **or an
+  update naming `shared_post_id`, `flair_id` or `kind`** — otherwise the owner's update policy
+  would let a hand-rolled request swap a re-share's flair (a downvotable flair on Physique Check
+  content) or re-point it. Review found the first version (any update) also blocked a
+  visibility-only update once the original went private; the second migration narrowed it to
+  those columns. Probed: flair swap still lands on the original's flair; a visibility update on a
+  hidden re-share now simply matches no row (the select policy hides the re-share from its own
+  owner too — "visible to exactly who may see both" — and the B26 chip reports "can't be changed").
+- **D3 — the confirm "sheet" is an inline confirm row** under the footer ("Re-share this post to
+  your followers?" · Cancel · Re-share now), the B26 visibility-chooser pattern, rather than a
+  modal. Same behaviour: asks first, one send, one-line result.
+- **D4 — shared spellings moved into `workout/format.ts`** (review): `setsSummaryLabel` ("5 sets ·
+  1 warm-up") and `sessionPrLine` ("Squat · 5RM · 225 lb", with `DELETED_EXERCISE`) are now used
+  by both the analysis screen and the card, so "the analysis screen's exact spellings" can't drift.
+- **D5 — Share on a feed card** appears on the viewer's own **workout** posts only (as planned), and
+  Re-share is also hidden on a re-share of the viewer's own post (`canReshare`), since the server
+  would refuse it.
+- **Card styling:** maroon→black gradient, the "New PR(s)" heading in gold (brand red on the
+  maroon band read too faintly), a thin red stripe at the foot; sizes scale from a 360-pt design
+  width so every phone draws the same card. `shareAsync` also gets `UTI: 'public.png'` (iOS) and a
+  dialog title (Android).
+- **Live probes run by the builder** (three synthetic users in one rolled-back transaction):
+  stamped flair; double re-share → 23505; self re-share and re-share-of-a-re-share refused; a
+  downvote on the Physique Check re-share refused; C (follows B only) sees B's re-share and it is in
+  the Hot view with `shared_post_id`; A makes the original private → hidden from C and from B, and
+  a new re-share of it is refused; C mutes A → hidden, unmute → back; original deleted → re-share
+  gone. **Not probed:** the full feed select through PostgREST as a signed-in user (no user token in
+  the builder session) — the anon-key probe showed both selects parse (`posts` 200; originals
+  request uses the same content select the feed already used).
+
 ## Grilling decisions (settled)
 
 Run via `mattpocock-skills:grilling` in the planner session, self-answered at full severity

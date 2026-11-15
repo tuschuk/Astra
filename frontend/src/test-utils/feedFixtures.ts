@@ -86,6 +86,32 @@ export function rawPost(
 }
 
 /**
+ * A re-share (B28) as the server sends it for `FEED_SELECT`: no workout, no photo, just the id of
+ * the post it passes on. The flair is the original's, as the server's trigger stamps it. The
+ * original itself must also be in the fake's posts table for the feed's second request to find.
+ */
+export function rawReshare(spec: {
+  id: string;
+  author: ReturnType<typeof profile>;
+  createdAt: string;
+  original: { id: string; flair: { id: string; name: string; upvotes_only?: boolean } };
+}): RawFeedPost & { user_id: string; flair_id: string } {
+  return {
+    id: spec.id,
+    user_id: spec.author.id,
+    flair_id: spec.original.flair.id,
+    created_at: spec.createdAt,
+    kind: 'reshare',
+    image_path: null,
+    visibility: 'public',
+    flair: spec.original.flair,
+    author: spec.author,
+    workout: null,
+    shared_post_id: spec.original.id,
+  };
+}
+
+/**
  * A photo post (B22) as the server sends it: no workout, a photo path in the author's folder.
  * A progress pic is private (as the server insists); a PR photo public — unless overridden.
  */

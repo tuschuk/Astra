@@ -478,3 +478,19 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     types. Merge if a third copy appears.
   - Builder session left a stray `expo start --port 8099` (pid 20408) running — stopping it was
     declined by the permission layer; Gate 2 frees port 8099 anyway.
+- B28 share-cards follow-ups (`share-cards`):
+  - **Device check (Tristen):** analysis → Share → share sheet → post the PNG to another app
+    (Instagram story / Messages) and judge legibility at 1080×1350; Android content-URI handling;
+    whether view-shot captures in Expo Go at all (if not, LOG-8 stays Built until a dev build).
+    Re-share from a second account and see it in a follower's feed.
+  - **Signed-in PostgREST probe of the B28 feed** (Gate 2): a Latest and a Hot read with a real
+    re-share on the page, then the `posts?id=in.(…)` originals read — the builder had no user token;
+    the SQL-level rules were probed as three users.
+  - Un-resharing (delete own re-share) UI — lands with the post-deletion step (policy allows it).
+  - A hidden re-share (its original went private / blocked) is invisible to its own owner too; if
+    owners should see and delete such ghosts, the read rule needs an owner arm — on evidence.
+  - Quote posts (a caption on a re-share), notifying the original author (B47), muscle map / logo
+    asset on the share card, exporting photo posts — not built (plan, Out of scope).
+  - Review judgement calls left as-is: the share-card `router.push` is written in three places and
+    the re-share `useCallback` in two (Home, ProfileView); the footer's three icon+label pressables
+    could share a `FooterAction`. Merge if another footer action arrives.

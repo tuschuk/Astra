@@ -128,6 +128,7 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
           <Stack.Screen name="active-workout" />
           <Stack.Screen name="workout/[id]" />
           <Stack.Screen name="analysis/[id]" />
+          <Stack.Screen name="share-card/[id]" />
           <Stack.Screen name="post-workout/[id]" />
           <Stack.Screen name="edit-workout/[id]" />
           <Stack.Screen name="exercise-history/[exerciseId]" />

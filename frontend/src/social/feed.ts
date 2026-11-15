@@ -5,6 +5,8 @@
  * (SOC-4, SOC-5), and its flair says whether it takes upvotes only — the card's whole footer.
  * Since B24 the feed can also be read ranked by votes ("Hot", from the server's
  * `post_hot_scores` view, SOC-11) instead of newest first, and narrowed to one flair (SOC-9).
+ * Since B28 a post can be a re-share (SOC-6) — someone passing on another lifter's post — whose
+ * original is read in one more request and shown inside the re-share's card.
  *
  * Why this exists: the feed is the one screen that shows other people's workouts, and those are
  * never copied onto the phone (the device holds only the lifter's own rows). So the feed is read
@@ -91,16 +93,37 @@ export interface FeedFlair {
   upvotesOnly: boolean;
 }
 
-/** What every post has, whatever its kind. */
-interface FeedPostBase {
+/** Who posted something; `avatarPath` (B25) is their photo's path in the avatars bucket, or null. */
+export type FeedAuthor = PersonName & { id: string; avatarPath: string | null };
+
+/**
+ * What a post's card body shows, by kind: a shared workout, or (B22) a photo — a progress pic or
+ * a PR moment — named by its path in the `post-images` bucket. (B28) A re-share has no body of
+ * its own; it shows its original's.
+ */
+export type FeedContent = { kind: 'workout'; workout: FeedWorkout } | { kind: ImagePostKind; imagePath: string };
+
+/** What every post has — the parts an original keeps when it is shown inside a re-share (B28). */
+interface FeedPostIdentity {
   id: string;
   createdAt: string;
   /** The post's one flair, straight from the `flairs` table — the app never spells flair names itself. */
   flair: FeedFlair;
-  /** Who posted it; `avatarPath` (B25) is their photo's path in the avatars bucket, or null. */
-  author: PersonName & { id: string; avatarPath: string | null };
+  /** Who posted it. */
+  author: FeedAuthor;
   /** Who may see it (B22: the card tells the owner when a post is private). */
   visibility: WorkoutVisibility;
+}
+
+/**
+ * The post a re-share passes on (B28), as the re-share's card shows it inside a bordered panel:
+ * who posted it, when, and its workout or photo. Never itself a re-share — the server refuses
+ * chains — and it carries no votes or comments: those belong to the re-share row.
+ */
+export type FeedOriginal = FeedPostIdentity & FeedContent;
+
+/** What every feed card has, whatever its kind: the post itself plus its footer numbers. */
+interface FeedPostBase extends FeedPostIdentity {
   /** The net score — upvotes minus downvotes — from the server's `post_scores` view (B23). */
   score: number;
   /** How many comments the post has, from the same view (B23). */
@@ -110,12 +133,14 @@ interface FeedPostBase {
 }
 
 /**
- * One post, shaped for the card that shows it: a shared workout, or (B22) a photo — a progress
- * pic or a PR moment — named by its path in the `post-images` bucket.
+ * One post, shaped for the card that shows it: a shared workout, a photo (B22), or (B28) a
+ * re-share — someone passing on another lifter's post, which carries that original inside it.
+ * The re-share's own id, author, flair (stamped from the original by the server), audience,
+ * votes and comments are its own; only the body is the original's.
  */
 export type FeedPost =
-  | (FeedPostBase & { kind: 'workout'; workout: FeedWorkout })
-  | (FeedPostBase & { kind: ImagePostKind; imagePath: string });
+  | (FeedPostBase & FeedContent)
+  | (FeedPostBase & { kind: 'reshare'; original: FeedOriginal });
 
 /** One page of the feed, and the bookmark for the next one (null when this was the last). */
 export interface FeedPage {
@@ -140,15 +165,34 @@ export interface FeedPage {
  * (`!posts_user_id_fkey`) because, read through the view, the live server also sees a second
  * path to `profiles` (through `votes`) and refuses the bare name as ambiguous. On `posts` the
  * hint names the same relationship it already used.
+ *
+ * B28: this content part is also exactly what a re-share's original is read with
+ * (`loadOriginals`), so the original's body is shaped by the same code as any other post's.
  */
-export const FEED_SELECT =
+export const POST_CONTENT_SELECT =
   'id,created_at,kind,image_path,visibility,' +
   'flair:flairs(id,name,upvotes_only),' +
   'author:profiles!posts_user_id_fkey(id,username,display_name,avatar_url),' +
   'workout:workouts(id,title,notes,started_at,ended_at,' +
   'workout_exercises(id,position,superset_group,exercise:exercises(name),' +
-  'sets(id,position,reps,weight_kg,rpe,is_warmup,drop_set_position,duration_seconds,score))),' +
-  'my_vote:votes(value)';
+  'sets(id,position,reps,weight_kg,rpe,is_warmup,drop_set_position,duration_seconds,score)))';
+
+/**
+ * The feed's select: a post's content (above), plus (B28) `shared_post_id` — which post a
+ * re-share passes on — and the viewer's own vote. The originals themselves come in a second
+ * request (`loadOriginals`): the plan's first choice, embedding the original through the
+ * `shared_post_id` foreign key, is refused by the live server on both orders — on `posts` the
+ * constraint-name hint finds no relationship (PGRST200), and through the Hot view the
+ * self-reference reads both ways under one name (PGRST201), probed at B28 — so this is the
+ * plan's recorded fallback, identical on both orders.
+ */
+export const FEED_SELECT = `${POST_CONTENT_SELECT},shared_post_id,my_vote:votes(value)`;
+
+/**
+ * Reading a re-share's original (B28) straight from `posts` by id: its content and nothing else
+ * (its votes and comments are not shown — the re-share's footer is the re-share's own).
+ */
+export const ORIGINAL_SELECT = POST_CONTENT_SELECT;
 
 /**
  * The columns read from the `post_scores` view, in a second request by post id (B23). The plan's
@@ -188,6 +232,8 @@ export interface RawFeedPost {
       sets: (FeedSet & { weight_kg: number | string | null })[];
     })[];
   } | null;
+  /** B28: for a re-share, the post it passes on; null for every other kind (absent on an original's read). */
+  shared_post_id?: string | null;
   /** The viewer's own vote, as a list of at most one row (the alias filter keeps only theirs). */
   my_vote?: { value: number }[] | null;
   /** Only on a "Hot" read (B24): the post's rank from the view, used solely as the next bookmark. */
@@ -242,21 +288,11 @@ export async function feedAuthorIds(client: SupabaseClient, me: string): Promise
 export const MISSING_FLAIR: FeedFlair = { id: '', name: 'Post', upvotesOnly: false };
 
 /**
- * Turns one server post into the card's shape, or null when there is nothing to show.
- *   - A workout post: exercises sorted into workout order, each exercise's sets into logged
- *     order, the weight made sure to be a number (Postgres `numeric` can arrive as text). Null
- *     when its workout didn't come along (the viewer may not see it) — no empty card.
- *   - A photo post (B22): its photo's path; null if the server sent none (can't happen — the
- *     server's shape rule requires one — so it only guards against a broken reply).
- * A missing flair or author is filled in so the card never crashes.
- * B23: `scores` is the post's `post_scores` row; without one (a broken reply) the score and
- * comment count read 0. The viewer's vote comes from the `my_vote` embed; anything but +1 / −1
- * reads as "no vote".
+ * The parts of a server post every card shows, whatever its kind: id, time, flair, author and
+ * audience. A missing flair or author is filled in so the card never crashes.
  */
-export function toFeedPost(raw: RawFeedPost, scores?: RawPostScore): FeedPost | null {
-  const mine = raw.my_vote?.[0]?.value;
-  const myVote: VoteValue | null = mine === 1 || mine === -1 ? mine : null;
-  const base = {
+function toIdentity(raw: RawFeedPost): FeedPostIdentity {
+  return {
     id: raw.id,
     createdAt: raw.created_at,
     flair: raw.flair
@@ -269,12 +305,23 @@ export function toFeedPost(raw: RawFeedPost, scores?: RawPostScore): FeedPost | 
       avatarPath: raw.author?.avatar_url ?? null,
     },
     visibility: raw.visibility,
-    score: scores?.score ?? 0,
-    commentCount: scores?.comment_count ?? 0,
-    myVote,
   };
+}
+
+/**
+ * A server post's body — its workout or its photo — in the card's shape, or null when there is
+ * nothing to show. Written once and used for a post and (B28) for a re-share's original.
+ *   - A workout post: exercises sorted into workout order, each exercise's sets into logged
+ *     order, the weight made sure to be a number (Postgres `numeric` can arrive as text). Null
+ *     when its workout didn't come along (the viewer may not see it) — no empty card.
+ *   - A photo post (B22): its photo's path; null if the server sent none (can't happen — the
+ *     server's shape rule requires one — so it only guards against a broken reply).
+ *   - A re-share has no body of its own: null here (its caller handles it).
+ */
+export function toFeedContent(raw: RawFeedPost): FeedContent | null {
+  if (raw.kind === 'reshare') return null;
   if (raw.kind === 'progress-pic' || raw.kind === 'pr') {
-    return raw.image_path ? { ...base, kind: raw.kind, imagePath: raw.image_path } : null;
+    return raw.image_path ? { kind: raw.kind, imagePath: raw.image_path } : null;
   }
   if (!raw.workout) return null;
   const entries = [...raw.workout.workout_exercises]
@@ -289,7 +336,6 @@ export function toFeedPost(raw: RawFeedPost, scores?: RawPostScore): FeedPost | 
         .map((set) => ({ ...set, weight_kg: set.weight_kg == null ? null : Number(set.weight_kg) })),
     }));
   return {
-    ...base,
     kind: 'workout',
     workout: {
       id: raw.workout.id,
@@ -300,6 +346,65 @@ export function toFeedPost(raw: RawFeedPost, scores?: RawPostScore): FeedPost | 
       entries,
     },
   };
+}
+
+/**
+ * A re-share's original (B28) in the shape its inner panel shows, or null when there is nothing
+ * to show: the original didn't come back (the viewer may no longer see it), it has no body the
+ * viewer may see, or it is itself a re-share (the server refuses chains; this only guards a
+ * broken reply).
+ */
+export function toFeedOriginal(raw: RawFeedPost | undefined): FeedOriginal | null {
+  if (!raw) return null;
+  const content = toFeedContent(raw);
+  return content ? { ...toIdentity(raw), ...content } : null;
+}
+
+/**
+ * Turns one server post into the card's shape, or null when there is nothing to show — no empty
+ * cards. Its body comes from `toFeedContent`; a missing flair or author is filled in.
+ * B23: `scores` is the post's `post_scores` row; without one (a broken reply) the score and
+ * comment count read 0. The viewer's vote comes from the `my_vote` embed; anything but +1 / −1
+ * reads as "no vote".
+ * B28: a re-share takes its body from its original, looked up in `originals` (the second request,
+ * `loadOriginals`) by `shared_post_id`. A re-share whose original didn't come back — the server
+ * withheld it from this viewer, or it is gone — is dropped like a withheld workout.
+ */
+export function toFeedPost(
+  raw: RawFeedPost,
+  scores?: RawPostScore,
+  originals?: ReadonlyMap<string, RawFeedPost>,
+): FeedPost | null {
+  const mine = raw.my_vote?.[0]?.value;
+  const myVote: VoteValue | null = mine === 1 || mine === -1 ? mine : null;
+  const base = {
+    ...toIdentity(raw),
+    score: scores?.score ?? 0,
+    commentCount: scores?.comment_count ?? 0,
+    myVote,
+  };
+  if (raw.kind === 'reshare') {
+    const original = toFeedOriginal(raw.shared_post_id ? originals?.get(raw.shared_post_id) : undefined);
+    return original ? { ...base, kind: 'reshare', original } : null;
+  }
+  const content = toFeedContent(raw);
+  return content ? { ...base, ...content } : null;
+}
+
+/**
+ * The originals these re-shares pass on (B28), keyed by post id: one request to `posts` by id,
+ * as the viewer — so the server's security returns only originals the viewer may see (and its
+ * read rule already hides any re-share whose original they can't). No ids, no request.
+ */
+export async function loadOriginals(
+  client: SupabaseClient,
+  postIds: readonly string[],
+): Promise<Map<string, RawFeedPost>> {
+  if (postIds.length === 0) return new Map();
+  const { data, error } = await client.from('posts').select(ORIGINAL_SELECT).in('id', [...new Set(postIds)]);
+  throwIfError(error, 'Loading the re-shared posts failed');
+  const rows = (data ?? []) as unknown as RawFeedPost[];
+  return new Map(rows.map((r) => [r.id, r]));
 }
 
 /**
@@ -355,7 +460,8 @@ function cursorAfter(last: RawFeedPost, sort: FeedSort): FeedCursor | null {
  *     rather than silently returning a wrong page.
  *
  * A full page means there may be more, so it returns a bookmark; a short page is the end. Two
- * requests: the posts, then their scores.
+ * requests: the posts, then their scores — and (B28), alongside the scores, a third for the
+ * originals of any re-shares on the page.
  */
 export async function loadFeedPage(
   client: SupabaseClient,
@@ -384,10 +490,15 @@ export async function loadFeedPage(
   // The one cast from the untyped reply, at the seam; everything past here is typed.
   const raw = (data ?? []) as unknown as RawFeedPost[];
   const last = raw[raw.length - 1];
-  const scores = await loadPostScores(client, raw.map((p) => p.id));
+  // B28: the originals of any re-shares on this page, read beside the scores (no re-shares, no request).
+  const sharedIds = raw.flatMap((p) => (p.kind === 'reshare' && p.shared_post_id ? [p.shared_post_id] : []));
+  const [scores, originals] = await Promise.all([
+    loadPostScores(client, raw.map((p) => p.id)),
+    loadOriginals(client, sharedIds),
+  ]);
   return {
     // Dropped posts still count toward the bookmark below, so paging never re-reads them.
-    posts: raw.map((p) => toFeedPost(p, scores.get(p.id))).filter((p): p is FeedPost => p !== null),
+    posts: raw.map((p) => toFeedPost(p, scores.get(p.id), originals)).filter((p): p is FeedPost => p !== null),
     next: raw.length === FEED_PAGE_SIZE && last ? cursorAfter(last, sort) : null,
   };
 }
