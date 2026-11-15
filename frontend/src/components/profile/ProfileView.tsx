@@ -21,6 +21,9 @@
  *     ways; while blocking, there is no Follow button. A muted or blocked profile says so in one
  *     line — its tabs are empty because the server leaves that lifter's content out. After any
  *     change the header, counts and open tab are read again. Their post cards' ⋯ reports a post.
+ *   - (B28) the Posts tab includes the lifter's re-shares (the original shown inside each). On
+ *     someone else's cards, Re-share passes a post on to your own followers; on your own workout
+ *     cards, Share opens the image share card for the phone's share sheet.
  *
  * Where the data comes from:
  *   - your own History and PRs are read from the phone, so they work with no signal, and a past
@@ -79,6 +82,7 @@ import {
   type ProfileHeader,
   type ProfileWorkout,
 } from '@/social/profile';
+import { resharePost, type ReshareResult } from '@/social/reshare';
 import { castVote, clearVote, type VoteResult, type VoteValue } from '@/social/votes';
 import { formatPrLine, workoutDateLabel, workoutDetailsLabel } from '@/workout/format';
 import { listPastWorkouts, type PastWorkoutSummary } from '@/workout/history';
@@ -401,6 +405,13 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
     [client, db, me],
   );
 
+  /** Another lifter's post card's Re-share (B28): sent straight to the server, like a vote. */
+  const reshare = useCallback(
+    (post: FeedPost): Promise<ReshareResult> =>
+      me ? resharePost(client, me, post) : Promise.resolve({ ok: false, reason: 'failed' }),
+    [client, me],
+  );
+
   /** Another lifter's post card's ⋯ → report (B27). */
   const reportPost = useCallback(
     (postId: string, reason: ReportReason, details: string): Promise<ReportResult> =>
@@ -617,6 +628,8 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
           onVote={vote}
           onChangeVisibility={changeVisibility}
           onReport={reportPost}
+          onReshare={reshare}
+          onShareWorkout={(workoutId) => router.push({ pathname: '/share-card/[id]', params: { id: workoutId } })}
           onOpenComments={(postId) => router.push({ pathname: '/post-comments/[id]', params: { id: postId } })}
         />
       );

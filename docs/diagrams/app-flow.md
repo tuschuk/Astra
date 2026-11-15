@@ -53,7 +53,8 @@ flowchart TD
   Home -.-> ReportSheet
   CommentsScr -.-> ReportSheet
   subgraph SocialMod["Social reads (src/social, B20): online only, client passed in, RLS decides visibility"]
-    FeedQ["feed.ts: feedAuthorIds = me + follows.followee_id where follower_id = me;<br/>loadFeedPage(client, me, authors, sort, flairId, after) — B24: Latest → from posts, Hot → from the<br/>post_hot_scores view (same select + hot_score); .select(FEED_SELECT: kind, image_path, visibility,<br/>flair (id, name, upvotes_only — B23), author:profiles!posts_user_id_fkey (hint required through the view, B24),<br/>workout (plain left embed since B22) → entries → exercise name, sets, my_vote:votes(value) — B23)<br/>.in(user_id, authors) .eq(my_vote.user_id, me) [.eq(flair_id, flairId) — B24, SOC-9]<br/>Latest: [.or(beforeCursorFilter)] order created_at desc, id desc;<br/>Hot: [.or(beforeHotCursorFilter: hot_score lt, or eq + id lt)] order hot_score desc, id desc; limit 20;<br/>the bookmark is tagged latest | hot — one from the other order is refused;<br/>then (B23) loadPostScores: post_scores.select(post_id, score, comment_count).in(post_id, page ids);<br/>toFeedPost: photo post → kind + imagePath; workout post → sort entries + sets, weight → number;<br/>+ score, commentCount (0 without a scores row), myVote (+1 / −1 / null);<br/>a workout post whose workout RLS withheld (null) is dropped; appendPage drops repeats"]
+    FeedQ["feed.ts: feedAuthorIds = me + follows.followee_id where follower_id = me;<br/>loadFeedPage(client, me, authors, sort, flairId, after) — B24: Latest → from posts, Hot → from the<br/>post_hot_scores view (same select + hot_score); .select(FEED_SELECT: kind, image_path, visibility,<br/>flair (id, name, upvotes_only — B23), author:profiles!posts_user_id_fkey (hint required through the view, B24),<br/>workout (plain left embed since B22) → entries → exercise name, sets, my_vote:votes(value) — B23)<br/>.in(user_id, authors) .eq(my_vote.user_id, me) [.eq(flair_id, flairId) — B24, SOC-9]<br/>Latest: [.or(beforeCursorFilter)] order created_at desc, id desc;<br/>Hot: [.or(beforeHotCursorFilter: hot_score lt, or eq + id lt)] order hot_score desc, id desc; limit 20;<br/>the bookmark is tagged latest | hot — one from the other order is refused;<br/>then (B23) loadPostScores: post_scores.select(post_id, score, comment_count).in(post_id, page ids);<br/>toFeedPost: photo post → kind + imagePath; workout post → sort entries + sets, weight → number;<br/>+ score, commentCount (0 without a scores row), myVote (+1 / −1 / null);<br/>a workout post whose workout RLS withheld (null) is dropped; appendPage drops repeats;<br/>B28: FEED_SELECT = POST_CONTENT_SELECT + shared_post_id + my_vote; beside the scores, loadOriginals:<br/>posts.select(ORIGINAL_SELECT).in(id, the page's shared_post_ids) (only if the page has re-shares —<br/>the self-embed was refused live, PGRST200 / PGRST201); a reshare row → kind reshare + original<br/>(toFeedOriginal: same body shaping, its own author / flair / date); original missing or a re-share → dropped"]
+    ReshareQ["reshare.ts (B28, SOC-6): resharePost(client, me, post) → posts.insert({id: newUuid, user_id me,<br/>kind reshare, shared_post_id, flair_id (server overwrites), visibility public, created_at});<br/>reshareTarget: a re-share card passes on its ORIGINAL (no chains); never throws:<br/>23505 → 'You've already re-shared this post.', anything else → 'didn't go through'; online only, nothing queued"]
     VoteQ["votes.ts (B23): castVote → votes.upsert(onConflict post_id,user_id);<br/>clearVote → delete where post_id + user_id = me; never throw:<br/>P0001 (upvote-only trigger) → 'This post takes upvotes only.', anything else → 'didn't go through';<br/>voteDelta / nextVote: the card's optimistic arithmetic (the tally itself stays on the server)"]
     PrivacyQ["postPrivacy.ts (B26): setPostVisibility(client, db, me, target, next) →<br/>posts.update({visibility}).eq(id).eq(user_id, me).select(id); 0 rows → 'can't be changed right now',<br/>error / offline → 'Couldn't change who can see this post…'; never throws; online only, nothing queued.<br/>On success: astra.db posts row + (workout post) workouts row get the new visibility, no outbox lines,<br/>then notifyLocalWrite; VISIBILITY_WORDS / VISIBILITY_ORDER: the one spelling of the three audiences"]
     CommentQ["comments.ts (B23): loadComments → comments.select(…, author:profiles) eq post_id<br/>order created_at, id asc, limit 200; addComment → commentBodyError first<br/>(commentLimits.ts: 500 chars, not blank — mirrors the CHECK), then insert(…).select().single()"]
@@ -67,6 +68,12 @@ flowchart TD
   FindScr --> FollowQ
   FeedQ -->|"supabase-js select as the signed-in user"| DB
   VoteQ -->|"upsert / delete votes (RLS + votes_upvote_only trigger)"| DB
+  Home -->|"others' card Re-share (B28) → inline confirm 'Re-share now' → one-line result"| ReshareQ
+  ProfileView -->|"others' card Re-share (B28)"| ReshareQ
+  ReshareQ -->|"insert posts kind reshare (insert RLS: as me, original I can see;<br/>trigger posts_reshare_shape: no self / no chain, flair stamped from the original)"| DB
+  Home -->|"own workout card Share (B28): router.push('/share-card/[id]', workout id)"| ShareCardScr
+  ProfileView -->|"own workout card Share (B28)"| ShareCardScr
+  Home -.->|"re-share card (B28): 'Re-shared from @x' + the original in a bordered panel<br/>(its author tappable → profile, its workout / photo body); footer is the re-share's own"| Home
   Home -->|"own card chip (B26)"| PrivacyQ
   ProfileView -->|"own Posts tab card chip (B26)"| PrivacyQ
   PrivacyQ -->|"update posts.visibility as me (owner update RLS);<br/>trigger sync_workout_visibility moves the workout in the same transaction"| DB
@@ -146,7 +153,7 @@ flowchart TD
     ToolKit -->|"Close / system back: logger still mounted underneath, exactly as left"| Logger
     Logger -->|Finish| EmptyQ
     EmptyQ -->|"yes: 'Nothing logged yet'<br/>Discard workout / Keep lifting"| Logger
-    AnalysisScr["Workout analysis (app/analysis/[id].tsx, B18: ANA-1/2/4, NFR-9)<br/>workout title or date; encouraging headline + message (rule-picked, no AI);<br/>Volume (lifter's unit), Sets ('n sets · k warm-up'), Duration (m:ss);<br/>B19 'Muscles trained' card (ANA-3): front + back body figures (MuscleMap),<br/>trained muscles filled red, opacity 0.25 + 0.75 × intensity, the rest plain;<br/>legend 'Chest, Shoulders, Triceps' (most direct first); hidden when nothing maps;<br/>'New PRs': exercise · book · weight; B21 finish mode (post=1, only from Finish): Next;<br/>View workout; Back;<br/>not-medical-advice statement in EVERY state (incl. loading / missing);<br/>re-read on every focus; works offline<br/>(another user's / unfinished id: 'not on this phone')"]
+    AnalysisScr["Workout analysis (app/analysis/[id].tsx, B18: ANA-1/2/4, NFR-9)<br/>workout title or date; encouraging headline + message (rule-picked, no AI);<br/>Volume (lifter's unit), Sets ('n sets · k warm-up'), Duration (m:ss);<br/>B19 'Muscles trained' card (ANA-3): front + back body figures (MuscleMap),<br/>trained muscles filled red, opacity 0.25 + 0.75 × intensity, the rest plain;<br/>legend 'Chest, Shoulders, Triceps' (most direct first); hidden when nothing maps;<br/>'New PRs': exercise · book · weight; B21 finish mode (post=1, only from Finish): Next;<br/>View workout; B28 Share (→ share card); Back;<br/>not-medical-advice statement in EVERY state (incl. loading / missing);<br/>re-read on every focus; works offline<br/>(another user's / unfinished id: 'not on this phone')"]
     EmptyQ -->|"no: finish, clear slot,<br/>router.replace(analysis, post=1)"| AnalysisScr
     AnalysisScr -->|"View workout: router.push"| Saved
     Saved -->|"Analysis: router.push (no post=1 → no Next)"| AnalysisScr
@@ -161,6 +168,9 @@ flowchart TD
   PostStep -->|"Post saved: router.replace('/')"| Home
   PostStep -->|"Skip (nothing made): router.replace('/workout')"| Workout
   AnalysisScr -->|"Back with nothing behind: router.replace"| Workout
+  AnalysisScr -->|"Share (B28, LOG-8): router.push('/share-card/[id]')"| ShareCardScr["Share card (app/share-card/[id].tsx, B28: LOG-8, SOC-6 export)<br/>preview = ShareCard (components/share): 4:5 portrait, dark maroon gradient, Astra wordmark + date,<br/>title (or date), Volume / Sets ('n sets · k warm-up', setsSummaryLabel) / Duration in the lifter's unit,<br/>'New PRs' up to 3 (sessionPrLine) + '+ n more PRs', or with none up to 3 'Exercise · n sets';<br/>Share → captureRef (react-native-view-shot) of the card ON SCREEN → 1080×1350 PNG tmpfile →<br/>expo-sharing shareAsync (image/png) = the OS share sheet; failure → 'Couldn't make the image. Try again.';<br/>no share sheet (isAvailableAsync false) → Share disabled + a line; Back;<br/>another user's / unfinished id: 'not on this phone', no Share. Fully offline."]
+  ShareCardScr -->|"analysisForScreen + readWorkout (names, set counts)"| LocalDB
+  DispUnit -->|"unit"| ShareCardScr
   Workout -->|"Start / Resume: store into the session slot<br/>(activeWorkoutSession.ts, keyed by user id)"| Logger
   Workout -->|tap a past workout| Saved
   Workout -->|"tap a Tool Kit tile: initialTool = that tool"| ToolKit
@@ -526,7 +536,17 @@ flowchart TD
    says when you've muted or blocked someone. The founder removes posts, comments or whole
    accounts by calling the `moderate` server function with their own sign-in — there is no
    in-app founder screen.
-21. Everything else is a placeholder that renders its final layout with inert controls (Start
+21. **Share and re-share (B28, LOG-8, SOC-6).** The analysis screen's **Share**, and **Share** on
+   your own workout posts (Home, your profile), open the **share card**: a 4:5 image of the
+   workout — title, volume, sets, duration, new PRs (or the exercises done) — in your unit. Its
+   **Share** captures exactly that card to a PNG and opens the phone's share sheet (Instagram,
+   Messages, Photos…). It works with no signal. Other people's posts (and re-shares of them) have
+   **Re-share**: confirm, and a re-share post goes to your followers' feeds (online only). It shows
+   "Re-shared from @them" and their post inside a bordered panel; its votes and comments are its
+   own. Re-sharing a re-share passes on the original; twice says you already did. If the original
+   becomes private to you, is blocked or muted, or is deleted, the re-share disappears with it.
+   Photo posts and other people's posts can't be exported as images.
+22. Everything else is a placeholder that renders its final layout with inert controls (Start
    from a program, Marketplace, Communities).
 
 ## Data path today
@@ -830,7 +850,8 @@ flowchart TD
   (red alert line) and (moved from the Tool Kit at B26) ChoiceChips (a radio-group chip row, can
   be locked with `disabled` — Tool Kit, Home, profile tabs, Settings, the post visibility
   chooser), all styled from `theme/tokens.ts`.
-- `components/social/` (B20) holds PostCard (one feed post — a workout, or since B22 a photo; since B23 with the vote / comments footer; since B25 a tappable author; since B26 the owner-only visibility chip; since B27 a ⋯ report button on other people's cards), ReportSheet (B27: the report panel for a post or comment), UserCard (a person + FollowButton; since B25 tappable to their profile),
+- `components/share/` (B28) holds ShareCard (the workout image card the share-card screen previews and captures; pure, props in). `social/reshare.ts` (B28) makes re-shares.
+- `components/social/` (B20) holds PostCard (one feed post — a workout, or since B22 a photo; since B23 with the vote / comments footer; since B25 a tappable author; since B26 the owner-only visibility chip; since B27 a ⋯ report button on other people's cards; since B28 re-share cards with the original embedded, Re-share on others' cards and Share on own workout cards), ReportSheet (B27: the report panel for a post or comment), UserCard (a person + FollowButton; since B25 tappable to their profile),
   FollowButton (B25: Follow / Following, optimistic with revert, `onSettled` after an accepted
   change), Avatar (B25: the public-bucket photo, else LetterAvatar — the initial badge),
   and `usePostPhotoSource` (B25: the viewer-token photo fetch Home and profiles share).

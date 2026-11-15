@@ -16,6 +16,9 @@ import {
   formatSet,
   formatWeight,
   prBookLabel,
+  DELETED_EXERCISE,
+  sessionPrLine,
+  setsSummaryLabel,
   groupDropSets,
   parseDurationInput,
   parseNumberInput,
@@ -348,5 +351,23 @@ describe('textErrorMessage', () => {
       'That’s too long to save — shorten it a little.',
     );
     expect(textErrorMessage(new Error('disk full'))).toBe('That couldn’t be saved. Try again.');
+  });
+});
+
+describe('setsSummaryLabel (B18 summary, B28 share card)', () => {
+  it('counts sets and names warm-ups only when there were some', () => {
+    expect(setsSummaryLabel(5, 4)).toBe('5 sets · 1 warm-up');
+    expect(setsSummaryLabel(3, 1)).toBe('3 sets · 2 warm-up');
+    expect(setsSummaryLabel(1, 1)).toBe('1 set');
+    expect(setsSummaryLabel(0, 0)).toBe('0 sets');
+  });
+});
+
+describe('sessionPrLine (B18 summary, B28 share card)', () => {
+  it('prints exercise, book and weight in the unit, with the deleted-exercise fallback', () => {
+    const squat = { exercise_name: 'Squat', kind: 'repMax' as const, reps: 5, value_kg: 102.058 };
+    expect(sessionPrLine(squat, 'lb')).toBe(`Squat · 5RM · ${formatWeight(102.058, 'lb')}`);
+    expect(sessionPrLine({ ...squat, kind: 'e1rm', reps: null }, 'kg')).toBe(`Squat · e1RM · ${formatWeight(102.058, 'kg')}`);
+    expect(sessionPrLine({ ...squat, exercise_name: null }, 'kg')).toBe(`${DELETED_EXERCISE} · 5RM · ${formatWeight(102.058, 'kg')}`);
   });
 });

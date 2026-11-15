@@ -174,13 +174,15 @@ export interface FlairRow {
 }
 
 /**
- * What a post is (B22): a shared finished workout, a progress photo, or a photo of a PR moment.
- * Server column `posts.kind`.
+ * What a post is (B22): a shared finished workout, a progress photo, or a photo of a PR moment —
+ * or (B28) a re-share of someone else's post. Server column `posts.kind`. The phone never writes
+ * a re-share (they are made online from the feed, `social/reshare.ts`), so device rows only ever
+ * hold the first three; the type is wide because the feed reads every kind.
  */
-export type PostKind = 'workout' | 'progress-pic' | 'pr';
+export type PostKind = 'workout' | 'progress-pic' | 'pr' | 'reshare';
 
 /** The two kinds of post that are a photo rather than a workout (B22). */
-export type ImagePostKind = Exclude<PostKind, 'workout'>;
+export type ImagePostKind = 'progress-pic' | 'pr';
 
 /**
  * One of the lifter's own posts (server table `posts`, B20), as the Post step after Finish

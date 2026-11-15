@@ -22,7 +22,9 @@ bucket, the own-folder `avatar_url` CHECK), `20261115141242_post_privacy.sql` (B
 visibility lockstep trigger), `20261115150035_moderation.sql` and
 `20261115151850_reports_not_self.sql` (B27, both applied live — `mutes`, `moderators`, `reports`
 and its stamping trigger, mute added to `private.workout_visible`, author-level filtering of
-votes and comments),
+votes and comments), `20261115154653_reshares.sql` and `20261115160346_reshare_trigger_columns.sql`
+(B28, both applied live — `posts.shared_post_id`, the `reshare` kind, the re-share shape and
+flair-stamp trigger, the both-posts read rule, `post_hot_scores` recreated with the new column),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -54,6 +56,7 @@ erDiagram
   workouts |o--o| posts : "workout_id shared (cascade); workout posts only; one post per workout"
   flairs ||--o{ posts : "flair_id: exactly one per post"
   posts |o..o| storage_objects : "image_path = object name (photo posts; no FK)"
+  posts |o--o{ posts : "shared_post_id: a re-share points at its original (cascade, B28)"
   profiles |o..o| storage_objects : "avatar_url = object name in avatars (no FK; own folder by CHECK, B25)"
   posts ||--o{ votes : "post_id (cascade)"
   profiles ||--o{ votes : "user_id casts; one per post (cascade)"
@@ -209,9 +212,10 @@ erDiagram
     uuid id PK "client-generated: made on the phone (Post step or Share a photo), even offline"
     uuid user_id FK "the author"
     text flair_id FK "required: exactly one flair"
-    text kind "workout (default), progress-pic or pr (B22)"
-    uuid workout_id FK, UK "workout posts only (null for photo posts); one post per workout"
+    text kind "workout (default), progress-pic or pr (B22), or reshare (B28)"
+    uuid workout_id FK, UK "workout posts only (null for photo posts and re-shares); one post per workout"
     text image_path "photo posts only: <user_id>/<post_id>.<ext> in post-images (B22)"
+    uuid shared_post_id FK "re-shares only (B28): the original post; never itself a re-share; unique per (user_id, shared_post_id)"
     workout_visibility visibility "public, followers or private; default public; owner may change it (B26)"
     timestamptz created_at "feed order, newest first"
     timestamptz updated_at
@@ -251,6 +255,7 @@ erDiagram
     uuid user_id "= posts.user_id (FK kept: embeds author)"
     text flair_id "= posts.flair_id (FK kept: embeds flair; filter)"
     uuid workout_id "= posts.workout_id (FK kept: embeds workout)"
+    uuid shared_post_id "= posts.shared_post_id (B28; the app reads originals in a second request)"
     text kind "= posts.kind"
     text image_path "= posts.image_path"
     workout_visibility visibility "= posts.visibility"
@@ -641,6 +646,41 @@ does not own, so another user's public workout can never be analysed over its ow
   Post privacy.
 - **A report's reported account is stamped from the content** (B27): `reports_stamp_reported_user`
   on `reports` — see Moderation and safety. Muting has no trigger (follows stay).
+- **A re-share is checked and wears its original's flair** (B28): `posts_reshare_shape` on `posts`
+  — see Re-shares.
+
+## Re-shares (B28)
+
+Migrations `20261115154653_reshares.sql` and `20261115160346_reshare_trigger_columns.sql` add a
+fourth post kind, **reshare**: a lifter passing someone else's post on to their own followers.
+
+- **Shape.** `posts.shared_post_id` (FK → `posts.id`, `on delete cascade`, indexed) points at the
+  original. `posts_kind_check` now allows `reshare`; `posts_kind_shape` gains the arm `reshare` →
+  `shared_post_id` set, no `workout_id`, no `image_path`, and the other three arms require
+  `shared_post_id is null`. `posts_reshare_unique` (partial unique index on `(user_id,
+  shared_post_id) where shared_post_id is not null`) makes a double tap a `23505`.
+- **Trigger `posts_reshare_shape`** (`private.reshare_shape()`, security definer) — before insert,
+  or an update naming `shared_post_id`, `flair_id` or `kind`, when `new.kind = 'reshare'`: the
+  original must exist and be visible to the resharer (`That post is gone`), must not itself be a
+  re-share (`Re-share the original post instead` — no chains), must not be the resharer's own
+  (`You can't re-share your own post`); then it **sets `flair_id` to the original's**, whatever the
+  client sent. So a Physique Check re-share takes upvotes only through the existing vote trigger.
+  A visibility-only update (the B26 chip) passes through untouched.
+- **Read rule.** `posts readable per their visibility` is `workout_visible(user_id, visibility) and
+  (shared_post_id is null or private.can_view_post(shared_post_id))`. Blocks, mutes, followers-only
+  and private on the original all hide the re-share too — from everyone, its owner included (the
+  owner's update then simply matches no row). Ordinary posts short-circuit on the null column.
+- **Cascade.** Deleting the original (by its author, or `moderate`'s remove-post) deletes its
+  re-shares.
+- **Votes, comments, reports** on a re-share are on the re-share row; `post_scores` and
+  `post_hot_scores` count it like any post. `post_hot_scores` was dropped and recreated to carry
+  `shared_post_id` (grant and comment restored). Through the view the self-reference is ambiguous
+  to PostgREST (PGRST201) and on `posts` the FK-name hint is refused (PGRST200), so the app reads
+  originals in a second request, `posts?id=in.(…)` (probed live, B28).
+- Live-probed with three synthetic users (rolled back): stamped flair, double → 23505, self and
+  chain refused, downvote on a Physique Check re-share refused, original made private → hidden
+  from a follower of the resharer and from the resharer, mute hides / unmute restores, delete
+  cascades.
 
 ## Who can see and change what (row-level security)
 
@@ -659,7 +699,7 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `sync_tombstones` | only your own | nobody — only the `record_tombstone` trigger inserts |
 | `workout_analyses` | only your own | nobody — no write policies; only the `analyze-workout` function (service role) upserts |
 | `flairs` | any signed-in user | nobody — new flairs arrive by migration |
-| `posts` | per the visibility rule below (same helper as workouts) | insert and update only as yourself **and**, for a workout post, only for a workout you own (`private.owns_workout`; photo posts have no workout); delete only your own |
+| `posts` | per the visibility rule below (same helper as workouts); **a re-share (B28) also needs its original to pass `private.can_view_post`** — visible only to people who may see both, its owner included | insert and update only as yourself **and**, for a workout post, only for a workout you own (`private.owns_workout`; photo posts have no workout); a re-share only of a post you can see (`can_view_post`); delete only your own |
 | `storage.objects` in `post-images` (B22) | your own folder, or cited by a post you may see | insert, update, delete only in your own folder — see the photo posts section |
 | `storage.objects` in `avatars` (B25) | anyone through the bucket's public URL; through the API, your own folder | insert, update, delete only in your own folder — see the profiles section |
 | `follow_counts(profile_id)` (function, B25) | any signed-in user, for any profile: two counts, no rows | — |

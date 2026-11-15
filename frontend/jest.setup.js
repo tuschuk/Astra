@@ -24,6 +24,20 @@ jest.mock('expo-sqlite/kv-store', () => {
   return { __esModule: true, default: store, Storage: store, AsyncStorage: store };
 });
 
+// B28: the share card's two native modules. `react-native-view-shot` captures a view to an
+// image file and `expo-sharing` opens the phone's share sheet — neither exists under Jest, and
+// the capture itself is only provable on a device. These stand-ins answer the way the real
+// ones do on a phone that can share; tests override them per case (`jest.mocked(...)`).
+jest.mock('react-native-view-shot', () => ({
+  __esModule: true,
+  captureRef: jest.fn(async () => 'file:///tmp/share-card.png'),
+}));
+jest.mock('expo-sharing', () => ({
+  __esModule: true,
+  isAvailableAsync: jest.fn(async () => true),
+  shareAsync: jest.fn(async () => undefined),
+}));
+
 // `expo-crypto` (new row ids, src/lib/ids.ts) is native too. Node's own
 // crypto makes the same kind of random v4 UUID, so it stands in under Jest.
 jest.mock('expo-crypto', () => {

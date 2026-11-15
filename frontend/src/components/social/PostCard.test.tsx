@@ -21,10 +21,11 @@ import { REPORT_THANKS } from '@/social/moderation';
 import { POST_VISIBILITY_REFUSAL_MESSAGES } from '@/social/postPrivacy';
 import { TEST_SAFE_AREA_METRICS } from '@/test-utils/renderWithAuth';
 import { VOTE_REFUSAL_MESSAGES } from '@/social/votes';
-import { feedSet, profile, rawImagePost, rawPost } from '@/test-utils/feedFixtures';
+import { feedSet, profile, rawImagePost, rawPost, rawReshare } from '@/test-utils/feedFixtures';
+import { RESHARE_MESSAGES } from '@/social/reshare';
 import { formatDropSet, formatSet, workoutDetailsLabel } from '@/workout/format';
 
-import { CARD_EXERCISE_LIMIT, commentButtonLabel, PostCard, UNNAMED_EXERCISE } from './PostCard';
+import { canReshare, CARD_EXERCISE_LIMIT, commentButtonLabel, PostCard, UNNAMED_EXERCISE } from './PostCard';
 
 const NOW = new Date('2026-11-15T18:00:00');
 const author = profile('u1', 'wod_queen', 'Wendy');
@@ -355,5 +356,83 @@ describe('PostCard — reporting (B27)', () => {
     expect(screen.queryByLabelText('Report post')).toBeNull();
     await screen.rerender(<PostCard post={post()} now={NOW} viewerId="viewer" />);
     expect(screen.queryByLabelText('Report post')).toBeNull();
+  });
+});
+
+describe('PostCard — re-shares and sharing (B28)', () => {
+  const alice = profile('alice', 'alice', 'Alice');
+  const original = rawPost({ id: 'orig', author: alice, createdAt: '2026-11-15T07:00:00.000Z', title: 'Leg day' });
+  const reshareRaw = rawReshare({ id: 'rs', author, createdAt: '2026-11-15T09:00:00.000Z', original: { id: 'orig', flair: original.flair! } });
+
+  /** Wendy's (u1) re-share of Alice's workout, in the card's shape. */
+  function reshared(): FeedPost {
+    const post = toFeedPost(reshareRaw, undefined, new Map([['orig', original]]));
+    if (post?.kind !== 'reshare') throw new Error('expected a re-share');
+    return post;
+  }
+  const ok = { ok: true as const, id: 'new' };
+
+  it('a re-share shows the resharer’s header, a “re-shared from” line, and the original’s author and workout', async () => {
+    const onOpenProfile = jest.fn();
+    await render(<PostCard post={reshared()} now={NOW} onOpenProfile={onOpenProfile} />);
+    expect(screen.getByText('Wendy')).toBeTruthy();
+    expect(screen.getByText('Re-shared from @alice')).toBeTruthy();
+    expect(screen.getByTestId('reshared-original')).toBeTruthy();
+    expect(screen.getByText('Leg day')).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Open Alice’s profile'));
+    expect(onOpenProfile).toHaveBeenCalledWith('alice');
+  });
+
+  it('Re-share is offered on other people’s posts only, never my own (nor a re-share of my own post)', async () => {
+    const onReshare = jest.fn(async () => ok);
+    const theirs = shaped(original);
+    await render(<PostCard post={theirs} now={NOW} viewerId="viewer" onReshare={onReshare} />);
+    expect(screen.getByLabelText('Re-share')).toBeTruthy();
+    await screen.rerender(<PostCard post={theirs} now={NOW} viewerId="alice" onReshare={onReshare} />);
+    expect(screen.queryByLabelText('Re-share')).toBeNull();
+    await screen.rerender(<PostCard post={reshared()} now={NOW} viewerId="alice" onReshare={onReshare} />);
+    expect(screen.queryByLabelText('Re-share')).toBeNull();
+    await screen.rerender(<PostCard post={theirs} now={NOW} viewerId="viewer" />);
+    expect(screen.queryByLabelText('Re-share')).toBeNull();
+    expect(canReshare(theirs, null)).toBe(false);
+  });
+
+  it('Re-share asks first, then sends the card’s post and says it went', async () => {
+    const onReshare = jest.fn(async (_post: FeedPost) => ok);
+    const post = reshared();
+    await render(<PostCard post={post} now={NOW} viewerId="viewer" onReshare={onReshare} />);
+    await fireEvent.press(screen.getByLabelText('Re-share'));
+    expect(screen.getByText('Re-share this post to your followers?')).toBeTruthy();
+    expect(onReshare).not.toHaveBeenCalled();
+    await fireEvent.press(screen.getByRole('button', { name: 'Re-share now' }));
+    expect(onReshare).toHaveBeenCalledWith(post);
+    expect(await screen.findByText(RESHARE_MESSAGES.done)).toBeTruthy();
+    expect(screen.queryByText('Re-share this post to your followers?')).toBeNull();
+  });
+
+  it('a refused re-share says why; Cancel sends nothing', async () => {
+    const onReshare = jest.fn(async () => ({ ok: false as const, reason: 'already-reshared' as const }));
+    await render(<PostCard post={shaped(original)} now={NOW} viewerId="viewer" onReshare={onReshare} />);
+    await fireEvent.press(screen.getByLabelText('Re-share'));
+    await fireEvent.press(screen.getByRole('button', { name: 'Cancel' }));
+    expect(onReshare).not.toHaveBeenCalled();
+    await fireEvent.press(screen.getByLabelText('Re-share'));
+    await fireEvent.press(screen.getByRole('button', { name: 'Re-share now' }));
+    expect(await screen.findByText(RESHARE_MESSAGES['already-reshared'])).toBeTruthy();
+  });
+
+  it('Share (as image) is on my own workout posts only, and opens that workout’s card', async () => {
+    const onShareWorkout = jest.fn();
+    const mine = shaped(rawPost({ id: 'p1', author, createdAt: '2026-11-15T08:00:00.000Z' }));
+    await render(<PostCard post={mine} now={NOW} viewerId="u1" onShareWorkout={onShareWorkout} />);
+    await fireEvent.press(screen.getByLabelText('Share as image'));
+    expect(onShareWorkout).toHaveBeenCalledWith(mine.workout.id);
+    await screen.rerender(<PostCard post={mine} now={NOW} viewerId="viewer" onShareWorkout={onShareWorkout} />);
+    expect(screen.queryByLabelText('Share as image')).toBeNull();
+    const photo = shapedPhoto(rawImagePost({ id: 'pic', author, createdAt: '2026-11-15T08:00:00.000Z', kind: 'pr' }));
+    await screen.rerender(<PostCard post={photo} now={NOW} viewerId="u1" onShareWorkout={onShareWorkout} />);
+    expect(screen.queryByLabelText('Share as image')).toBeNull();
+    await screen.rerender(<PostCard post={reshared()} now={NOW} viewerId="u1" onShareWorkout={onShareWorkout} />);
+    expect(screen.queryByLabelText('Share as image')).toBeNull();
   });
 });

@@ -31,7 +31,12 @@
  * real: a post made private disappears for everyone else through the API, not just on screen.
  * (B27) On OTHER people's posts, a ⋯ button beside the flair opens the report panel
  * (`ReportSheet`) — the viewer picks a reason and the report goes to the founder's queue. Own
- * posts have no ⋯ (you don't report yourself). Tapping through to the whole
+ * posts have no ⋯ (you don't report yourself).
+ * (B28) A re-share card shows the resharer's header, "Re-shared from @them", and the original
+ * post (its author — tappable — and its workout or photo) inside a bordered panel; its footer is
+ * the re-share's own. Other people's cards have **Re-share** in the footer (not on your own post,
+ * nor on a re-share of your own post): a one-step confirmation, then a one-line result. Your own
+ * workout cards have **Share**, which opens the image share card. Tapping through to the whole
  * workout arrives with a later step (another lifter's workout has no copy on this phone and no
  * screen yet). Without the vote / comment handlers (tests, or no session) the footer only shows.
  */
@@ -41,12 +46,13 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { Avatar } from '@/components/social/Avatar';
 import { ReportSheet } from '@/components/social/ReportSheet';
+import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
 import { Body, SectionLabel } from '@/components/ui/Text';
 import type { WorkoutVisibility } from '@/db/dao';
 import { useDisplayUnit } from '@/settings/displayUnit';
-import type { FeedEntry, FeedPost, FeedWorkout } from '@/social/feed';
+import type { FeedContent, FeedEntry, FeedOriginal, FeedPost, FeedWorkout } from '@/social/feed';
 import type { ReportReason, ReportResult } from '@/social/moderation';
 import { personLabels } from '@/social/names';
 import type { PostImageSource } from '@/social/postImages';
@@ -56,6 +62,7 @@ import {
   VISIBILITY_WORDS,
   type PostVisibilityResult,
 } from '@/social/postPrivacy';
+import { RESHARE_MESSAGES, type ReshareResult } from '@/social/reshare';
 import { nextVote, VOTE_REFUSAL_MESSAGES, voteDelta, type VoteResult, type VoteValue } from '@/social/votes';
 import { colors, radii, spacing } from '@/theme';
 import {
@@ -108,6 +115,17 @@ interface PostCardProps {
    * OTHER people's posts. Left out, there is no ⋯ button.
    */
   onReport?: (postId: string, reason: ReportReason, details: string) => Promise<ReportResult>;
+  /**
+   * Re-shares this post to the viewer's followers (B28; `resharePost` in the app). Offered only
+   * on posts that aren't the viewer's own — on a re-share card it passes on the original. Left
+   * out, there is no Re-share button.
+   */
+  onReshare?: (post: FeedPost) => Promise<ReshareResult>;
+  /**
+   * Opens the image share card for one of the viewer's OWN workout posts (B28; the share-card
+   * screen in the app), from which it goes to the phone's share sheet. Left out, no Share button.
+   */
+  onShareWorkout?: (workoutId: string) => void;
 }
 
 export function PostCard({
@@ -120,6 +138,8 @@ export function PostCard({
   onOpenProfile,
   onChangeVisibility,
   onReport,
+  onReshare,
+  onShareWorkout,
 }: PostCardProps) {
   const { author, flair } = post;
   const who = personLabels(author);
@@ -171,16 +191,84 @@ export function PostCard({
         />
       ) : null}
 
-      {post.kind === 'workout' ? (
-        <WorkoutBody workout={post.workout} />
+      {post.kind === 'reshare' ? (
+        <ResharedOriginal original={post.original} now={now} photoSource={photoSource} onOpenProfile={onOpenProfile} />
       ) : (
-        <PostPhoto source={photoSource?.(post.imagePath) ?? null} />
+        <PostContent content={post} photoSource={photoSource} />
       )}
 
       {own ? <VisibilityControl post={post} onChangeVisibility={onChangeVisibility} /> : null}
 
-      <PostFooter post={post} onVote={onVote} onOpenComments={onOpenComments} />
+      <PostFooter
+        post={post}
+        onVote={onVote}
+        onOpenComments={onOpenComments}
+        onReshare={canReshare(post, viewerId) ? onReshare : undefined}
+        onShareWorkout={own && post.kind === 'workout' && onShareWorkout ? () => onShareWorkout(post.workout.id) : undefined}
+      />
     </Card>
+  );
+}
+
+/**
+ * Whether the viewer may be offered Re-share on this card (B28): signed in, not their own post,
+ * and — on a re-share card, which passes on its original — not their own original either. The
+ * server refuses both anyway; this just keeps a button that can only fail off the screen.
+ */
+export function canReshare(post: FeedPost, viewerId: string | null | undefined): boolean {
+  if (viewerId == null || post.author.id === viewerId) return false;
+  return post.kind !== 'reshare' || post.original.author.id !== viewerId;
+}
+
+/** A post's body, by kind: the workout, or the photo. Shared by ordinary cards and a re-share's original. */
+function PostContent({ content, photoSource }: { content: FeedContent; photoSource: PostCardProps['photoSource'] }) {
+  return content.kind === 'workout' ? (
+    <WorkoutBody workout={content.workout} />
+  ) : (
+    <PostPhoto source={photoSource?.(content.imagePath) ?? null} />
+  );
+}
+
+/**
+ * A re-share's body (B28): a line saying whose post this passes on, then the original in a
+ * bordered panel — its author (tappable to their profile) and date, and its workout or photo
+ * exactly as an ordinary card shows them. Votes and comments under it are the re-share's own.
+ */
+function ResharedOriginal({
+  original,
+  now,
+  photoSource,
+  onOpenProfile,
+}: {
+  original: FeedOriginal;
+  now?: Date;
+  photoSource: PostCardProps['photoSource'];
+  onOpenProfile: PostCardProps['onOpenProfile'];
+}) {
+  const who = personLabels(original.author);
+  return (
+    <>
+      <View style={styles.reshareLine}>
+        <Ionicons name="arrow-redo-outline" size={14} color={colors.muted} />
+        <Body variant="small" style={styles.muted}>{`Re-shared from ${who.handle ?? who.name}`}</Body>
+      </View>
+      <View style={styles.original} testID="reshared-original">
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Open ${who.name}’s profile`}
+          disabled={!onOpenProfile || !original.author.id}
+          onPress={() => onOpenProfile?.(original.author.id)}
+          style={styles.author}
+        >
+          <Avatar path={original.author.avatarPath} initial={who.initial} />
+          <View style={styles.headerText}>
+            <Body style={styles.name}>{who.name}</Body>
+            <Body variant="small">{[who.handle, postDateLabel(original.createdAt, now)].filter(Boolean).join(' · ')}</Body>
+          </View>
+        </Pressable>
+        <PostContent content={original} photoSource={photoSource} />
+      </View>
+    </>
   );
 }
 
@@ -293,7 +381,9 @@ function PostFooter({
   post,
   onVote,
   onOpenComments,
-}: Pick<PostCardProps, 'post' | 'onVote' | 'onOpenComments'>) {
+  onReshare,
+  onShareWorkout,
+}: Pick<PostCardProps, 'post' | 'onVote' | 'onOpenComments' | 'onReshare'> & { onShareWorkout?: () => void }) {
   const [vote, setVote] = useState<VoteValue | null>(post.myVote);
   const [score, setScore] = useState(post.score);
   const [message, setMessage] = useState<string | null>(null);
@@ -332,6 +422,32 @@ function PostFooter({
     }
   }
 
+  // B28: the Re-share confirmation, whether one is on its way, and its one-line result.
+  const [confirming, setConfirming] = useState(false);
+  const [resharing, setResharing] = useState(false);
+  const [reshareMessage, setReshareMessage] = useState<string | null>(null);
+  // A ref as well as state: two taps on "Re-share now" before the next draw still send one.
+  const reshareInFlight = useRef(false);
+
+  /** "Re-share now" tapped: send it once, close the confirmation, and say how it went. */
+  async function reshare(): Promise<void> {
+    if (!onReshare || reshareInFlight.current) return;
+    reshareInFlight.current = true;
+    setResharing(true);
+    setReshareMessage(null);
+    let outcome: keyof typeof RESHARE_MESSAGES = 'failed';
+    try {
+      const result = await onReshare(post);
+      outcome = result.ok ? 'done' : result.reason;
+    } finally {
+      // Even if a handler ever threw, the button must come back rather than lock for good.
+      reshareInFlight.current = false;
+      setResharing(false);
+      setConfirming(false);
+      setReshareMessage(RESHARE_MESSAGES[outcome]);
+    }
+  }
+
   const commentLabel = commentButtonLabel(post.commentCount);
   return (
     <View style={styles.footerWrap}>
@@ -346,23 +462,76 @@ function PostFooter({
             <VoteArrow direction="down" lit={vote === -1} onPress={onVote ? () => void tap(-1) : undefined} />
           )}
         </View>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={commentLabel}
-          disabled={!onOpenComments}
-          onPress={() => onOpenComments?.(post.id)}
-          style={styles.commentButton}
-          hitSlop={8}
-        >
-          <Ionicons name="chatbubble-outline" size={18} color={colors.muted} />
-          <Body variant="small">{commentLabel}</Body>
-        </Pressable>
+        <View style={styles.actions}>
+          {onShareWorkout ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Share as image"
+              onPress={onShareWorkout}
+              style={styles.commentButton}
+              hitSlop={8}
+            >
+              <Ionicons name="share-outline" size={18} color={colors.muted} />
+              <Body variant="small">Share</Body>
+            </Pressable>
+          ) : null}
+          {onReshare ? <ReshareButton onPress={() => setConfirming(true)} /> : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={commentLabel}
+            disabled={!onOpenComments}
+            onPress={() => onOpenComments?.(post.id)}
+            style={styles.commentButton}
+            hitSlop={8}
+          >
+            <Ionicons name="chatbubble-outline" size={18} color={colors.muted} />
+            <Body variant="small">{commentLabel}</Body>
+          </Pressable>
+        </View>
       </View>
+      {confirming && onReshare ? (
+        <ReshareConfirm
+          sending={resharing}
+          onConfirm={() => void reshare()}
+          onCancel={() => setConfirming(false)}
+        />
+      ) : null}
       {message ? (
         <Body variant="small" style={styles.voteMessage}>
           {message}
         </Body>
       ) : null}
+      {reshareMessage ? (
+        <Body variant="small" style={styles.voteMessage}>
+          {reshareMessage}
+        </Body>
+      ) : null}
+    </View>
+  );
+}
+
+/** The footer's Re-share button (B28). */
+function ReshareButton({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel="Re-share" onPress={onPress} style={styles.commentButton} hitSlop={8}>
+      <Ionicons name="arrow-redo-outline" size={18} color={colors.muted} />
+      <Body variant="small">Re-share</Body>
+    </Pressable>
+  );
+}
+
+/**
+ * The one-step confirmation under the footer before a re-share is sent (B28): a line saying where
+ * it goes, and Re-share / Cancel. Both are disabled while the re-share is on its way.
+ */
+function ReshareConfirm({ sending, onConfirm, onCancel }: { sending: boolean; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <View style={styles.confirm}>
+      <Body variant="small">Re-share this post to your followers?</Body>
+      <View style={styles.confirmButtons}>
+        <Button label="Cancel" variant="ghost" onPress={onCancel} disabled={sending} />
+        <Button label="Re-share now" onPress={onConfirm} disabled={sending} />
+      </View>
     </View>
   );
 }
@@ -576,6 +745,31 @@ const styles = StyleSheet.create({
   commentButton: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: spacing.xs,
+  },
+  actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
+  confirm: {
+    gap: spacing.xs,
+  },
+  confirmButtons: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: spacing.sm,
+  },
+  reshareLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  original: {
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    borderRadius: radii.md,
+    padding: spacing.md,
     gap: spacing.xs,
   },
   voteMessage: {

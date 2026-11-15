@@ -17,7 +17,9 @@
  * Public — sent straight to the server, where row-level security makes it real. On other
  * lifters' cards (B27), the ⋯ button reports the post to the founder's moderation queue. Lifters
  * the viewer blocked or muted (from their profile) are simply absent — the server leaves their
- * posts, comments and votes out.
+ * posts, comments and votes out. (B28) On other lifters' cards, Re-share passes the post on to the
+ * viewer's own followers (a re-share card shows the original inside it); on the lifter's own
+ * workout cards, Share opens the image share card for the phone's share sheet.
  *
  * Order and flair (B24): under "Your feed", Latest | Hot picks newest first or the server's
  * vote ranking (SOC-11), and a row of flair chips — All plus one per flair on the phone — shows
@@ -57,6 +59,7 @@ import { appendPage, feedAuthorIds, loadFeedPage, type FeedCursor, type FeedPost
 import { getCachedFeedPrefs, loadFeedPrefs, saveFeedPrefs, type FeedPrefs, type FeedSort } from '@/social/feedPrefs';
 import { reportPost as fileReport, type ReportReason, type ReportResult } from '@/social/moderation';
 import { setPostVisibility, visibilityTargetOf, withPostVisibility, type PostVisibilityResult } from '@/social/postPrivacy';
+import { resharePost, type ReshareResult } from '@/social/reshare';
 import { castVote, clearVote, type VoteResult, type VoteValue } from '@/social/votes';
 import { colors, spacing } from '@/theme';
 
@@ -275,6 +278,23 @@ export default function HomeScreen() {
     [client, db, me],
   );
 
+  /**
+   * Another lifter's card's Re-share (B28): one new re-share post on the server, straight away
+   * (online-only, like votes). It shows on this feed — and the viewer's followers' — on the next
+   * load, which happens the next time Home comes into view or on a pull.
+   */
+  const reshare = useCallback(
+    (post: FeedPost): Promise<ReshareResult> =>
+      me ? resharePost(client, me, post) : Promise.resolve({ ok: false, reason: 'failed' }),
+    [client, me],
+  );
+
+  /** An own workout card's Share (B28): the image share card for that workout. */
+  const shareWorkout = useCallback(
+    (workoutId: string) => router.push({ pathname: '/share-card/[id]', params: { id: workoutId } }),
+    [router],
+  );
+
   /** A card's comments button (B23): the post's comments screen. */
   const openComments = useCallback(
     (postId: string) => router.push({ pathname: '/post-comments/[id]', params: { id: postId } }),
@@ -402,6 +422,8 @@ export default function HomeScreen() {
             onOpenComments={openComments}
             onOpenProfile={openProfile}
             onReport={reportPost}
+            onReshare={reshare}
+            onShareWorkout={shareWorkout}
           />
         )}
         ListHeaderComponent={header}

@@ -260,6 +260,29 @@ export function countLabel(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? '' : 's'}`;
 }
 
+/**
+ * A session's set count as its summary says it (B18, reused by the B28 share card): "5 sets",
+ * or "5 sets · 1 warm-up" when some sets were warm-ups. One spelling for both surfaces.
+ */
+export function setsSummaryLabel(totalSets: number, workingSets: number): string {
+  const warmups = totalSets - workingSets;
+  return warmups > 0 ? `${countLabel(totalSets, 'set')} · ${warmups} warm-up` : countLabel(totalSets, 'set');
+}
+
+/** What a session's PR line calls an exercise whose library row is gone. */
+export const DELETED_EXERCISE = 'Deleted exercise';
+
+/**
+ * One new PR of a session as its summary prints it (B18, reused by the B28 share card):
+ * "Squat · 5RM · 225 lb", in the lifter's unit; a deleted exercise reads "Deleted exercise".
+ */
+export function sessionPrLine(
+  pr: Pick<PersonalRecordRow, 'kind' | 'reps' | 'value_kg'> & { exercise_name: string | null },
+  unit: WeightUnit,
+): string {
+  return `${pr.exercise_name ?? DELETED_EXERCISE} · ${prBookLabel(pr)} · ${formatWeight(pr.value_kg, unit)}`;
+}
+
 /** How many sets were logged across a workout's exercises. */
 export function totalSets(entries: readonly { sets: readonly unknown[] }[]): number {
   return entries.reduce((total, entry) => total + entry.sets.length, 0);

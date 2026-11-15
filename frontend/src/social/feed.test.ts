@@ -7,7 +7,7 @@
 import { describe, expect, it } from '@jest/globals';
 
 import { createFakeSocialClient } from '@/test-utils/fakeSocialClient';
-import { feedSet, profile, rawImagePost, rawPost } from '@/test-utils/feedFixtures';
+import { feedSet, profile, rawImagePost, rawPost, rawReshare } from '@/test-utils/feedFixtures';
 
 import {
   appendPage,
@@ -18,7 +18,10 @@ import {
   feedAuthorIds,
   HOT_SOURCE,
   loadFeedPage,
+  loadOriginals,
+  ORIGINAL_SELECT,
   SCORES_SELECT,
+  toFeedOriginal,
   toFeedPost,
   type FeedPost,
   type HotFeedCursor,
@@ -367,6 +370,64 @@ describe('toFeedPost', () => {
   it('B22: drops a workout post whose workout the viewer may not see (no empty card)', () => {
     const raw = { ...rawPost({ id: 'p1', author: friend, createdAt: '2026-11-15T08:00:00.000Z' }), workout: null };
     expect(toFeedPost(raw)).toBeNull();
+  });
+});
+
+describe('re-shares (B28, SOC-6)', () => {
+  const PHYSIQUE = { id: 'physique-check', name: 'Physique Check', upvotes_only: true };
+  const original = rawPost({ id: 'orig', author: stranger, createdAt: '2026-11-15T07:00:00.000Z', flair: PHYSIQUE, title: 'Leg day' });
+  const reshare = rawReshare({ id: 'rs', author: friend, createdAt: '2026-11-15T09:00:00.000Z', original: { id: 'orig', flair: PHYSIQUE } });
+
+  it('shapes a re-share into the resharer’s card carrying the original’s workout and author', () => {
+    const post = toFeedPost(reshare, { post_id: 'rs', score: 2, comment_count: 1 }, new Map([['orig', original]]));
+    expect(post?.kind).toBe('reshare');
+    if (post?.kind !== 'reshare') return;
+    expect(post).toMatchObject({ id: 'rs', author: { id: 'friend' }, flair: { id: 'physique-check', upvotesOnly: true }, score: 2 });
+    expect(post.original).toMatchObject({ id: 'orig', kind: 'workout', author: { id: 'stranger' } });
+    if (post.original.kind !== 'workout') throw new Error('expected a workout original');
+    expect(post.original.workout.title).toBe('Leg day');
+  });
+
+  it('drops a re-share whose original didn’t come back, or is itself a re-share', () => {
+    expect(toFeedPost(reshare, undefined, new Map())).toBeNull();
+    expect(toFeedPost(reshare)).toBeNull();
+    const chained = { ...original, kind: 'reshare' as const, workout: null, shared_post_id: 'older' };
+    expect(toFeedPost(reshare, undefined, new Map([['orig', chained]]))).toBeNull();
+    expect(toFeedOriginal(undefined)).toBeNull();
+  });
+
+  it('the feed asks for which post a re-share passes on, then reads the originals by id beside the scores', async () => {
+    const { client, requests } = createFakeSocialClient({ posts: [original, reshare] });
+    const page = await loadFeedPage(client, ME, [ME, 'friend'], 'latest', null, null);
+    expect(FEED_SELECT).toContain('shared_post_id');
+    expect(requests[2]).toEqual([
+      ['from', 'posts'],
+      ['select', ORIGINAL_SELECT],
+      ['in', 'id', ['orig']],
+    ]);
+    // A follower of the resharer (and not of the original's author) sees the re-share with the original in it.
+    expect(page.posts.map((p) => p.id)).toEqual(['rs']);
+    const [shown] = page.posts;
+    expect(shown.kind === 'reshare' && shown.original.author.id).toBe('stranger');
+  });
+
+  it('a page with no re-shares makes no originals request', async () => {
+    const { client, requests } = createFakeSocialClient({ posts: [original] });
+    await loadFeedPage(client, ME, ['stranger'], 'latest', null, null);
+    expect(requests).toHaveLength(2);
+  });
+
+  it('the Hot order carries re-shares the same way', async () => {
+    const { client } = createFakeSocialClient({ posts: [original, reshare] });
+    const page = await loadFeedPage(client, ME, ['friend'], 'hot', null, null);
+    expect(page.posts.map((p) => p.kind)).toEqual(['reshare']);
+  });
+
+  it('a failed originals request throws (so the page fails rather than half-shape); no ids, no request', async () => {
+    const { client, requests } = createFakeSocialClient({ posts: [original] }, { offline: true });
+    await expect(loadOriginals(client, ['orig'])).rejects.toThrow('Loading the re-shared posts failed');
+    expect(await loadOriginals(client, [])).toEqual(new Map());
+    expect(requests).toHaveLength(1);
   });
 });
 

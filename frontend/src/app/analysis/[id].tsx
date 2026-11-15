@@ -20,7 +20,8 @@
  * Opened by Finish (in place of the logger) and by the saved workout's **Analysis** button —
  * including for workouts finished before analyses existed.
  *
- * What the lifter can do: read it; **View workout** to open the saved workout; **Back** to where
+ * What the lifter can do: read it; **View workout** to open the saved workout; (B28) **Share** to
+ * open the workout's image share card and send it to another app (LOG-8); **Back** to where
  * it was opened from (or the Workout tab). When Finish opened it (B21, the `post=1` link — never
  * from the saved workout's button), a primary **Next** button also leads on to the Post step,
  * where the workout can be shared to the feed with a flair, or skipped (LOG-7).
@@ -42,7 +43,7 @@ import { Body, Heading, SectionLabel } from '@/components/ui/Text';
 import type { SqlExecutor } from '@/db/driver';
 import { useAppDatabase } from '@/db/useAppDatabase';
 import { useDisplayUnit } from '@/settings/displayUnit';
-import { countLabel, formatDuration, formatWeight, prBookLabel, workoutDateLabel } from '@/workout/format';
+import { formatDuration, formatWeight, sessionPrLine, setsSummaryLabel, workoutDateLabel } from '@/workout/format';
 import { colors, spacing, type } from '@/theme';
 
 /**
@@ -123,9 +124,7 @@ export default function AnalysisScreen() {
 
   const { analysis, workout } = state.view;
   const muscleList = trainedMuscleNames(state.muscles);
-  const warmups = analysis.total_sets - analysis.working_sets;
-  const setsText =
-    warmups > 0 ? `${countLabel(analysis.total_sets, 'set')} · ${warmups} warm-up` : countLabel(analysis.total_sets, 'set');
+  const setsText = setsSummaryLabel(analysis.total_sets, analysis.working_sets);
 
   return (
     <Screen>
@@ -160,9 +159,7 @@ export default function AnalysisScreen() {
             New PRs
           </SectionLabel>
           {analysis.new_prs.map((pr) => (
-            <Body key={`${pr.exercise_id}:${pr.kind}:${pr.reps ?? ''}`}>
-              {`${pr.exercise_name ?? 'Deleted exercise'} · ${prBookLabel(pr)} · ${formatWeight(pr.value_kg, unit)}`}
-            </Body>
+            <Body key={`${pr.exercise_id}:${pr.kind}:${pr.reps ?? ''}`}>{sessionPrLine(pr, unit)}</Body>
           ))}
         </Card>
       ) : null}
@@ -178,6 +175,12 @@ export default function AnalysisScreen() {
         label="View workout"
         variant="outline"
         onPress={() => router.push({ pathname: '/workout/[id]', params: { id: analysis.id } })}
+        style={styles.view}
+      />
+      <Button
+        label="Share"
+        variant="ghost"
+        onPress={() => router.push({ pathname: '/share-card/[id]', params: { id: analysis.id } })}
         style={styles.view}
       />
       {disclaimer}
