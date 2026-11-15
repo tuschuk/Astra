@@ -76,6 +76,11 @@ export interface WorkoutRow {
   /** null while the workout is still in progress. */
   ended_at: string | null;
   visibility: WorkoutVisibility;
+  /**
+   * The program workout this session was started from (B35), or null for an ordinary workout.
+   * Set once, when the session starts; finishing it moves the lifter's program run on.
+   */
+  program_workout_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -282,8 +287,28 @@ export interface ProgramExerciseRow {
 }
 
 /**
- * The row shape of each synced table: the five training tables and (B34) the four program
- * tables, uploaded and downloaded through the generic machinery. (The phone also uploads its
+ * One time the lifter ran one of their programs (server table `program_runs`, B35), and where
+ * they are in it: the stored `position` of the next session's week and of that workout within
+ * its week (positions, not "Week N" numbers — see `programs/programRuns.ts`). A run is never
+ * deleted; it ends (`ended_at`). Several active rows can exist after two offline phones each
+ * started one; "the" active run is always the newest (`programRuns.ts` is the only reader).
+ */
+export interface ProgramRunRow {
+  id: string;
+  user_id: string;
+  program_id: string;
+  next_week_position: number;
+  next_workout_position: number;
+  started_at: string;
+  /** Null while the run is active. Never before `started_at`. */
+  ended_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * The row shape of each synced table: the five training tables, (B34) the four program
+ * tables and (B35) the program runs, uploaded and downloaded through the generic machinery. (The phone also uploads its
  * settings row and its own posts, each through a small path of its own — see `OutboxTable` in
  * sync/outbox.ts.)
  */
@@ -297,6 +322,7 @@ export interface RowByTable {
   program_weeks: ProgramWeekRow;
   program_workouts: ProgramWorkoutRow;
   program_exercises: ProgramExerciseRow;
+  program_runs: ProgramRunRow;
 }
 
 /** The tables mirrored on the device and kept in sync with the server (both directions). */
@@ -325,20 +351,29 @@ export interface MirrorRowByTable extends RowByTable {
 export type MirroredTable = keyof MirrorRowByTable;
 
 /**
- * Parents before children: the order rows must reach the server in, so a set
- * never arrives before the entry it belongs to, and a personal record never
- * before the set it cites (the server checks both). The program tables (B34)
- * come last, parents first too; their one link outside the family is
- * `program_exercises.exercise_id`, and `exercises` is already first — so a
- * custom exercise always lands before a program slot that names it.
+ * Parents before children: the order rows must reach the server in, because the
+ * server's foreign keys refuse a row whose parent isn't there yet — and a
+ * refused row would block the upload queue. Every table here only points at
+ * tables earlier in the list:
+ *   - a set never before its entry, a personal record never before its set;
+ *   - (B35) a workout started from a program names its program workout, so
+ *     programs → weeks → program workouts go BEFORE workouts. An honest phone
+ *     that built a program and ran a session offline would otherwise upload the
+ *     workout first and be refused forever;
+ *   - program exercise slots name an exercise (first in the list) and a program
+ *     workout; program runs name a program.
  */
 export const SYNC_ORDER: readonly SyncedTable[] = [
   'exercises',
+  'programs',
+  'program_weeks',
+  'program_workouts',
   'workouts',
   'workout_exercises',
   'sets',
   'personal_records',
-  ...PROGRAM_TABLES,
+  'program_exercises',
+  'program_runs',
 ];
 
 /** Every column of each table, as named on both the device and the server. */
@@ -354,7 +389,18 @@ export const TABLE_COLUMNS: { readonly [T in MirroredTable]: readonly (keyof Mir
     'created_at',
     'updated_at',
   ],
-  workouts: ['id', 'user_id', 'title', 'notes', 'started_at', 'ended_at', 'visibility', 'created_at', 'updated_at'],
+  workouts: [
+    'id',
+    'user_id',
+    'title',
+    'notes',
+    'started_at',
+    'ended_at',
+    'visibility',
+    'program_workout_id',
+    'created_at',
+    'updated_at',
+  ],
   workout_exercises: [
     'id',
     'workout_id',
@@ -404,6 +450,17 @@ export const TABLE_COLUMNS: { readonly [T in MirroredTable]: readonly (keyof Mir
     'target_weight_kg',
     'target_rpe',
     'deleted_at',
+    'created_at',
+    'updated_at',
+  ],
+  program_runs: [
+    'id',
+    'user_id',
+    'program_id',
+    'next_week_position',
+    'next_workout_position',
+    'started_at',
+    'ended_at',
     'created_at',
     'updated_at',
   ],
@@ -707,17 +764,20 @@ export type WorkoutTreeTable = 'workouts' | 'workout_exercises' | 'sets';
 
 /**
  * Rows of a workout tree, per table; any table may be left out. Finishing a
- * workout may also carry the personal records it set (B13), so they are
- * saved in the same all-or-nothing transaction as the workout itself.
+ * workout may also carry the personal records it set (B13) and (B35) the
+ * program run it moved on, so they are saved in the same all-or-nothing
+ * transaction as the workout itself.
  */
 export type WorkoutTreeRows = { [T in WorkoutTreeTable]?: readonly RowByTable[T][] } & {
   personal_records?: readonly PersonalRecordRow[];
+  program_runs?: readonly ProgramRunRow[];
 };
 
 /**
  * Saves a whole workout tree as the user's change, in ONE transaction:
  * every row is stamped `updated_at = now`, saved, and added to the outbox,
- * parents before children (personal records last — they cite sets). If any
+ * parents before children (personal records after sets — they cite sets; the
+ * program run last). If any
  * given entry or set belongs to a workout not in `tree.workouts`, that
  * workout is re-stamped and queued too (the touch-the-root rule, same as
  * `writeLocal`); a personal record has no parent workout and syncs on its
@@ -727,7 +787,9 @@ export type WorkoutTreeRows = { [T in WorkoutTreeTable]?: readonly RowByTable[T]
  * Why one transaction matters: finishing a workout queues the workout and
  * all its sets (and the PRs they set). Split across transactions, a crash in
  * between could upload a finished-looking empty workout — or a workout whose
- * PRs were silently lost — for good. Here it is all or nothing.
+ * PRs were silently lost — for good. Likewise (B35) a finished program session
+ * and the run it moved on commit together, so a kill can never log the session
+ * without advancing the run. Here it is all or nothing.
  */
 export async function writeLocalTree(
   db: SqlDriver,
@@ -735,7 +797,7 @@ export async function writeLocalTree(
   options: WriteLocalOptions = {},
 ): Promise<void> {
   const now = options.now ?? new Date().toISOString();
-  const tables = (['workouts', 'workout_exercises', 'sets', 'personal_records'] as const).filter(
+  const tables = (['workouts', 'workout_exercises', 'sets', 'personal_records', 'program_runs'] as const).filter(
     (t) => (tree[t]?.length ?? 0) > 0,
   );
   if (tables.length === 0) return;

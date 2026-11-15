@@ -56,36 +56,22 @@ supersets-dropsets-timed (LOG-11, LOG-12), B10 set-types (LOG-14, LOG-15), B09 l
 (LOG-2, NFR-2), B08 active-workout-store (NFR-3), B07 local-store-and-sync (FND-3), B06
 training-math, B05 auth-and-signup. Details in each plan file.
 
-**B35 run-program** (planning now): `program_runs` (active program, position) synced and cached
-in SQLite; the Workout button starts the next session prefilled with targets, advancing week by
-week, offline. Step DoD: each tap of Workout opens the correct next session with its targets.
-Covers PRG-3 (Not started) and completes LOG-1 (In progress — "Start empty workout" shipped in
-B09; the program half is this step). Depends on B34, B09. Standing inputs for its planner: the
-reads to prefill from exist — `readProgramTree(db, userId, programId)` (live tree, each level
-ordered `position asc, id asc`, exercise names resolved, `exerciseId` may be null → "Deleted
-exercise") and `readProgramWorkout` in `programs/programs.ts`; the one way to start a workout is
-`startActiveWorkout(db, userId, options)` in `workout/activeWorkout.ts` (refuses when an
-unfinished workout exists — the Workout tab already handles resume / discard), whose store has
-`addExercise(deviceId)` and set operations, so prefill is "start, then add each slot's exercise
-and its `target_sets` empty-or-target sets" through the store, not a new write path (the device
-repeats no CHECKs; `limits.ts` governs); the Workout tab's **"Start from a program"** button is
-the disabled placeholder (`app/(tabs)/workout.tsx`) — B35 enables it and decides the picker (a
-program chooser sheet or the Programs list with a "Run this program" action); `program_runs`
-needs: one active run per user (partial unique on `user_id where ended_at is null`), the program
-id, the **position** (week position + workout position, or the next `program_workout_id` — the
-planner weighs which survives the author editing the program mid-run: removed workouts,
-renumbered positions), `started_at` / `ended_at`, owner-only RLS, soft or hard delete (the B31/
-B34 soft-delete precedent and its reasons: standalone pulls cannot see absent rows), device
-schema V13, `TABLE_COLUMNS` / `SYNC_ORDER` / `pullProgramRows`-style standalone pull; advancing
-happens on **finish** of a program-started workout (the store's finish path, B08/B13 — record the
-link from the logged workout to its program workout, e.g. a nullable `workouts.program_workout_id`
-or a column on the run, so the analysis and history can later say "Week 2 · Day 1"); what
-happens at the end of the last week (loop to week 1, or the run ends and the Workout tab says
-so — a product reading to record); the lifter must be able to stop a run and switch programs; the
-Gate 2 probe is the B34 two-user recipe over `program_runs` plus a prefill test over a seeded
-program on real SQLite (the DoD literally: tap → correct next session with targets). No new
-dependency expected; the ERD gains `program_runs` (and any workouts column); the flowchart gains
-the Start-from-a-program path and the advance-on-finish rule. B35 is P1 like the rest of Phase 2.
+**B35 run-program (built on branch `run-program`, awaiting Gate 2):** migration
+`20261115203159_program_runs.sql` **applied live by the builder** — `program_runs` (position pair
+`next_week_position` / `next_workout_position`, `started_at`, `ended_at` with a ≥ start CHECK,
+owner-only RLS on all four verbs, no one-active unique index by design) and nullable
+`workouts.program_workout_id` (`on delete set null`). Builder's live probe (rolled back): a
+synthetic second user reads / updates / deletes 0 runs, forging under A's id 42501, CHECKs 23514,
+a random `program_workout_id` 23503. Device schema V13. `SYNC_ORDER` **reordered** so programs →
+weeks → program workouts upload before workouts (a linked workout must not out-run its program
+workout). App: `programs/programRuns.ts` (start / stop / readActiveRun newest-wins / position rule
+/ advanceRunOnFinish, every end time clamped), `workout/startProgramSession.ts` (title + exercises
++ "Target: …" entry notes, no pre-logged sets), `draftPolicy.finish` advances the run in the same
+`writeLocalTree` transaction, `ProgramPickerSheet`, and the Workout tab's run card (Start next
+session / Start empty workout / Stop program). Finishing the last session ends the run (no loop —
+a product reading for Tristen). Deviations in the plan's "Build notes". Gate 2: rerun checks,
+render both diagrams (`mmdc` was not available to the builder), probe the migration's policies
+once more if wanted.
 
 **Dev server for Tristen's phone:** worktree `C:\Users\trist\Astra\Astra-main` on a detached HEAD
 (never `main` — see `docs/PIPELINE.md`), Expo dev server detached on port 8081 (`--lan`,
@@ -154,7 +140,10 @@ devices of a deleted account keep their local copy (B32); **programs** — soft 
 four tables, no visibility column until B39, `target_sets` required but reps / load / RPE
 optional, weeks unnamed ("Week N"), no program description, swap-style move buttons rather than
 drag, explicit Save targets, a new slot starts at 3 sets, `export-data` not yet exporting
-programs (B34).
+programs (B34); **running programs** — finishing the last session ends the run (no loop),
+targets as entry notes rather than pre-filled sets, positions slide when the author edits
+mid-run, restart always begins at Week 1, an empty workout during a run moves nothing (B35).
+Device check for B35 is in DEFERRED.
 
 Next pipeline step after B35 merges: **B36 teams** (check the Build order table for the exact
 branch name).

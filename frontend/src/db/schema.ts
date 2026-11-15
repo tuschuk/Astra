@@ -18,6 +18,9 @@
  *     posts from Share a photo (version 9, B22). Upload-only.
  *   - programs, program_weeks, program_workouts, program_exercises — the lifter's own training
  *     programs (version 12, B34), synced both ways; soft-deleted through `deleted_at`.
+ *   - program_runs — the lifter running one of those programs and where they are in it
+ *     (version 13, B35), synced both ways; `workouts.program_workout_id` links a session to the
+ *     program workout it was started from.
  *   - outbox — the list of local changes (uploads and, from version 5,
  *     deletions) not yet sent to the server (see `sync/outbox.ts`).
  *   - sync_state — small bookkeeping values, such as how far the last
@@ -342,8 +345,36 @@ create table program_exercises (
 create index program_exercises_workout_idx on program_exercises (program_workout_id);
 `;
 
+/**
+ * Version 13 (B35): running a program. Mirrors the server's `…_program_runs.sql`:
+ *   - `program_runs` — each time the lifter started running one of their programs: which
+ *     program, the next session's week and workout POSITIONS, and when the run started and
+ *     ended (null while active). Never deleted — a run ends. Synced both ways like the program
+ *     tables; all reads and writes go through `programs/programRuns.ts`.
+ *   - `workouts.program_workout_id` — the program workout a session was started from (null for an
+ *     ordinary workout). Finishing such a workout moves the run on (see `programRuns.ts`).
+ * Both are bare columns with no local foreign keys, for the same reason as V12: a downloaded run
+ * or workout can name a program row this phone hasn't downloaded yet.
+ */
+const V13 = `
+create table program_runs (
+  id                    text primary key not null,
+  user_id               text not null,
+  program_id            text not null,
+  next_week_position    integer not null,
+  next_workout_position integer not null,
+  started_at            text not null,
+  ended_at              text,
+  created_at            text not null,
+  updated_at            text not null
+);
+create index program_runs_user_idx on program_runs (user_id);
+
+alter table workouts add column program_workout_id text;
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12];
+export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

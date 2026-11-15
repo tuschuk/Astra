@@ -227,6 +227,7 @@ describe('workoutsNeedingAnalysis', () => {
       started_at: new Date(Date.parse('2026-11-01T09:00:00.000Z') + i * 86_400_000).toISOString(),
       ended_at: new Date(Date.parse('2026-11-01T10:00:00.000Z') + i * 86_400_000).toISOString(),
       visibility: 'public',
+      program_workout_id: null,
       created_at: '2026-11-01T09:00:00.000Z',
       updated_at: '2026-11-01T09:00:00.000Z',
     }));

@@ -18,6 +18,7 @@ export const WORKOUT: WorkoutRow = {
   started_at: T0,
   ended_at: '2026-11-14T10:00:00.000Z',
   visibility: 'public',
+  program_workout_id: null,
   created_at: T0,
   updated_at: T0,
 };

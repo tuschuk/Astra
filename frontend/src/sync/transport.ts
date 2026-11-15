@@ -1,5 +1,5 @@
 /**
- * The sync engine's view of the server: sixteen operations, nothing more.
+ * The sync engine's view of the server: seventeen operations, nothing more.
  *
  * Why an interface: the real implementation (`supabaseTransport.ts`) talks to
  * Supabase over the network; tests use an in-memory fake server
@@ -18,6 +18,7 @@ import type {
   FlairRow,
   PersonalRecordRow,
   PostRow,
+  ProgramRunRow,
   ProgramTable,
   RowByTable,
   SetRow,
@@ -98,6 +99,13 @@ export interface SyncTransport {
     after: PullCursor | null,
     limit: number,
   ): Promise<RowByTable[T][]>;
+
+  /**
+   * One page of the user's own program runs (B35) changed after `after`, ordered by
+   * (updated_at, id) — how a second or reinstalled phone learns which program the lifter is
+   * running and where they are in it. Ended runs come too (ending is an update).
+   */
+  pullProgramRuns(userId: string, after: PullCursor | null, limit: number): Promise<ProgramRunRow[]>;
 
   /**
    * Deletes rows on the server by id (B14). The server's foreign keys take a deleted

@@ -83,7 +83,9 @@ export function createSupabaseTransport(
   upload: UploadFileFn = uploadFile,
 ): SyncTransport {
   /** One page of a table after a cursor, optionally narrowed to one user. */
-  async function page<T extends 'workouts' | 'exercises' | 'personal_records' | 'workout_analyses' | ProgramTable>(
+  async function page<
+    T extends 'workouts' | 'exercises' | 'personal_records' | 'workout_analyses' | ProgramTable | 'program_runs',
+  >(
     tbl: T,
     after: PullCursor | null,
     limit: number,
@@ -121,6 +123,9 @@ export function createSupabaseTransport(
     // numeric target_weight_kg / target_rpe arrive as JSON numbers, like sets.weight_kg.
     pullProgramRows: (tbl, userId, after, limit) =>
       page(tbl, after, limit, tbl === 'programs' ? userId : undefined) as Promise<RowByTable[typeof tbl][]>,
+
+    // B35: the lifter's own program runs (they carry user_id, like personal records).
+    pullProgramRuns: (userId, after, limit) => page('program_runs', after, limit, userId),
 
     pullWorkoutExercises: (workoutIds) => childrenOf('workout_exercises', 'workout_id', workoutIds),
 

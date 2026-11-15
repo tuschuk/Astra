@@ -2,10 +2,11 @@
  * Upload: sends every change in the outbox to the server.
  *
  * How one push works:
- *   1. For each table, parents first (exercises → workouts → entries → sets
- *      → personal records → programs → weeks → program workouts → program
- *      exercises, so the server never sees a set before its entry or a record
- *      before the set it cites), read which rows are
+ *   1. For each table, parents first (exercises → programs → weeks → program
+ *      workouts → workouts → entries → sets → personal records → program
+ *      exercises → program runs — `SYNC_ORDER` in db/dao.ts — so the server
+ *      never sees a set before its entry, a record before the set it cites,
+ *      or a program session before the program workout it names), read which rows are
  *      waiting and each one's watermark (see outbox.ts).
  *   2. Read those rows as they are now and send them in batches of up to
  *      PUSH_BATCH_SIZE as insert-or-update-by-id — without `updated_at`,
@@ -110,6 +111,7 @@ function zeroCounts(): Record<SyncedTable, number> {
     program_weeks: 0,
     program_workouts: 0,
     program_exercises: 0,
+    program_runs: 0,
   };
 }
 

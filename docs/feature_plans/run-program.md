@@ -497,3 +497,39 @@ CLAUDE.md "Autonomous sessions"). What was attacked, and what it changed:
 ## Build notes and deviations (builder run)
 
 _Recorded by the builder; each deliberate departure from the plan above, and why._
+
+- **Migration version.** Written as `…_program_runs.sql`, applied live through the MCP as
+  `program_runs`; Supabase recorded version `20261115203159`, and the file carries that prefix.
+  Live probe (rolled back; only one real profile exists, so "user B" was a synthetic uuid): B
+  reads / updates / deletes 0 of A's runs; a run forged under A's id is refused (42501); a
+  negative position and `ended_at < started_at` are refused by CHECKs (23514); a workout naming a
+  random `program_workout_id` is refused by the FK (23503); one naming a real program workout is
+  accepted. The plan's "B inserts a run under B's own id naming A's program" probe could not be run
+  (B has no profile row, so the `user_id` FK refuses first) — the existence-only reading stands on
+  the FK definition.
+- **`advanceRunOnFinish` takes the session's `started_at`** (review finding, deliberate deviation
+  from the §(c) signature). A session started under an earlier run of the same program — the
+  lifter stopped and restarted it meanwhile, e.g. on another phone, while the draft waited —
+  matched the program check and would have pushed the fresh run past Week 1 on finish, breaking
+  "restarting always begins at the first live session". The advance now moves nothing when the
+  finished session started before the run did. Pinned in both test files.
+- **`stopProgramRun` ends every active run, not just the newest** (§(f) says "the active run's").
+  With only the newest ended, an older straggler left by two offline phones would surface as "the"
+  run after Stop. Ending all is what (a)'s "the next start ends both" already does for start.
+- **`readActiveRun` returns `{ run, tree, nextSession }`** — the program is `tree.program`, not a
+  separate field; `nextSession` is a `{ week, workout }` node pair or null, as planned.
+- **`startProgramSession(db, userId, unit, options)`** — the lifter's display unit is a parameter
+  (the §(e) target note shows weight in it; the module can't read a React hook).
+- **`startActiveWorkout` refuses a `programWorkoutId` not on the phone** (not in the plan): the
+  server FK would refuse such a workout at upload and wedge the queue — the same guard
+  `addExercise` has for exercises. Tested.
+- **One copy of the logger's exercise rule.** The prefill's skip check calls a new exported
+  `canLogExercise` in `activeWorkout.ts`, which `addExercise` now uses too (review finding: the
+  first draft copied the SQL).
+- **The fake server checks nullable FKs** (`OPTIONAL_REF`: `workouts.program_workout_id →
+  program_workouts`) and `program_runs → programs`, so the end-to-end offline test genuinely
+  fails if the push order ever lets a linked workout out-run its program workout.
+- **Tab detail:** with a run that has no next session, "Start empty workout" becomes the primary
+  button (nothing else to tap). The picker reports the new run to the tab, which re-reads.
+- **Not done, recorded in DEFERRED:** tied positions from two offline appends are ambiguous (first
+  in `(position, id)` wins); the paged-table union is spelled in three files.

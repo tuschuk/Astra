@@ -28,7 +28,8 @@ flair-stamp trigger, the both-posts read rule, `post_hot_scores` recreated with 
 `20261115173827_exercises_soft_delete.sql` (B31, applied live — `exercises.deleted_at` and the
 customs-only CHECK; see "Custom exercises"), `20261115193156_programs.sql` (B34, applied live —
 `programs`, `program_weeks`, `program_workouts`, `program_exercises`, author-only RLS through
-`private.owns_program`; see "Programs"),
+`private.owns_program`; see "Programs"), `20261115203159_program_runs.sql` (B35, applied live —
+`program_runs` with owner-only RLS and `workouts.program_workout_id`; see "Program runs"),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -80,6 +81,9 @@ erDiagram
   program_weeks ||--o{ program_workouts : "contains, in position order (cascade)"
   program_workouts ||--o{ program_exercises : "contains, in position order (cascade)"
   exercises |o--o{ program_exercises : "exercise_id (set null if the exercise is hard-deleted)"
+  profiles ||--o{ program_runs : "user_id runs (cascade, B35)"
+  programs ||--o{ program_runs : "program_id being run (cascade; existence-only)"
+  program_workouts |o--o{ workouts : "program_workout_id: session started from (set null, B35)"
 
   auth_users {
     uuid id PK "managed by Supabase Auth"
@@ -144,6 +148,7 @@ erDiagram
     timestamptz started_at
     timestamptz ended_at "null while in progress; never before started_at"
     workout_visibility visibility "public, followers or private; follows its post's on change (B26)"
+    uuid program_workout_id FK "program session it was started from; null = ordinary workout (B35)"
     timestamptz created_at
     timestamptz updated_at
   }
@@ -337,7 +342,49 @@ erDiagram
     timestamptz created_at
     timestamptz updated_at
   }
+
+  program_runs {
+    uuid id PK "client-generated"
+    uuid user_id FK "the lifter running it"
+    uuid program_id FK "existence-only; grants no read of the program"
+    smallint next_week_position "stored position (not Week N) of the next session's week, 0 or more"
+    smallint next_workout_position "stored position of that workout in its week, 0 or more"
+    timestamptz started_at
+    timestamptz ended_at "null = active; CHECK never before started_at"
+    timestamptz created_at
+    timestamptz updated_at "trigger-maintained"
+  }
 ```
+
+## Program runs (B35)
+
+Migration `20261115203159_program_runs.sql`. One `program_runs` row per time a lifter starts
+running one of their programs, holding **where they are**: the stored `position` of the next
+session's week and of that workout within the week. Positions, not a `program_workout_id`,
+because programs are edited while they run — weeks and workouts are never renumbered, so a
+stored position keeps meaning the same session, and when that session is deleted the app slides
+to whatever now stands there (`resolveNextSession` in `programs/programRuns.ts`).
+
+- **Owner-only RLS, all four verbs** (`user_id = auth.uid()`). Live-probed at B35 (rolled back): a
+  second user reads, updates and deletes 0 rows; a run forged under another user's id is refused
+  (42501); a negative position and `ended_at < started_at` are refused by CHECKs (23514).
+  `program_id` is existence-only (the `exercise_id` precedent): it proves the program exists and
+  grants no read of it.
+- **"At most one active run per lifter" is NOT in the schema.** There is deliberately no unique
+  index on `(user_id) where ended_at is null` — two phones starting runs offline would both upload
+  an active row and the second would be refused, blocking that phone's upload queue forever. The
+  rule lives in the app: starting a run ends every active run the phone sees in the same save,
+  and every read takes the **newest** active run (`started_at desc, id desc`). A hand-written
+  query must do the same and must not assume at most one active row.
+- **Never deleted; runs end.** Stopping, finishing the last session, and starting another program
+  all stamp `ended_at` (an update — no tombstones). The app clamps every end time to be no earlier
+  than `started_at`, so the CHECK is unreachable by honest phones. Ended rows are run history
+  (nothing reads them yet). Account deletion cascades through `user_id`; a hard-deleted program
+  cascades its runs.
+- **`workouts.program_workout_id`** (nullable, `on delete set null`, indexed): the program workout
+  a logged session was started from — set once at start on the phone. Finishing such a workout
+  moves the run on, on the phone, in the same transaction as the finish. Existence-only too; the
+  workouts policies govern the row. A random uuid is refused by the FK (23503, probed).
 
 ## Programs (B34)
 
@@ -810,6 +857,7 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `mutes` (B27) | only rows where you are the muter | manage your own mute list |
 | `moderators` (B27) | only your own row | nobody — service role / migration only |
 | `programs`, `program_weeks`, `program_workouts`, `program_exercises` (B34) | only the program's author (`private.owns_program`) | only the program's author: insert, update, delete — the app soft-deletes |
+| `program_runs` (B35) | only your own (`user_id = auth.uid()`) | insert, update, delete only your own — the app never deletes, it stamps `ended_at` |
 | `reports` (B27) | moderators only (`private.is_moderator()`) | insert only as yourself, about a post or comment you can currently see (each table's own read rule decides), never your own; no updates or deletes — the founder works the queue via service role |
 
 **Workout visibility rule** (`private.workout_visible`): you always see your own; a block in either
@@ -826,7 +874,8 @@ they can see rows the caller's own RLS would hide.
 - Deleting an auth user cascades through `profiles` to settings, body data, follows, blocks, mutes,
   a moderator row, reports filed by them and reports about them (B27), owned exercises, workouts,
   their entries and sets, posts, votes, comments, and the user's tombstones (live-probed at B27),
-  and (B34) their programs with every week, workout and slot under them.
+  and (B34) their programs with every week, workout and slot under them, and (B35) their program
+  runs. A hard-deleted program workout sets `workouts.program_workout_id` to null (the session stays).
   Storage objects are not rows of this graph — the `moderate` function sweeps them.
   Deleting a post cascades to its votes and comments (B23); reports about it stay (no FK, B27).
 - Deleting a workout cascades to its `workout_exercises` and their `sets` (and the records citing
@@ -862,10 +911,15 @@ column; version 10 (B26) added `user_settings.progress_pic_visibility` (default 
 version 11 (B31) added `exercises.deleted_at` (text, null while live); version 12 (B34) added the
 four program tables with the same columns (no local foreign keys — parent links and
 `exercise_id` are bare columns, so a child that downloads before its parent just waits unseen),
-synced both ways — uploaded after
-`personal_records`, parents first, and downloaded table by table on their own bookmarks
+synced both ways, downloaded table by table on their own bookmarks
 (`pull_cursor:programs`, `…:program_weeks`, `…:program_workouts`, `…:program_exercises`), after
-the analyses and before tombstones; versions are append-only,
+the analyses and before tombstones; version 13 (B35) added `program_runs` (same columns, no local
+foreign keys, downloaded on `pull_cursor:program_runs` after the four program tables) and the bare
+column `workouts.program_workout_id`. **Upload order since B35** (`SYNC_ORDER`): `exercises`,
+`programs`, `program_weeks`, `program_workouts`, `workouts`, `workout_exercises`, `sets`,
+`personal_records`, `program_exercises`, `program_runs` (then `workouts` once more) — programs go
+before workouts so a session started from a program never reaches the server ahead of the
+program workout its FK names; versions are append-only,
 upgraded on launch). There is no device copy of `sync_tombstones` — tombstones are applied as
 they download, and `sync_state` keeps the last applied id (`pull_cursor:tombstones`). It has the same column names, but
 uses text for uuids and timestamps and 0/1 for booleans, and it does not repeat the server's

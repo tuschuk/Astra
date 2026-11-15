@@ -584,3 +584,31 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     buttons wrapping, the week cards).
   - Mermaid render of both diagrams was not run by the builder (`mmdc` needed approval) — Gate 2
     should render them once.
+- **B35 run-program:**
+  - **`export-data` exports neither programs nor `program_runs`** — the B34 item above widens to
+    include `program_runs` (and `workouts.program_workout_id` already rides the `'*'` select).
+    Deletion is complete (`program_runs.user_id` cascades from `profiles`).
+  - **Tied positions are ambiguous.** Two weeks (or two workouts in one week) sharing a `position`
+    — only possible when two offline phones each appended one — can't be told apart by the run's
+    stored positions; the first in `(position, id)` order wins, so the second of a tie can be
+    skipped. Fix if it ever shows: renumber ties on read in `programs.ts`, or move the pointer to
+    a (position, id) pair.
+  - **A completion flourish** ("Program complete" card / analysis line) when a run ends (plan §d).
+  - **Seeding the logger's entry boxes with target numbers** — an `EntryCard` prop fed from the
+    same slot data (plan §e); today targets live in the entry note only.
+  - **Run history UI** — ended `program_runs` rows accumulate; nothing renders them.
+  - **"Week 2 · Day 1" in history / feed / analysis** beyond the workout title — the
+    `workouts.program_workout_id` column exists for a later reader.
+  - **A run whose program another phone deleted stays "active" on the server** (reads ignore it;
+    the next start or stop on any phone ends it). Harmless; recorded in the plan.
+  - **Shared paged-table union** — `pullStandalone`, `supabaseTransport.page` and
+    `fakeTransport.page` each spell the table union; one `PagedTable` alias in `dao.ts` would make
+    the next table one edit (review smell, left as-is to keep the diff narrow).
+  - **Device check (Tristen):** build a 2-week program on the phone; airplane mode → Workout →
+    Start from a program → pick it → Start next session: "Week 1 · Day A" with each exercise's
+    "Target: …" note → log a set → Finish → the tab offers Day B; start the next session, kill the
+    app mid-session, reopen → Resume shows it intact; reconnect → the run row and the linked
+    workouts (`program_workout_id`) in Supabase; Stop program; run a program to its last session
+    → finishing it ends the run (tab shows the two start buttons). Judge the run card at phone width.
+  - Mermaid render of both diagrams was not run by the builder (`mmdc` needed approval) — Gate 2
+    should render them once.

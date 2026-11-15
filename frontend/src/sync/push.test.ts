@@ -135,6 +135,7 @@ describe('pushOutbox', () => {
       program_weeks: 0,
       program_workouts: 0,
       program_exercises: 0,
+      program_runs: 0,
     });
     expect(server.upsertCalls.map((c) => c.tbl)).toEqual(['workouts', 'workout_exercises', 'sets', 'workouts']);
     expect(await outboxSize(db)).toBe(0);
