@@ -20,6 +20,10 @@ jest.mock('expo-sqlite/kv-store', () => {
     removeItem: async (key) => {
       items.delete(key);
     },
+    // B32: the device wipe after account deletion empties the whole store.
+    clear: async () => {
+      items.clear();
+    },
   };
   return { __esModule: true, default: store, Storage: store, AsyncStorage: store };
 });

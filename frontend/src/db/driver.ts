@@ -61,17 +61,25 @@ export interface SqlExecutor {
  */
 export interface SqlDriver extends SqlExecutor {
   withTransactionAsync<T>(task: (tx: SqlExecutor) => Promise<T>): Promise<T>;
+  /**
+   * Closes the connection once everything already queued has finished (B32 — the account-
+   * deletion wipe closes the file before deleting it). Optional so hand-made test doubles
+   * needn't provide it; drivers built by `createSerializedDriver` always have it.
+   */
+  closeAsync?(): Promise<void>;
 }
 
 /**
  * Turns a raw, unsynchronised SQLite connection into a `SqlDriver` whose
  * operations run strictly one at a time, in the order they were requested.
  *
- * Input: `raw` — the engine's own execute functions (expo-sqlite or node:sqlite).
+ * Input: `raw` — the engine's own execute functions (expo-sqlite or node:sqlite) — and
+ * optionally `close`, the engine's way to close the connection.
  * Output: a driver where each statement waits its turn, and a transaction
- * holds the turn from its BEGIN until its COMMIT or ROLLBACK.
+ * holds the turn from its BEGIN until its COMMIT or ROLLBACK. Closing waits its
+ * turn too, so nothing already asked for is cut off.
  */
-export function createSerializedDriver(raw: SqlExecutor): SqlDriver {
+export function createSerializedDriver(raw: SqlExecutor, close: () => Promise<void> = async () => undefined): SqlDriver {
   // The tail of the queue: every new operation chains onto it.
   let tail: Promise<unknown> = Promise.resolve();
 
@@ -104,5 +112,6 @@ export function createSerializedDriver(raw: SqlExecutor): SqlDriver {
           throw error;
         }
       }),
+    closeAsync: () => enqueue(close),
   };
 }

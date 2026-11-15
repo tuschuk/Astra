@@ -11,6 +11,9 @@
  * phone and queued (keeping the unit) and takes effect for the very next progress pic; the stored
  * choice is shown on open; a failed save reverts; body data is stated as owner-only.
  *
+ * And B32's Account additions: Export your data runs the export flow (mocked) and shows its
+ * line; Delete account opens the delete screen.
+ *
  * Settings is rendered next to the screen that shows the weights, so the test sees one tree
  * re-render, the way a mounted screen under Settings would. The router is a stub; the database
  * comes through a mocked `openAppDatabase`.
@@ -35,13 +38,26 @@ import { startActiveWorkout } from '@/workout/activeWorkout';
 
 import WorkoutScreen from '@/app/(tabs)/workout';
 import ActiveWorkoutScreen from '@/app/active-workout';
-import SettingsScreen, { BODY_DATA_LINE } from '@/app/settings';
+import { EXPORT_OFFLINE } from '@/account/exportData';
+import SettingsScreen, { BODY_DATA_LINE, EXPORT_NOTE } from '@/app/settings';
 import SavedWorkoutScreen from '@/app/workout/[id]';
 
 const mockOpenDatabase = jest.fn<() => Promise<SqlDriver>>();
 jest.mock('@/db/database', () => ({
   ...jest.requireActual<typeof import('@/db/database')>('@/db/database'),
   openAppDatabase: () => mockOpenDatabase(),
+}));
+
+// B32: the export flow and the Supabase client are stand-ins; the flow has its own tests.
+const mockClient = { functions: { invoke: jest.fn() } };
+jest.mock('@/lib/supabase', () => ({
+  ...jest.requireActual<typeof import('@/lib/supabase')>('@/lib/supabase'),
+  getSupabase: () => mockClient,
+}));
+const mockExport = jest.fn<(client: unknown) => Promise<{ ok: true } | { ok: false; message: string }>>();
+jest.mock('@/account/exportData', () => ({
+  ...jest.requireActual<typeof import('@/account/exportData')>('@/account/exportData'),
+  exportMyData: (client: unknown) => mockExport(client),
 }));
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: jest.fn(() => false) };
@@ -235,5 +251,31 @@ describe('Settings — Privacy (B26)', () => {
     expect(await screen.findByText('Your privacy setting couldn’t be saved. Try again.')).toBeTruthy();
     expect(screen.getByLabelText(ONLY_ME).props.accessibilityState.selected).toBe(true);
     warn.mockRestore();
+  });
+});
+
+describe('Settings — Export and Delete account (B32)', () => {
+  it('Export your data runs the export with the signed-in client and shows its failure line', async () => {
+    mockExport.mockResolvedValue({ ok: false, message: EXPORT_OFFLINE });
+    await renderSignedIn(<SettingsScreen />);
+    expect(screen.getByText(EXPORT_NOTE)).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Export your data'));
+    expect(await screen.findByText(EXPORT_OFFLINE)).toBeTruthy();
+    expect(mockExport).toHaveBeenCalledWith(mockClient);
+    expect(screen.getByLabelText('Export your data').props.accessibilityState.disabled).toBe(false);
+  });
+
+  it('a successful export shows no message', async () => {
+    mockExport.mockResolvedValue({ ok: true });
+    await renderSignedIn(<SettingsScreen />);
+    await fireEvent.press(screen.getByLabelText('Export your data'));
+    await waitFor(() => expect(mockExport).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(EXPORT_OFFLINE)).toBeNull();
+  });
+
+  it('Delete account opens the delete screen', async () => {
+    await renderSignedIn(<SettingsScreen />);
+    await fireEvent.press(screen.getByLabelText('Delete account'));
+    expect(mockRouter.push).toHaveBeenCalledWith('/delete-account');
   });
 });

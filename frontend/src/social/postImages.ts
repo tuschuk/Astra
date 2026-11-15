@@ -29,8 +29,11 @@ import { extensionFor, type PostImageMimeType } from './mediaLimits';
 /** The server's storage bucket for post photos (`…_post_images.sql`). */
 export const POST_IMAGES_BUCKET = 'post-images';
 
-/** The folder inside the app's documents where photos wait for upload. */
-function localFolder(): string {
+/**
+ * The folder inside the app's documents where photos wait for upload. Exported for B32's device
+ * wipe, which deletes the whole folder after an account is deleted.
+ */
+export function localPostImagesFolder(): string {
   return `${FileSystem.documentDirectory ?? ''}post-images/`;
 }
 
@@ -50,7 +53,7 @@ export function postImageObjectPath(userId: string, postId: string, mimeType: Po
  */
 export function localPostImageUri(imagePath: string): string {
   const fileName = imagePath.slice(imagePath.lastIndexOf('/') + 1);
-  return `${localFolder()}${fileName}`;
+  return `${localPostImagesFolder()}${fileName}`;
 }
 
 /**
@@ -60,7 +63,7 @@ export function localPostImageUri(imagePath: string): string {
  */
 export async function savePostImageLocally(sourceUri: string, imagePath: string): Promise<string> {
   const target = localPostImageUri(imagePath);
-  await FileSystem.makeDirectoryAsync(localFolder(), { intermediates: true });
+  await FileSystem.makeDirectoryAsync(localPostImagesFolder(), { intermediates: true });
   await FileSystem.copyAsync({ from: sourceUri, to: target });
   return target;
 }

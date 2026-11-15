@@ -16,6 +16,11 @@
  *         there is nothing to choose; the choice arrives with the first feature that reads it.
  *   - Account: which email is signed in, and the Sign out button. Signing out needs no
  *     navigation here — the root guard sends the user to sign-in once the session is gone.
+ *     Then (B32):
+ *       - Export your data — downloads everything the lifter has on Astra as one JSON file and
+ *         opens the share sheet to keep it (`account/exportData.ts`). Needs a connection; it
+ *         holds what has synced, and says so.
+ *       - Delete account — opens the delete screen, where typing DELETE confirms.
  *
  * Notification settings arrive with their own feature (B47); they are not shown until they work.
  */
@@ -24,6 +29,7 @@ import { Pressable, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import type { WeightUnit } from '@training-math';
 
+import { exportMyData } from '@/account/exportData';
 import { useAuth } from '@/auth/AuthProvider';
 import { Screen } from '@/components/Screen';
 import { Button } from '@/components/ui/Button';
@@ -33,6 +39,7 @@ import { FormError } from '@/components/ui/FormError';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
 import type { WorkoutVisibility } from '@/db/dao';
 import { useAppDatabase } from '@/db/useAppDatabase';
+import { getSupabase } from '@/lib/supabase';
 import { useDisplayUnit } from '@/settings/displayUnit';
 import { readProgressPicVisibility, setProgressPicVisibility } from '@/settings/privacySettings';
 import { unitStore } from '@/settings/unitStore';
@@ -56,6 +63,9 @@ const PROGRESS_PIC_OPTIONS: ChoiceOption<WorkoutVisibility>[] = VISIBILITY_ORDER
 /** The Body data row's statement (B26). */
 export const BODY_DATA_LINE = 'Only you. Body data never leaves your account.';
 
+/** The small print under Export your data (B32): the export is the server's copy. */
+export const EXPORT_NOTE = 'A JSON file of your workouts, sets, PRs, posts and settings. Includes everything that has synced to your account.';
+
 /** The two units, in the order the toggle shows them, with what a screen reader says. */
 const UNIT_OPTIONS: readonly { unit: WeightUnit; label: string; spoken: string }[] = [
   { unit: 'kg', label: 'kg', spoken: 'Kilograms' },
@@ -74,6 +84,8 @@ export default function SettingsScreen() {
   // Null until read from the phone; the chips wait (disabled) rather than guess.
   const [picVisibility, setPicVisibility] = useState<WorkoutVisibility | null>(null);
   const [privacyError, setPrivacyError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
 
   // Read the progress-pic choice each time the screen comes into view, so a change downloaded
   // from another device since the last visit is what's shown.
@@ -132,6 +144,15 @@ export default function SettingsScreen() {
     const result = await signOut();
     setSigningOut(false);
     if (!result.ok) setSignOutError(result.message);
+  }
+
+  /** Builds the export and opens the share sheet; shows a calm line if it couldn't. */
+  async function handleExport(): Promise<void> {
+    setExporting(true);
+    setExportError(null);
+    const result = await exportMyData(getSupabase());
+    setExporting(false);
+    if (!result.ok) setExportError(result.message);
   }
 
   /** Back to the profile, or the You tab if there is nothing to go back to. */
@@ -206,6 +227,28 @@ export default function SettingsScreen() {
           style={styles.signOut}
         />
         <FormError message={signOutError} />
+
+        <Button
+          label={exporting ? 'Exporting…' : 'Export your data'}
+          variant="outline"
+          onPress={() => void handleExport()}
+          disabled={exporting}
+          style={styles.signOut}
+        />
+        <Body variant="small" style={styles.muted}>
+          {EXPORT_NOTE}
+        </Body>
+        <FormError message={exportError} />
+
+        <Button
+          label="Delete account"
+          variant="outline"
+          onPress={() => router.push('/delete-account')}
+          style={styles.signOut}
+        />
+        <Body variant="small" style={styles.muted}>
+          Removes your account and everything in it from Astra, for good.
+        </Body>
       </Card>
     </Screen>
   );
@@ -253,6 +296,7 @@ const styles = StyleSheet.create({
   muted: {
     color: colors.muted,
   },
+  // Space above each Account-card button (Sign out, Export, Delete).
   signOut: {
     marginTop: spacing.sm,
   },

@@ -98,7 +98,7 @@ flowchart TD
   ProfileView -->|"Edit profile: router.push('/edit-profile')"| EditProfileScr["Edit profile (app/edit-profile.tsx, B25, YOU-1)<br/>loadProfileRow fills Display name / Username / Bio; Change photo → expo-image-picker<br/>(square crop, quality 0.8) → checkAvatarImage (≤ 5 MiB, jpeg / png / webp; refusal line, Save disabled);<br/>Save: checkProfileText (profileLimits: 50 / 300 / username pattern; a set username can't be cleared)<br/>→ uploadAvatar to avatars/me/uuid.ext (new name each time) → updateProfile(avatar_url = path)<br/>→ deleteAvatar(old) best effort (or the new one if the update failed) → saveOwnProfile → Back;<br/>offline → 'Editing your profile needs a connection.' + Retry; nothing queued"]
   EditProfileScr --> ProfileQ
   EditProfileScr -->|"FileSystem.uploadAsync POST /storage/v1/object/avatars/path (Bearer + apikey);<br/>DELETE same address for the old photo"| DB
-  You -->|"gear: router.push('/settings')"| SettingsScr["Settings (app/settings.tsx, B15, YOU-4 part)<br/>Units: kg | lb segmented toggle (radio roles for screen readers)<br/>Privacy (B26): 'Who can see new progress pics' ChoiceChips Only you | Followers | Public<br/>(read from astra.db on focus, disabled until read; failed save → chip back + line);<br/>'existing posts keep their own setting'; Body data: static 'Only you. Body data never leaves your account.' (no control)<br/>Account: signed-in email + Sign out<br/>Back (or /you); no Notifications until B47"]
+  You -->|"gear: router.push('/settings')"| SettingsScr["Settings (app/settings.tsx, B15, YOU-4 part)<br/>Units: kg | lb segmented toggle (radio roles for screen readers)<br/>Privacy (B26): 'Who can see new progress pics' ChoiceChips Only you | Followers | Public<br/>(read from astra.db on focus, disabled until read; failed save → chip back + line);<br/>'existing posts keep their own setting'; Body data: static 'Only you. Body data never leaves your account.' (no control)<br/>Account: signed-in email + Sign out + Export your data (busy label, calm error line) + Delete account (B32)<br/>Back (or /you); no Notifications until B47"]
   SettingsScr -->|"tap kg / lb: unitStore.setUnit"| UnitStore
   SettingsScr -->|"progress-pic chip: setProgressPicVisibility"| PrivacySet["privacySettings.ts (src/settings, B26):<br/>readProgressPicVisibility (no row → private) ·<br/>setProgressPicVisibility (ONE transaction: patchUserSettingsTx — unit kept —<br/>+ outbox line row_id = user id, then notify); no in-memory store"]
   PrivacySet -->|"user_settings row + outbox line"| LocalDB
@@ -318,6 +318,11 @@ flowchart TD
     ModerateFn["Edge function moderate (B27, NFR-7, deployed v2, verify_jwt on)<br/>POST {action: remove-post | remove-comment | remove-account, targetId}<br/>with the founder's token → getUser; 403 unless in moderators (read as service role);<br/>remove-post: delete post (votes/comments cascade) → delete its post-images object → resolve open reports;<br/>remove-comment: delete → resolve; remove-account: 409 for a moderator, else auth.admin.deleteUser<br/>(cascade) → sweep post-images/id/ + avatars/id/. No app screen calls it — the founder, by hand"]
     ModerateFn -->|"service role: moderators check, deletes, reports status"| DB
     ModerateFn -->|"service role: remove objects"| Bucket
+    ExportFn["Edge function export-data (B32, NFR-6, deployed v1, verify_jwt on)<br/>POST (no body) with the user's token → getUser; NO service role —<br/>every read AS THE CALLER (RLS) and filtered to the caller's own rows<br/>(profile, settings, body data, customs incl. deleted, workouts → entries → sets,<br/>personal_records, workout_analyses, own posts); 500-row pages, 100-id chunks;<br/>200 one JSON document {format astra-export v1, units kg, …, exerciseNames, flairs}"]
+    ExportFn -->|"select as caller"| DB
+    DeleteFn["Edge function delete-account (B32, NFR-6, deployed v2, verify_jwt on)<br/>POST {confirm: 'DELETE'} (else 400) with the user's token → getUser — the only<br/>account it can delete is the caller's; 409 if in moderators;<br/>1 sweep the caller's folder in post-images + avatars, 2 auth.admin.deleteUser<br/>(cascades every row); files first so any failure leaves the login and a retry works"]
+    DeleteFn -->|"service role: moderators check, auth.admin.deleteUser → cascade"| DB
+    DeleteFn -->|"service role: list + remove own folder"| Bucket
   end
   ReqPass -->|"supabase.functions.invoke('analyze-workout')"| AnalyzeFn
 
@@ -329,6 +334,13 @@ flowchart TD
   Guard --> Tabs
   Guard --> SignIn
   SettingsScr -->|"Sign out (local scope:<br/>clears this device first, works offline)"| Store
+  SettingsScr -->|"Export your data (B32): exportMyData"| ExportFlow["account/exportData.ts (B32, NFR-6)<br/>canShare? → functions.invoke('export-data') (fetch error → 'needs a connection')<br/>→ write cacheDirectory/astra-export-yyyy-mm-dd.json → Sharing.shareAsync (application/json)<br/>→ delete the cache copy (always, in finally)"]
+  ExportFlow -->|"supabase.functions.invoke('export-data')"| ExportFn
+  SettingsScr -->|"Delete account: router.push('/delete-account')"| DeleteScr["Delete account (app/delete-account.tsx, B32, NFR-6)<br/>shows the signed-in email + what goes; 'Export your data first' → back;<br/>Delete my account locked until DELETE is typed;<br/>failure / offline → calm line, nothing wiped"]
+  DeleteScr -->|"requestAccountDeletion: functions.invoke('delete-account', {confirm: 'DELETE'})"| DeleteFn
+  DeleteScr -->|"only after the server's 'deleted': wipeDeviceData"| Wipe["db/wipeDevice.ts (B32): best-effort, in order —<br/>1 signOut (local) → guard → sign in;<br/>2 deleteAppDatabase: close astra.db, delete the file<br/>(opens asked for meanwhile wait, then get a fresh empty db);<br/>3 kv-store clear (plate rack, feed prefs, own-profile cache);<br/>4 delete documents/post-images/ (waiting photos)<br/>refused sign-out → 'Close Astra and open it again'"]
+  Wipe --> Store
+  Wipe -->|"close + delete file"| LocalDB
 
   Push -->|"supabase-js delete by id, then upsert, as the signed-in user (RLS);<br/>user_settings: update by user_id"| DB
   Push -->|"B22: FileSystem.uploadAsync POST /storage/v1/object/post-images/path<br/>(Bearer token, apikey, x-upsert: true), before the post row"| Bucket
@@ -446,7 +458,8 @@ flowchart TD
    in the chosen unit, so flipping back and forth shows exactly the same numbers. The choice is
    saved on the phone straight away (works offline, survives a killed app) and reaches the
    account at the next sync; a choice made on another phone arrives at this one's next sync.
-   **Account** shows the signed-in email and **Sign out**.
+   **Account** shows the signed-in email, **Sign out**, and (B32) **Export your data** and
+   **Delete account** — see 22.
 11. **Use the Tool Kit (B16, TK-1..4), with no signal needed.** In the logger, the red **Tool
    Kit** button floating bottom-right (on screen however far the workout is scrolled) opens the
    calculators in a panel over the workout; **Close** lands back on the logger exactly as it was
@@ -580,7 +593,18 @@ flowchart TD
    own. Re-sharing a re-share passes on the original; twice says you already did. If the original
    becomes private to you, is blocked or muted, or is deleted, the re-share disappears with it.
    Photo posts and other people's posts can't be exported as images.
-22. Everything else is a placeholder that renders its final layout with inert controls (Start
+22. **Export your data and delete the account (B32, NFR-6) — needs a connection.** Settings →
+   Account → **Export your data** builds one JSON file of everything the lifter owns that has
+   synced — profile, settings, body data, custom exercises (deleted ones too), every workout with
+   its exercises and sets, every PR, every analysis, their own posts (photo paths, not the
+   pictures) — and opens the share sheet to keep it; the phone's cached copy is deleted after.
+   **Delete account** opens a screen naming the signed-in email and what goes; typing **DELETE**
+   unlocks **Delete my account**. The server deletes the photo and avatar files, then the login,
+   which removes every row of the lifter's (and other people's re-shares of their posts, and
+   reports about them). Only after that does the phone sign out and wipe its own copy (database,
+   saved preferences, waiting photos). Offline or a server error: a calm line, nothing changes.
+   A moderator's account can't be deleted here.
+23. Everything else is a placeholder that renders its final layout with inert controls (Start
    from a program, Marketplace, Communities).
 
 ## Data path today
@@ -870,6 +894,21 @@ flowchart TD
   `createImagePost` reads the choice for progress pics (`imagePostVisibility`), so posting stays
   offline. `ChoiceChips` moved to `components/ui/`. The fake social client answers
   `update(…).select()` with the changed rows; the fake server no longer imitates the dropped CHECK.
+- **Export and account deletion (B32).** Two edge functions, both `verify_jwt` on, split into
+  `index.ts` wiring and a dependency-injected `handler.ts` (tests: `functions/tests/
+  export_data.test.ts`, `delete_account.test.ts`). `export-data` uses only the caller's token:
+  `readOne` for the one-row tables and `readPage` (id-ordered `range`) for the rest, with the
+  handler doing all paging and id-chunking so its tests prove nothing is cut at the API's
+  1000-row cap; every owner read is filtered by the caller's id (RLS alone would let public
+  workouts of others through). `delete-account` uses the service role after `getUser`: sweep
+  `<uid>/` in `post-images` and `avatars`, then `auth.admin.deleteUser`, whose cascade through
+  `profiles` removes every user-owned table (checked live, rolled back). App side:
+  `account/functionCalls.ts` (`callFunction`: FunctionsFetchError → offline, FunctionsHttpError →
+  status) under `account/exportData.ts` and `account/deleteAccount.ts`; `app/delete-account.tsx`
+  is declared in the root layout's signed-in guard; `db/wipeDevice.ts` runs the device wipe.
+  `db/database.ts` gained `createDatabaseHolder` (the singleton, now a testable factory) and
+  `deleteAppDatabase`; `SqlDriver` gained an optional `closeAsync` that waits its turn in the
+  serialising queue. `social/postImages.ts` exports `localPostImagesFolder` for the wipe.
 - **Still unwired:** follower / following counts don't open lists; another lifter's workout rows
   on a profile aren't tappable; there is no "remove photo"; the Library's catalog cards come from the bundle, not `astra.db` (only Your exercises reads it, B31); a custom can't be created from inside the logger's picker; customs add nothing to the muscle map; posts can't be
   edited, deleted or re-offered from old workouts (photo posts can't be deleted either, so their

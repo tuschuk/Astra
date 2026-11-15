@@ -140,6 +140,7 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
           <Stack.Screen name="post-comments/[id]" />
           <Stack.Screen name="profile/[id]" />
           <Stack.Screen name="edit-profile" />
+          <Stack.Screen name="delete-account" />
         </Stack.Protected>
         <Stack.Protected guard={!signedIn}>
           <Stack.Screen name="(auth)" />

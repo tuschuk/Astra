@@ -6,6 +6,8 @@ import { describe, expect, it } from '@jest/globals';
 
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 
+import { createSerializedDriver } from './driver';
+
 describe('createSerializedDriver (over node:sqlite)', () => {
   it('commits a successful transaction and returns its value', async () => {
     const db = createNodeSqliteDriver();
@@ -57,5 +59,37 @@ describe('createSerializedDriver (over node:sqlite)', () => {
     await db.execAsync('create table t (v text)');
     expect((await db.runAsync('insert into t values (?), (?)', ['a', 'b'])).changes).toBe(2);
     expect(await db.getFirstAsync('select v from t where v = ?', ['zzz'])).toBeNull();
+  });
+});
+
+describe('createSerializedDriver closeAsync (B32)', () => {
+  it('closes only after everything already queued has run', async () => {
+    const log: string[] = [];
+    const raw = {
+      execAsync: async (sql: string) => {
+        await new Promise((r) => setTimeout(r, 5));
+        log.push(sql);
+      },
+      runAsync: async () => ({ changes: 0 }),
+      getAllAsync: async <T,>() => [] as T[],
+      getFirstAsync: async () => null,
+    };
+    const db = createSerializedDriver(raw, async () => {
+      log.push('close');
+    });
+    const work = [db.execAsync('one'), db.execAsync('two')];
+    await db.closeAsync?.();
+    await Promise.all(work);
+    expect(log).toEqual(['one', 'two', 'close']);
+  });
+
+  it('has a harmless close when the engine gave none', async () => {
+    const db = createSerializedDriver({
+      execAsync: async () => undefined,
+      runAsync: async () => ({ changes: 0 }),
+      getAllAsync: async <T,>() => [] as T[],
+      getFirstAsync: async () => null,
+    });
+    await expect(db.closeAsync?.()).resolves.toBeUndefined();
   });
 });

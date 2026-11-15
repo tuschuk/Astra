@@ -538,3 +538,29 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     catalog count; the form's chip rows wrapping at phone width.
   - Mermaid render of the updated diagrams by the builder — see the B31 plan's Deviations; Gate 2
     should render them once if the builder could not.
+- **B32 export-and-delete-account:**
+  - **Live HTTP probe of both functions** (the plan's Gate 2 probe): the builder deployed
+    `export-data` (v1) and `delete-account` (v2), both `verify_jwt` on, and proved the cascade in
+    a rolled-back SQL transaction (two throwaway users, a row in every user-owned table → all 0
+    after `delete from auth.users`, the other user kept), but outbound `curl` was declined by the
+    permission layer. Gate 2: throwaway user by SQL insert (`email_confirmed_at = now()`,
+    `encrypted_password = crypt(…, gen_salt('bf'))`), password grant for a JWT, seed rows + one
+    object per bucket, call `export-data` (diff counts vs SQL) then `delete-account` (400 without
+    confirm, 200 with), then counts + bucket listings → 0.
+  - **The shared edge-function HTTP helpers** (`json`, `check`, Bearer strip + `getUser`) now exist
+    in four `index.ts` files (analyze-workout, moderate, export-data, delete-account), plus the
+    storage sweep in two. Extract to `functions/_shared/http.ts` in a step that redeploys all four.
+  - **One shared "ok or message" result type** — `AuthResult`, `ExportResult`, `DeleteResult` are
+    the same shape; merge when a fourth appears.
+  - **The deleted user's other devices** keep their local mirror and 401 on every sync (plan risk
+    5; the B07 account-switch class). Wiping on account switch stays deferred with B07's item.
+  - **Exports of photo binaries, CSV, scheduled/emailed exports, a grace period before deletion**
+    — out of scope by the plan; product calls.
+  - **Device check (Tristen):** Settings → Export your data → share sheet opens with
+    `astra-export-<date>.json`; save to Files and open it (workouts with sets nested, PRs present);
+    airplane mode → Export shows "needs a connection". Delete account (on a throwaway account!):
+    button locked until DELETE typed; airplane mode → "needs a connection", nothing changes;
+    online → lands on sign-in; signing in again with the same email fails; reopening the app shows
+    a fresh, empty device database.
+  - Mermaid render of `app-flow.md` was not run by the builder (`mmdc` needed approval) — Gate 2
+    should render it once.

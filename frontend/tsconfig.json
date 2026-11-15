@@ -40,6 +40,9 @@
     "../backend/supabase/functions/analyze-workout/handler.ts",
     // B27: the moderate function's request logic, same reasoning (its index.ts is Deno-only).
     "../backend/supabase/functions/moderate/handler.ts",
+    // B32: the export and account-deletion functions' request logic (same reasoning).
+    "../backend/supabase/functions/export-data/handler.ts",
+    "../backend/supabase/functions/delete-account/handler.ts",
     "../backend/supabase/functions/tests/**/*.ts"
   ]
 }
