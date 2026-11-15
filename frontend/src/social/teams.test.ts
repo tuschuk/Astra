@@ -2,8 +2,9 @@
  * Tests for the Teams module (B36): create (name checked first, owner row added by the server),
  * the two join modes (open joins; invite-only refuses without an invite, accepts with one and
  * uses it up), leave (members can, the owner can't), the owner's switch, invites, search, and
- * the reads' shapes. The client is the in-memory fake social client, which imitates the join
- * policy and the two triggers; owner-only rights themselves were probed live at B36.
+ * the reads' shapes; and (B38) removal, feed hides and team deletion. The client is the
+ * in-memory fake social client, which imitates the join policy, the triggers and the team
+ * cascade; owner-only rights themselves were probed live at B36 and B38.
  */
 import { describe, expect, it } from '@jest/globals';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -13,6 +14,8 @@ import { profile } from '@/test-utils/feedFixtures';
 
 import {
   createTeam,
+  deleteTeam,
+  hideTeamPost,
   inviteToTeam,
   isCoachRole,
   joinModeLabel,
@@ -23,6 +26,7 @@ import {
   loadTeamsOf,
   myInvites,
   removeInvite,
+  removeMember,
   roleLabel,
   searchTeams,
   setJoinMode,
@@ -31,7 +35,9 @@ import {
   TEAM_INVITE_REFUSED,
   TEAM_JOIN_REFUSED,
   TEAM_NOT_ALLOWED,
+  teamFeedHides,
   teamInvitees,
+  unhideTeamPost,
 } from './teams';
 
 const team = (id: string, name: string, joinMode: 'open' | 'invite' = 'open', createdBy = 'owner') => ({
@@ -200,6 +206,69 @@ describe('setMemberRole (B37)', () => {
 
   it('the owner and coaches coach; members do not', () => {
     expect([isCoachRole('owner'), isCoachRole('coach'), isCoachRole('member'), isCoachRole(null)]).toEqual([true, true, false, false]);
+  });
+});
+
+describe('moderation (B38, TEAM-4)', () => {
+  /** A team owned by `owner` with coach Cy and member Pat; Pat has an assignment and a stale invite. */
+  function seeded() {
+    return createFakeSocialClient({
+      teams: [team('t', 'Crew')],
+      team_members: [member('t', 'owner', 'owner'), member('t', 'cy', 'coach'), member('t', 'pat')],
+      team_assignments: [{ team_id: 't', user_id: 'pat', program_id: 'p1', assigned_by: 'owner', created_at: '2026-11-15T12:00:00.000Z' }],
+      team_posts: [{ id: 'push', team_id: 't', author_id: 'cy', kind: 'announcement', body: 'Hi', program_id: null, program_workout_id: null, created_at: '2026-11-15T12:00:00.000Z' }],
+    });
+  }
+
+  it('removeMember: removes a member or a coach (their assignments go too); never the owner row', async () => {
+    const fake = seeded();
+    expect(await removeMember(fake.client, 't', 'pat')).toEqual({ ok: true });
+    expect(fake.tables.team_assignments).toEqual([]);
+    expect(await removeMember(fake.client, 't', 'cy')).toEqual({ ok: true });
+    expect(await removeMember(fake.client, 't', 'owner')).toEqual({ ok: false, message: TEAM_NOT_ALLOWED });
+    expect(fake.tables.team_members).toEqual([expect.objectContaining({ user_id: 'owner' })]);
+  });
+
+  it('removeMember: the server removing nothing (a non-owner) is not-allowed; a dropped connection is calm', async () => {
+    const fake = seeded();
+    expect(await removeMember(fake.client, 't', 'nobody')).toEqual({ ok: false, message: TEAM_NOT_ALLOWED });
+    fake.setOffline(true);
+    expect(await removeMember(fake.client, 't', 'pat')).toEqual({ ok: false, message: TEAM_FAILED });
+  });
+
+  it('hide, hide again, read the hides, unhide', async () => {
+    const fake = seeded();
+    expect(await hideTeamPost(fake.client, 't', 'post-1', 'owner')).toEqual({ ok: true });
+    expect(await hideTeamPost(fake.client, 't', 'post-1', 'owner')).toEqual({ ok: true });
+    expect(fake.tables.team_feed_hides).toEqual([{ team_id: 't', post_id: 'post-1', hidden_by: 'owner' }]);
+    expect(await teamFeedHides(fake.client, 't')).toEqual(new Set(['post-1']));
+    expect(await teamFeedHides(fake.client, 'other')).toEqual(new Set());
+    expect(await unhideTeamPost(fake.client, 't', 'post-1')).toEqual({ ok: true });
+    expect(await unhideTeamPost(fake.client, 't', 'post-1')).toEqual({ ok: true });
+    expect(await teamFeedHides(fake.client, 't')).toEqual(new Set());
+  });
+
+  it('a refused hide (not the owner) says only the owner can; other failures are calm', async () => {
+    const refusing = {
+      from: () => ({ insert: () => Promise.resolve({ error: { code: '42501', message: 'rls' } }) }),
+    } as unknown as SupabaseClient;
+    expect(await hideTeamPost(refusing, 't', 'p', 'cy')).toEqual({ ok: false, message: TEAM_NOT_ALLOWED });
+    const offline = createFakeSocialClient({}, { offline: true });
+    expect(await hideTeamPost(offline.client, 't', 'p', 'owner')).toEqual({ ok: false, message: TEAM_FAILED });
+    expect(await unhideTeamPost(offline.client, 't', 'p')).toEqual({ ok: false, message: TEAM_FAILED });
+    await expect(teamFeedHides(offline.client, 't')).rejects.toThrow(/Loading hidden posts failed/);
+  });
+
+  it('deleteTeam: the team and everything team-scoped go; a team the server keeps is not-allowed', async () => {
+    const fake = seeded();
+    fake.tables.team_invites.push({ team_id: 't', user_id: 'zed' });
+    fake.tables.team_feed_hides.push({ team_id: 't', post_id: 'post-1', hidden_by: 'owner' });
+    expect(await deleteTeam(fake.client, 't')).toEqual({ ok: true });
+    expect(fake.tables.teams).toEqual([]);
+    expect([fake.tables.team_members, fake.tables.team_invites, fake.tables.team_posts, fake.tables.team_assignments, fake.tables.team_feed_hides]).toEqual([[], [], [], [], []]);
+    expect(await deleteTeam(fake.client, 't')).toEqual({ ok: false, message: TEAM_NOT_ALLOWED });
+    fake.setOffline(true);
+    expect(await deleteTeam(fake.client, 't')).toEqual({ ok: false, message: TEAM_FAILED });
   });
 });
 

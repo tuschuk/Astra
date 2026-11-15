@@ -35,6 +35,9 @@ customs-only CHECK; see "Custom exercises"), `20261115193156_programs.sql` (B34,
 `20261115222643_team_coaching.sql` (B37, applied live — role update policy, `team_posts`,
 `team_assignments`, the `team_post_kind` enum, coach log access on workouts / entries / sets, and
 the two payload functions; see "Team coaching"),
+`20261115232206_team_moderation.sql` (B38, applied live — owner removal of members, the
+`on_team_member_removed` cleanup trigger, `team_feed_hides`, owner deletion of pushes and of the
+team; see "Team moderation"),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -103,6 +106,9 @@ erDiagram
   profiles ||--o{ team_assignments : "user_id assignee / assigned_by coach (both cascade)"
   programs ||--o{ team_assignments : "program_id: the coach's program (cascade)"
   team_members ||..o{ workouts : "coach log access: a coach reads members' workouts (no FK; RLS arm)"
+  teams ||--o{ team_feed_hides : "owner's hidden posts (cascade, B38)"
+  posts ||--o{ team_feed_hides : "post_id hidden from that team's feed (cascade)"
+  profiles ||--o{ team_feed_hides : "hidden_by the owner (cascade)"
 
   auth_users {
     uuid id PK "managed by Supabase Auth"
@@ -412,9 +418,53 @@ erDiagram
     uuid user_id PK,FK "the assignee"
     uuid program_id PK,FK "the coach's program"
     uuid assigned_by FK "the coach"
-    timestamptz created_at "row deleted when the member starts or dismisses it"
+    timestamptz created_at "row deleted when the member starts or dismisses it, or leaves / is removed (B38)"
+  }
+
+  team_feed_hides {
+    uuid team_id PK,FK "PK (team_id, post_id): a repeat hide is 23505"
+    uuid post_id PK,FK "the hidden post (stays visible everywhere else)"
+    uuid hidden_by FK "who hid it (the owner)"
+    timestamptz created_at
   }
 ```
+
+## Team moderation (B38)
+
+Migration `20261115232206_team_moderation.sql`. Every right here is the **owner's**, through the
+existing `private.is_team_owner`; nothing widens what anyone can read.
+
+- **Removing members.** Policy `owners remove members` on `team_members` (delete): the owner, never
+  on the owner row (`role <> 'owner'`). It ORs with B36's `members leave teams`, so the owner row
+  can be deleted by nobody (only cascades). Coaches are removable. Removal is not a ban: on an
+  `open` team the removed lifter may join again; on `invite` they need a new invite.
+- **Cleanup trigger.** `on_team_member_removed` (after delete on `team_members`,
+  `private.handle_team_member_removed`, security definer): on **every** membership delete it
+  deletes that member's `team_assignments` in the team; when the deleter is **someone else**
+  (`auth.uid() is distinct from old.user_id` — a null caller, e.g. a server cascade, counts) it also
+  deletes their `team_invites` row, so a removed member of an invite-only team can't rejoin with a
+  stale invite. A voluntary leave keeps the invite (B36 G12). The first trigger here to read
+  `auth.uid()`.
+- **`team_feed_hides`** — the owner's curation of the Team feed. Insert: the owner, with
+  `hidden_by` = themselves. Read: whoever can read the roster (`is_team_member` or the team is
+  `open`) — the Team feed's readers need the list to apply it. Delete (unhide): the owner. No
+  update. **A hide is not privacy**: it changes no post's visibility; the app leaves hidden posts out
+  of the team page only (the owner still sees them as markers to unhide). Home, profiles and the API
+  return the post exactly as posts RLS says.
+- **`team_posts` delete** gains `owners remove pushes`: the owner may delete any push (author OR
+  owner). Read is unchanged.
+- **Team deletion.** `owners delete their teams` on `teams` (delete, owner only). `team_members`,
+  `team_invites`, `team_posts`, `team_assignments` and `team_feed_hides` all cascade; members'
+  posts, workouts and programs are untouched.
+- Live-probed at B38 (one rolled-back DO block; owner, coach, two members, outsider): owner removes
+  a member → 1 row, their assignment and stale invite gone; a member leaving → assignment gone,
+  invite kept; coach / member / outsider removals and anyone deleting the owner row → 0 rows; a
+  removed member rejoins an open team, but 42501 once it is invite-only; owner hide lands, coach /
+  member hides (and a coach forging `hidden_by`) 42501; the hidden post still reads on Home, the
+  roster-minus-hides read leaves it out; an outsider reads the open team's hides (1) and 0 once
+  invite-only; coach unhide 0, owner 1; coach deleting the owner's push 0, owner deleting the
+  coach's 1; member and coach team deletes 0, owner 1 → every team-scoped row gone, posts,
+  workouts and the program kept.
 
 ## Team coaching (B37)
 
@@ -427,7 +477,8 @@ Migration `20261115222643_team_coaching.sql`. Online-only like the rest of Teams
   granted back on `(role)` only, so `user_id` / `team_id` can't be rewritten (42501, probed).
 - **`team_posts`** (pushes). Insert: as yourself, a coach of the team, and a `program_id` /
   `program_workout_id` you own (`owns_program`, walking `workout_week` → `week_program` for a
-  workout). Read: any member of the team (`is_team_member`). Delete: the author. No update. Three
+  workout). Read: any member of the team (`is_team_member`). Delete: the author (and, from B38,
+  the owner). No update. Three
   CHECKs make the payload match the kind exactly.
 - **`team_assignments`.** Insert: `assigned_by` = you, a coach of the team, your own program, an
   assignee who is on the team (`private.user_in_team(tid, uid)`), no block either way. Read and
@@ -478,7 +529,7 @@ and every create / join / switch / invite is a direct API call (the votes preced
   at table level and granted back to `authenticated` only on `(name, join_mode)` — so even the owner
   can only rename the team or switch its mode (`created_by` update → 42501, probed).
 - **No team deletion** in B36 (no delete policy); account deletion cascades a creator's teams, their
-  memberships and invites.
+  memberships and invites. B38 adds the owner's delete policy (see "Team moderation").
 - **The Team feed is not a table.** It is the ordinary posts read (`loadFeedPage`) with the roster's
   user ids as the authors. Posts RLS is untouched, so a member's followers-only post shows in the
   Team feed only to members who follow them.
@@ -934,7 +985,9 @@ does not own, so another user's public workout can never be analysed over its ow
 - **A re-share is checked and wears its original's flair** (B28): `posts_reshare_shape` on `posts`
   — see Re-shares.
 - **A new team gets its owner row** (B36): `on_team_created` on `teams`; **joining a team deletes
-  your invite to it**: `on_team_member_created` on `team_members` — see Teams.
+  your invite to it**: `on_team_member_created` on `team_members` — see Teams. **Leaving or being
+  removed clears your assignments** (and, when removed, your invite): `on_team_member_removed` on
+  `team_members` (B38) — see Team moderation.
 
 ## Re-shares (B28)
 
@@ -998,9 +1051,10 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `moderators` (B27) | only your own row | nobody — service role / migration only |
 | `programs`, `program_weeks`, `program_workouts`, `program_exercises` (B34) | only the program's author (`private.owns_program`) | only the program's author: insert, update, delete — the app soft-deletes |
 | `program_runs` (B35) | only your own (`user_id = auth.uid()`) | insert, update, delete only your own — the app never deletes, it stamps `ended_at` |
-| `teams` (B36) | any signed-in user (discoverable) | insert only as yourself (`created_by`); update only the owner (`private.is_team_owner`), and only `name` / `join_mode` (column grant); no deletes |
-| `team_members` (B36) | your own rows; the whole roster if you are a member; any open team's roster | insert only yourself, only as `member`, only when the team is open or you hold an invite; update (B37) only the owner, only `role`, never the owner row, only to `coach` / `member`; delete only your own row and never the owner's (leave) |
-| `team_posts` (B37) | members of the team | insert only as yourself, as a coach of the team, pushing only your own program / program workout; no updates; delete only your own |
+| `teams` (B36) | any signed-in user (discoverable) | insert only as yourself (`created_by`); update only the owner (`private.is_team_owner`), and only `name` / `join_mode` (column grant); delete only the owner (B38; everything team-scoped cascades) |
+| `team_members` (B36) | your own rows; the whole roster if you are a member; any open team's roster | insert only yourself, only as `member`, only when the team is open or you hold an invite; update (B37) only the owner, only `role`, never the owner row, only to `coach` / `member`; delete your own row (leave) or, as the owner, anyone's (B38 removal) — never the owner's row |
+| `team_feed_hides` (B38) | members of the team; anyone when the team is open | insert only the owner, as `hidden_by` themselves; delete only the owner; no updates |
+| `team_posts` (B37) | members of the team | insert only as yourself, as a coach of the team, pushing only your own program / program workout; no updates; delete your own, or any as the owner (B38) |
 | `team_assignments` (B37) | the assignee, and the team's coaches | insert only as `assigned_by` yourself, a coach, your own program, to a team member, never across a block; delete by the assignee or a coach |
 | `team_program_payload`, `team_workout_payload` (functions, B37) | signed-in members of the team, for content pushed to it (or a program assigned to you there) and still live; null otherwise | — |
 | `team_invites` (B36) | invites to you, and the owner sees their team's | insert only the owner, never across a block (`private.blocked_either`); delete by the invitee (decline) or the owner (cancel) |

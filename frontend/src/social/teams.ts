@@ -13,7 +13,8 @@
  * Who may do what is NOT decided here. Teams live only on the server (they are never stored on
  * the phone — joining needs a connection, like votes), every request runs as the signed-in
  * lifter, and the server's row-level security answers: it refuses a join of an invite-only team
- * without an invite, a mode switch by anyone but the owner, and an owner leaving. This file just
+ * without an invite, a mode switch by anyone but the owner, and an owner leaving; and (B38) any
+ * removal, feed hide or team deletion by anyone but the owner. This file just
  * asks, and turns a refusal into a calm sentence. The Supabase client is passed in, so tests
  * hand it a fake.
  */
@@ -341,6 +342,89 @@ export async function removeInvite(client: SupabaseClient, teamId: string, userI
   try {
     const { error } = await client.from('team_invites').delete().eq('team_id', teamId).eq('user_id', userId);
     return error ? { ok: false, message: TEAM_FAILED } : { ok: true };
+  } catch {
+    return { ok: false, message: TEAM_FAILED };
+  }
+}
+
+/**
+ * The owner removes `userId` from the team (TEAM-4, B38). One request: the server's removal
+ * trigger also deletes the member's standing assignments and any unused invite in the same step,
+ * so a member removed from an invite-only team can't rejoin with an old invite. Removal is not a
+ * ban — on an open team they can join again; the owner's keep-out tool is invite-only.
+ *
+ * The server only lets the owner remove, and never the owner's own row; anything else removes
+ * nothing, which comes back as `TEAM_NOT_ALLOWED` (the request asks for the removed row back).
+ */
+export async function removeMember(client: SupabaseClient, teamId: string, userId: string): Promise<TeamResult> {
+  try {
+    const { data, error } = await client
+      .from('team_members')
+      .delete()
+      .eq('team_id', teamId)
+      .eq('user_id', userId)
+      .select('user_id');
+    if (error) return { ok: false, message: TEAM_FAILED };
+    return ((data ?? []) as unknown[]).length > 0 ? { ok: true } : { ok: false, message: TEAM_NOT_ALLOWED };
+  } catch {
+    return { ok: false, message: TEAM_FAILED };
+  }
+}
+
+/**
+ * The owner hides a post from the Team feed (TEAM-4, B38). A hide is curation, not privacy: the
+ * post is the member's own and stays on Home and their profile for everyone who could already
+ * see it — only the team page leaves it out. Hiding twice is harmless; the server refuses anyone
+ * but the owner (`TEAM_NOT_ALLOWED`). `me` is recorded as who hid it.
+ */
+export async function hideTeamPost(client: SupabaseClient, teamId: string, postId: string, me: string): Promise<TeamResult> {
+  try {
+    const { error } = await client.from('team_feed_hides').insert({ team_id: teamId, post_id: postId, hidden_by: me });
+    if (!error) return { ok: true };
+    if (codeOf(error) === UNIQUE_VIOLATION) return { ok: true };
+    if (codeOf(error) === RLS_REFUSED) return { ok: false, message: TEAM_NOT_ALLOWED };
+    return { ok: false, message: TEAM_FAILED };
+  } catch {
+    return { ok: false, message: TEAM_FAILED };
+  }
+}
+
+/**
+ * The owner puts a hidden post back in the Team feed. A hide already gone is no error — the
+ * post is back either way. It doesn't ask for the removed row back: only the owner is ever shown
+ * the button, and a refused unhide (never the owner's) would be corrected by the page's next
+ * re-read of the hide list.
+ */
+export async function unhideTeamPost(client: SupabaseClient, teamId: string, postId: string): Promise<TeamResult> {
+  try {
+    const { error } = await client.from('team_feed_hides').delete().eq('team_id', teamId).eq('post_id', postId);
+    return error ? { ok: false, message: TEAM_FAILED } : { ok: true };
+  } catch {
+    return { ok: false, message: TEAM_FAILED };
+  }
+}
+
+/**
+ * The ids of the posts the owner hid from this team's feed, for the team page to leave out. The
+ * server shows them to whoever can read the Team feed (members, or anyone for an open team).
+ * Throws on failure.
+ */
+export async function teamFeedHides(client: SupabaseClient, teamId: string): Promise<Set<string>> {
+  const { data, error } = await client.from('team_feed_hides').select('post_id').eq('team_id', teamId);
+  throwIfError(error, 'Loading hidden posts failed');
+  return new Set(((data ?? []) as { post_id: string }[]).map((r) => r.post_id));
+}
+
+/**
+ * The owner deletes the team (B38). Memberships, invites, coaches' pushes, assignments and hides
+ * go with it on the server; every member's posts, workouts and programs stay theirs. Only the
+ * owner may — anyone else deletes nothing, which comes back as `TEAM_NOT_ALLOWED`.
+ */
+export async function deleteTeam(client: SupabaseClient, teamId: string): Promise<TeamResult> {
+  try {
+    const { data, error } = await client.from('teams').delete().eq('id', teamId).select('id');
+    if (error) return { ok: false, message: TEAM_FAILED };
+    return ((data ?? []) as unknown[]).length > 0 ? { ok: true } : { ok: false, message: TEAM_NOT_ALLOWED };
   } catch {
     return { ok: false, message: TEAM_FAILED };
   }
