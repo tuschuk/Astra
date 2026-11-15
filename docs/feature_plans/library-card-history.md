@@ -213,3 +213,21 @@ adversarially; the draft was revised in place where an answer changed it.
 - **Scope verdict:** right as written, with the "complete vs 50" reading resolved inside the
   step rather than silently narrowed. Nothing else widened; customs, grades, tap-through and
   social surfaces all have named owners elsewhere.
+
+## Build deviations (builder, B30)
+
+- **The name heading moved into the section, behind a `showName` prop.** The plan had the
+  history screen shell read `exerciseInfo` for its title. Loading it in the section's one read
+  keeps B13's observable behaviour exact (name, PRs and sessions appear together; the loading
+  and failure states still show only Back) without a second read in the shell. The Library card
+  passes no `showName`, and then `exerciseInfo` is skipped.
+- **`pageSize` is a section prop** (default `EXERCISE_SESSION_LIMIT`): the plan's "small limit
+  override" for tests, as a prop. No production caller sets it.
+- **A failed "Show older sessions" read keeps the list already shown** (and hides the button for
+  that attempt) instead of replacing the PRs and sessions with the failure line. Found by the
+  review; the plan did not cover the case. A failed *first* read still shows the failure line.
+- **History screen with a missing `exerciseId` param** now shows the failure line instead of
+  "Loading history…" forever. The app's own links can't reach this case.
+- **The `lb` set helper moved into `test-utils/loggerTestKit.tsx`**, shared by the three test
+  files (review: duplicated code). The screen-level show-more test seeds 51 sessions through
+  the real store.

@@ -172,7 +172,9 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - An exercise's PR line stays empty until its first finish after B13 ships (history seeds then).
   - Small duplication to extract when a third user appears: distinct exercise ids of a workout,
     `back()`, and the set-row JSX shared by the saved-workout and history screens.
-  - History screen has no paging (newest 50) and no tap-through to a session's workout.
+  - ~~History screen has no paging (newest 50)~~ — B30's "Show older sessions" reaches every
+    session (grows the read's limit by 50 per tap). Still deferred: tap-through from a session
+    card to its saved workout, and true cursor paging if a measured problem ever calls for it.
   - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.
 - B14 edit-delete-workouts follow-ups (`edit-delete-workouts`):
   - **Device check (Tristen):** saved workout → Edit → remove a set / add one / change the title
@@ -504,3 +506,14 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     device, the knob is a threshold in `filterExercises` (one line, no UI change).
   - Mermaid render of the updated `app-flow.md` was not run by the builder (`mmdc` was declined
     by the permission layer) — Gate 2 should render it once.
+- **B30 library-card-history:**
+  - **Device check (Tristen):** open a logged exercise's card from the Library → "Your history"
+    (PRs + sessions under the tips) legible at phone width; "Show older sessions" on a long
+    history; a never-logged exercise's card reads fine. If PRs belong above the coaching content,
+    it is a placement swap inside `app/exercise/[id].tsx`, no logic change.
+  - Custom exercises have no catalog card, so their history lives only on
+    `exercise-history/[exerciseId]`; whether the two routes collapse is B31's call.
+  - A failed "Show older sessions" read keeps the shown list and hides the button for that
+    attempt; there is no retry other than reopening the screen. Add one if it is ever seen.
+  - Mermaid render of `app-flow.md` was not run by the builder (`mmdc` needed approval the
+    headless run doesn't have) — Gate 2 should render it once.

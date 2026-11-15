@@ -10,7 +10,7 @@ import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { AuthProvider } from '@/auth/AuthProvider';
 import { prepareDatabase } from '@/db/database';
 import type { SqlDriver } from '@/db/driver';
-import type { ActiveWorkoutOptions } from '@/workout/activeWorkout';
+import type { ActiveWorkoutOptions, SetInput } from '@/workout/activeWorkout';
 
 import { createFakeAppState, createFakeAuthClient, fakeSession } from './fakeAuthClient';
 import { createNodeSqliteDriver } from './nodeSqliteDriver';
@@ -34,6 +34,11 @@ export function steadyOptions(start = '2026-11-14T09:00:00.000Z'): ActiveWorkout
       return now;
     },
   };
+}
+
+/** A set of `reps` at `weight` pounds, plus any extra fields (warm-up, drop-set position…). */
+export function lb(reps: number, weight: number, extra: Partial<SetInput> = {}): SetInput {
+  return { reps, weight: { value: weight, unit: 'lb' }, ...extra };
 }
 
 /** Renders `element` inside safe-area metrics and an AuthProvider already holding a session. */

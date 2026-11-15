@@ -114,7 +114,7 @@ flowchart TD
 
   Library -->|type a name| Search["Live name search<br/>alias-aware, e.g. Squats finds Back Squat"]
   Library -->|tap a chip| Filter["Filter chips (B29): region row (4) +<br/>muscle row (12) + equipment row (6), each scrolls sideways;<br/>one per row, re-tap clears, rows AND together;<br/>a muscle orders hardest-trained first;<br/>result count + no-results state"]
-  Library -->|tap a card| ExDetail["Exercise detail (app/exercise/[id].tsx), read-only (B29, LIB-3)<br/>name, region, equipment, pattern(s);<br/>Muscles worked (ranked); How to do it (5 coaching steps,<br/>**bold** cue spans); Tips; unknown id → not-found; Back"]
+  Library -->|tap a card| ExDetail["Exercise detail (app/exercise/[id].tsx), read-only (B29, LIB-3)<br/>name, region, equipment, pattern(s);<br/>Muscles worked (ranked); How to do it (5 coaching steps,<br/>**bold** cue spans); Tips; unknown id → not-found; Back<br/>B30 (LIB-4) 'Your history': the shared ExerciseHistorySection<br/>at libraryExerciseId(slug) — my PRs + every logged session;<br/>a failed read shows one line there, catalog content intact"]
 
   subgraph LibData["Exercise library data (frontend/src/library)"]
     Seed[("exercises.ts<br/>founder's library by movement pattern:<br/>22 patterns, equipment, muscle intensities,<br/>5-step coaching cues, name aliases")]
@@ -151,7 +151,7 @@ flowchart TD
     Saved -->|"Edit: router.push"| EditWO_UI
     EditWO_UI -->|"Done: router.back"| Saved
     EditWO_UI -->|Add exercise| Picker
-    History["Exercise history (app/exercise-history/[exerciseId].tsx), read-only (B13, LOG-4)<br/>exercise name; 'Current PRs' (or 'No PRs yet');<br/>newest 50 finished sessions: title or date, that exercise's sets<br/>(warm-ups 'W', drop set on one row); Back"]
+    History["Exercise history (app/exercise-history/[exerciseId].tsx), read-only (B13, LOG-4)<br/>keyed by exercise uuid (works for exercises with no Library card);<br/>Back + the shared ExerciseHistorySection with the exercise name as heading (B30)"]
     Logger -->|"History link: router.push"| History
     History -->|Back| Logger
     Logger -->|Add exercise| Picker
@@ -218,17 +218,20 @@ flowchart TD
     ListQ["listPastWorkouts: finished only, newest first, limit 100, counts"]
     ReadQ["readWorkout: one finished workout, entries joined to exercise names, sets"]
     LastQ["lastSessionSets: newest finished workout with a logged set of<br/>this exercise, never the current draft; + exerciseInfo (name, equipment)"]
-    SessQ["exerciseSessions (B13): newest 50 finished workouts with a logged set<br/>of this exercise, each with that exercise's sets"]
+    SessQ["exerciseSessions (B13): newest N finished workouts with a logged set<br/>of this exercise (N = 50, grown by 50 per 'Show older sessions'), each with that exercise's sets"]
     PrQ["currentPrs (workout/prs.ts, B13): stored records of one exercise,<br/>ordered 1RM, e1RM, rep maxes by reps"]
   end
   LocalDB --> ListQ --> Workout
   LocalDB --> ReadQ --> Saved
   LocalDB --> LastQ --> Logger
-  LocalDB --> SessQ --> History
+  HistSection["ExerciseHistorySection (components/workout, B30): the ONE reader + renderer<br/>of a lifter's history of one exercise — 'Current PRs' (formatPrLine, or 'No PRs yet');<br/>one card per finished session, newest first: title or date, sets (warm-ups 'W',<br/>drop set on one row); 'Show older sessions' while a full batch came back<br/>(re-reads with limit + 50; old list stays until the longer one lands; a failed<br/>re-read keeps it); loading / 'couldn't be read' / no-sessions states; offline"]
+  LocalDB --> SessQ --> HistSection
   LocalDB --> PrQ
   PrQ --> Logger
   PrQ --> Saved
-  PrQ --> History
+  PrQ --> HistSection
+  HistSection -->|"showName (+ exerciseInfo)"| History
+  HistSection -->|"Your history"| ExDetail
 
   subgraph AnaMod["Analysis on the phone (src/analysis/analysis.ts, B18)"]
     ForScreen{"analysisForScreen: unsent lines in the workout tree / its PR rows?<br/>yes → LOCAL (no clock compare);<br/>no → STORED row unless stale (workout_updated_at &lt; workout.updated_at);<br/>no stored row → LOCAL"}
@@ -362,8 +365,11 @@ flowchart TD
 5. Move between the five tabs and the You screen. On Library, scroll, search and filter every
    launch exercise from the bundled, read-only catalog — by body region, by one of the twelve
    muscles (hardest-trained first) and by equipment, the rows combining (B29). Tap a card to
-   open its detail screen: muscles worked, the five coaching steps and tips; Back returns.
-   Nothing is read from the network or the phone's database, so it all works offline.
+   open its detail screen: muscles worked, the five coaching steps and tips, then **Your
+   history** (B30): the lifter's current PRs on that movement and every session they logged of
+   it, with **Show older sessions** revealing 50 more at a time; Back returns. The catalog is
+   bundled and the history comes from the phone's database (the card's slug becomes the
+   exercise's database id via `libraryExerciseId`), so it all works offline.
 6. **Log a workout (B09), with no signal needed.** On the Workout tab, tap **Start empty
    workout**. The logger opens full-screen: **Add exercise** searches the library; each
    exercise card takes reps and/or weight in pounds (**Log set**), repeats the last set in one
@@ -403,8 +409,8 @@ flowchart TD
    and extra volume never count. The saved workout then shows **"PR · 5RM"**-style badges under
    each set that holds a record. While logging, each exercise card shows **"PRs: 1RM 225 lb ·
    e1RM 243.1 lb · 5RM 205 lb"** under the "Last time" line, plus a **History** link to that
-   exercise's history screen: current PRs, then every finished session of it (newest 50) with
-   its sets.
+   exercise's history screen: current PRs, then every finished session of it (newest 50, with
+   **Show older sessions** for the rest, B30) with its sets.
 9. **Edit or delete a past workout (B14, LOG-9).** The saved workout has **Edit** and
    **Delete**. Edit opens the logger's surface over that workout: add, remove or move
    exercises, log, repeat or remove sets (a mistyped set is removed and logged again), flip
@@ -616,7 +622,10 @@ flowchart TD
   `uuidv5(PR_RECORD_NAMESPACE, "user:exercise:kind:reps")`, the same on every device. The logger
   card, the saved workout and the history screen all read records through `currentPrs`; the
   history screen also uses `exerciseSessions` (`workout/history.ts`). The new route is declared in
-  the root layout's signed-in guard and is pushed from the card's History link.
+  the root layout's signed-in guard and is pushed from the card's History link. (Since B30 the
+  history screen is a thin shell over `components/workout/ExerciseHistorySection`, which the
+  Library's exercise detail screen draws too — one reader and renderer, so the two never
+  disagree.)
   `personal_records` (device schema V4) joined `TABLE_COLUMNS` and `SYNC_ORDER` after `sets`.
   Pull gained a third bookmark (`pull_cursor:personal_records`, via
   `transport.pullPersonalRecords`) that runs after the workout trees.

@@ -8,11 +8,17 @@
  *     uses, so the two never disagree);
  *   - "How to do it": the five imported coaching steps, numbered, each a bold title and its cue
  *     (the cue's own **emphasis** drawn bold);
- *   - "Tips": the short form tips for its movement pattern.
+ *   - "Tips": the short form tips for its movement pattern;
+ *   - "Your history" (LIB-4): the lifter's current PRs on this movement and every session they
+ *     have logged of it, read from the phone's database through the same `ExerciseHistorySection`
+ *     the per-exercise history screen uses — so the numbers here always match that screen. The
+ *     catalog slug in the link is turned into the exercise's database id with `libraryExerciseId`.
+ *     The coaching content comes first because the session list can be long.
  *
- * What the user can do: read it and go Back. An id that isn't in the library (only reachable by a
- * stale link) shows a plain "not in the library" message instead of crashing. The lifter's own
- * history and PRs on this screen arrive in step B30.
+ * What the user can do: read it, reveal older sessions with "Show older sessions", and go Back.
+ * An id that isn't in the library (only reachable by a stale link) shows a plain "not in the
+ * library" message instead of crashing. If the database can't be read, only the history part says
+ * so; the catalog content still shows.
  */
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
@@ -23,9 +29,11 @@ import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
+import { ExerciseHistorySection } from '@/components/workout/ExerciseHistorySection';
 import { BODY_REGION_LABELS, exerciseById } from '@/library/catalog';
 import { boldSegments } from '@/library/cueFormat';
 import { MUSCLE_NAMES, rankMuscles } from '@/library/muscles';
+import { libraryExerciseId } from '@/library/uuidv5';
 import { colors, radii, spacing, type } from '@/theme';
 
 /** One coaching cue as text, with the founder's `**emphasis**` drawn bold. */
@@ -116,6 +124,9 @@ export default function ExerciseDetailScreen() {
           ))}
         </Card>
       ) : null}
+
+      <SectionLabel style={styles.historyLabel}>Your history</SectionLabel>
+      <ExerciseHistorySection exerciseId={libraryExerciseId(exercise.id)} />
     </Screen>
   );
 }
@@ -174,5 +185,8 @@ const styles = StyleSheet.create({
   },
   tipText: {
     flex: 1,
+  },
+  historyLabel: {
+    marginTop: spacing.xl,
   },
 });
