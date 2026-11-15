@@ -239,8 +239,9 @@ export function pushWorkout(
 }
 
 /**
- * Removes a push. The server only lets its author remove it; anyone else's attempt changes
- * nothing, which comes back as `COACH_NOT_ALLOWED`.
+ * Removes a push. The server only lets its author or (B38) the team's owner remove it — the
+ * owner's way to take down a coach's push; anyone else's attempt changes nothing, which comes
+ * back as `COACH_NOT_ALLOWED`.
  */
 export async function deleteTeamPost(client: SupabaseClient, postId: string): Promise<TeamResult> {
   try {

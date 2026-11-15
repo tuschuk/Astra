@@ -60,6 +60,13 @@
  * the test through the `rpc` option (the payload functions' answers are the test's to choose).
  * Who may push, assign or read a coach's payload is NOT imitated — probed live at B37.
  *
+ * B38 adds `team_feed_hides` (its primary key refuses a repeat hide with 23505), the team delete's
+ * cascade (every `team_*` row of a deleted team goes with it), and the always-half of the
+ * membership-removal trigger (a deleted membership takes that member's assignments in the team).
+ * The trigger's other half — a removal by someone else also deletes the member's invite, a leave
+ * keeps it — depends on who is acting, which the fake has no notion of; probed live at B38. Who
+ * may remove, hide, unhide or delete a team is NOT imitated — probed live at B38.
+ *
  * What it does NOT do: row-level security or general embedding. Posts are seeded already shaped
  * the way the server's embed returns them (author, flair and workout nested in), and the follow
  * insert imitates the one RLS refusal the app handles (a block in either direction). Server-side
@@ -106,6 +113,8 @@ export interface FakeSocialTables {
   team_posts: Row[];
   /** Assignment rows: `{ team_id, user_id, program_id, assigned_by, created_at }` (B37). */
   team_assignments: Row[];
+  /** Feed-hide rows: `{ team_id, post_id, hidden_by }` (B38). */
+  team_feed_hides: Row[];
 }
 
 /** What a request can name: the tables, plus the computed `post_scores` and (B24) `post_hot_scores` views. */
@@ -235,6 +244,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     team_invites: [...(seed.team_invites ?? [])],
     team_posts: [...(seed.team_posts ?? [])],
     team_assignments: [...(seed.team_assignments ?? [])],
+    team_feed_hides: [...(seed.team_feed_hides ?? [])],
   };
   const requests: FakeCall[][] = [];
   let offline = options.offline ?? false;
@@ -481,6 +491,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
         reports: ['reporter_id', 'target_kind', 'target_id'],
         team_invites: ['team_id', 'user_id'],
         team_assignments: ['team_id', 'user_id', 'program_id'],
+        team_feed_hides: ['team_id', 'post_id'],
       };
       const key = uniqueKeys[table];
       if (key && rows.some((x) => key.every((k) => x[k] === row[k]))) {
@@ -517,6 +528,18 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       // B36: the leave policy never lets an owner's own row go — silently, as RLS does.
       const removed = table === 'team_members' ? matching.filter((r) => r.role !== 'owner') : matching;
       tables[table] = rows.filter((r) => !removed.includes(r));
+      if (table === 'team_members') {
+        // B38: the removal trigger's always-half — a departed member's assignments go too.
+        const gone = (a: Row) => removed.some((m) => m.team_id === a.team_id && m.user_id === a.user_id);
+        tables.team_assignments = tables.team_assignments.filter((a) => !gone(a));
+      }
+      if (table === 'teams') {
+        // B38: every team-scoped table cascades from teams.
+        const ids = new Set(removed.map((t) => t.id));
+        for (const child of ['team_members', 'team_invites', 'team_posts', 'team_assignments', 'team_feed_hides'] as const) {
+          tables[child] = tables[child].filter((r) => !ids.has(r.team_id));
+        }
+      }
       // `.delete(…).select(…)` (B36) answers with the removed rows.
       const returning = calls.some(([m]) => m === 'select');
       return { data: returning ? removed : null, error: null };

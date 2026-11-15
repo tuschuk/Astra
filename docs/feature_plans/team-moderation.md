@@ -405,3 +405,29 @@ As owner A, coach C, members B and B2, outsider O (rolled back):
   and unhide (removal's inverse; without it the feature is a one-way ratchet). Nothing
   narrowed: both named actions (remove members, remove posts from the feed) plus the
   Coach's-corner arm land fully.
+
+## Build deviations (builder, B38)
+
+- **D1 — extra index `team_feed_hides_post_idx (post_id)`.** The PK leads with `team_id`, so
+  the `posts` → hides delete cascade would otherwise scan; one index on the FK. No behaviour
+  change.
+- **D2 — the hide list loads with the first feed page in one `Promise.all`.** If the hides
+  read fails, the Team feed shows its error state rather than posts the owner took out of it
+  (fail closed on curation). The plan only said `load()` "also reads `teamFeedHides`".
+- **D3 — Hide / Unhide update the on-screen hide set locally instead of reloading the page**,
+  so the feed keeps its scroll and loaded pages. Every reload (focus, pull, other actions)
+  still re-reads the list from the server. Removal and team deletion behave as planned
+  (re-read / `router.replace('/communities')`).
+- **D4 — the confirm modules got Jest tests** (the `confirmDeleteWorkout.ts` precedent had
+  none; the plan's file table asked for them).
+- **D5 — the fake client imitates the team cascade and the trigger's assignments half only.**
+  The invite half depends on who is acting, which the fake has no notion of — proven by the
+  live probe (step 1), not Jest.
+- **Review (code-review skill, both axes):** stale comments fixed (`deleteTeamPost` now says
+  owner-or-author; `act`'s list; `unhideTeamPost`). Left as-is, judgement calls: the repeated
+  "asked for the row back" ternary (the module's existing convention) and the busy/message
+  prologue shared by `act`, `setPostHidden` and `removeTeam`. Gap noted, deferred: a member's
+  **re-share** of a hidden post is its own post and still shows in the Team feed until the owner
+  hides that too.
+- **Live probe (rolled back, one DO block) — every plan step passed:** see the ERD's "Team
+  moderation" section for the numbers.

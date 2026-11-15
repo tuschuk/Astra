@@ -3,11 +3,14 @@
  * both join modes work (open → Join; invite-only → refused without an invite, Join with one),
  * only the owner sees the join-mode switch and it changes the team, and the Team feed shows
  * members' posts and never a non-member's (TEAM-2). Also Leave (not for the owner), the closed
- * view of an invite-only team, a missing team, and New team → the new team's page. The client is
+ * view of an invite-only team, a missing team, and New team → the new team's page. B38 adds
+ * moderation: the owner hides / unhides feed posts, removes members and pushes, and deletes the
+ * team; a member or an outside viewer never sees a hidden post or an owner control. The client is
  * the in-memory fake social client; owner-only enforcement itself was probed live.
  */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
+import { Alert, type AlertButton } from 'react-native';
 import { fireEvent, screen } from '@testing-library/react-native';
 
 import type { SqlDriver } from '@/db/driver';
@@ -268,6 +271,104 @@ describe('team coaching (B37)', () => {
     expect(mockSocial.tables.team_posts).toContainEqual(
       expect.objectContaining({ team_id: 'mine', author_id: ME, kind: 'announcement', body: 'Meet day Saturday' }),
     );
+  });
+});
+
+describe('team moderation (B38, TEAM-4)', () => {
+  /** Makes the next `Alert.alert` press its button named `choice`. */
+  function answerAlertWith(choice: string): void {
+    jest.spyOn(Alert, 'alert').mockImplementationOnce((_title, _message, buttons?: AlertButton[]) => {
+      buttons?.find((b) => b.text === choice)?.onPress?.();
+    });
+  }
+
+  /** My team with Pat as a member, Pat's coach push, and (optionally) Pat's post already hidden. */
+  function seedMyTeam(patPostHidden: boolean) {
+    mockTeamId = 'mine';
+    mockSocial.tables.team_members.push(member('mine', 'pat'));
+    mockSocial.tables.team_posts.push({
+      id: 'tp-pat', team_id: 'mine', author_id: 'pat', kind: 'announcement', body: 'Pat says hi',
+      program_id: null, program_workout_id: null, created_at: '2026-11-15T12:00:00.000Z',
+    });
+    if (patPostHidden) mockSocial.tables.team_feed_hides.push({ team_id: 'mine', post_id: 'pat-post', hidden_by: ME });
+  }
+
+  it('owner: Hide from Team feed turns the post into a marker; Unhide brings it back', async () => {
+    seedMyTeam(false);
+    await renderSignedIn(<TeamScreen />);
+    expect(await screen.findByText('Pat squats')).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Hide from Team feed'));
+    expect(await screen.findByText('Hidden from the Team feed')).toBeTruthy();
+    expect(screen.queryByText('Pat squats')).toBeNull();
+    expect(mockSocial.tables.team_feed_hides).toEqual([{ team_id: 'mine', post_id: 'pat-post', hidden_by: ME }]);
+
+    await fireEvent.press(screen.getByLabelText('Unhide'));
+    expect(await screen.findByText('Pat squats')).toBeTruthy();
+    expect(mockSocial.tables.team_feed_hides).toEqual([]);
+  });
+
+  it('owner: Remove from team asks first, then takes the member off the roster and out of the feed', async () => {
+    seedMyTeam(false);
+    await renderSignedIn(<TeamScreen />);
+    expect(await screen.findByText('2 members')).toBeTruthy();
+    answerAlertWith('Cancel');
+    await fireEvent.press(screen.getByLabelText('Remove Pat from the team'));
+    expect(screen.getByText('2 members')).toBeTruthy();
+
+    answerAlertWith('Remove');
+    await fireEvent.press(screen.getByLabelText('Remove Pat from the team'));
+    expect(await screen.findByText('1 member')).toBeTruthy();
+    expect(mockSocial.tables.team_members.some((m) => m.team_id === 'mine' && m.user_id === 'pat')).toBe(false);
+    expect(listedPosts()).toEqual([]);
+  });
+
+  it('owner: removes a coach’s push', async () => {
+    seedMyTeam(false);
+    await renderSignedIn(<TeamScreen />);
+    expect(await screen.findByText('Pat says hi')).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Remove'));
+    expect(await screen.findByText('Nothing from the coaches yet.')).toBeTruthy();
+    expect(mockSocial.tables.team_posts).toEqual([]);
+  });
+
+  it('owner: Delete team asks first, deletes the team, and goes to Communities', async () => {
+    seedMyTeam(false);
+    await renderSignedIn(<TeamScreen />);
+    answerAlertWith('Keep the team');
+    await fireEvent.press(await screen.findByLabelText('Delete team'));
+    expect(mockSocial.tables.teams.some((t) => t.id === 'mine')).toBe(true);
+
+    answerAlertWith('Delete team');
+    await fireEvent.press(screen.getByLabelText('Delete team'));
+    expect(mockSocial.tables.teams.some((t) => t.id === 'mine')).toBe(false);
+    expect(mockSocial.tables.team_members.some((m) => m.team_id === 'mine')).toBe(false);
+    expect(mockRouter.replace).toHaveBeenCalledWith('/communities');
+  });
+
+  it('a plain member: a hidden post is gone, and no Remove / Hide / Delete controls', async () => {
+    mockTeamId = 'open';
+    mockSocial.tables.team_members.push(member('open', ME));
+    mockSocial.tables.team_feed_hides.push({ team_id: 'open', post_id: 'pat-post', hidden_by: 'owner' });
+    mockSocial.tables.team_posts.push({
+      id: 'tp-o', team_id: 'open', author_id: 'owner', kind: 'announcement', body: 'Owner note',
+      program_id: null, program_workout_id: null, created_at: '2026-11-15T12:00:00.000Z',
+    });
+    await renderSignedIn(<TeamScreen />);
+    expect(await screen.findByText('Olly benches')).toBeTruthy();
+    expect(listedPosts().map((p) => p.id)).toEqual(['olly-post']);
+    expect(screen.queryByText('Hidden from the Team feed')).toBeNull();
+    expect(screen.queryByLabelText('Hide from Team feed')).toBeNull();
+    expect(screen.queryByLabelText('Remove Pat from the team')).toBeNull();
+    expect(screen.queryByLabelText('Delete team')).toBeNull();
+    expect(screen.getByText('Owner note')).toBeTruthy();
+    expect(screen.queryByLabelText('Remove')).toBeNull();
+  });
+
+  it('a non-member viewing an open team doesn’t see a hidden post either', async () => {
+    mockSocial.tables.team_feed_hides.push({ team_id: 'open', post_id: 'pat-post', hidden_by: 'owner' });
+    await renderSignedIn(<TeamScreen />);
+    expect(await screen.findByText('Olly benches')).toBeTruthy();
+    expect(listedPosts().map((p) => p.id)).toEqual(['olly-post']);
   });
 });
 

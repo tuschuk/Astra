@@ -670,3 +670,18 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     → the "wait for it to sync" line. Judge the team page at phone width.
   - Mermaid render of both diagrams was not run by the builder (`mmdc` declined by the permission
     layer) — Gate 2 should render them once.
+- **B38 team-moderation** (built, awaiting Gate 2):
+  - **Re-shares of a hidden post** still show in the Team feed — a re-share is its own post; the
+    owner hides it separately. Following hides through `shared_post_id` waits for evidence.
+  - **Removal is not a ban** (plan G6): a removed member of an open team can rejoin at once; the
+    keep-out tool is Invite only. A ban list waits for evidence.
+  - **No hide reasons, moderation log, hidden-posts screen or notice to the hidden author** — on
+    evidence / B47.
+  - **Client-side hide filter can leave a page short or empty** for non-owners when many posts on a
+    page are hidden (the next page still loads on scroll); a hides read is unbounded (plan G5).
+  - **Device check (Tristen):** two accounts, A owns an open team, B is a member with a post. A:
+    Hide from Team feed under B's post → marker with Unhide on A's phone; on B's phone the post is
+    gone from the Team feed but still on Home / B's profile. Unhide → back. A: Remove from team on
+    B → confirm → B gone from the roster; B's phone: team page shows Join team. A: switch to Invite
+    only, B can't rejoin. A: Remove on a coach's push. A: Delete team → confirm → Communities; B's
+    Home chip for the team is gone. Judge the marker / Hide button layout at phone width.

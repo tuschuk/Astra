@@ -106,7 +106,8 @@ flowchart TD
   StartSess -->|"opens on the prefilled session"| Logger
   Tabs --> Communities["Communities (app/(tabs)/communities.tsx, B36: TEAM-1)<br/>Teams: Invites (Join / Decline) · Your teams (TeamListItem → team page) ·<br/>Create a team · Find teams (searchTeams, debounced; Join on rows I can join now);<br/>offline → TEAMS_OFFLINE + Retry; reloads on focus<br/>Gyms: still a placeholder card (B50)"]
   Communities -->|"Create a team: router.push('/team/new')"| NewTeamScr["New team (app/team/new.tsx, B36)<br/>name 1–80 via assertValidTeamName (says when too long);<br/>Create team → createTeam → router.replace team/[id]; Back"]
-  Communities -->|"tap a team: router.push('/team/[id]')"| TeamScr["Team page (app/team/[id]/index.tsx, B36: TEAM-1, TEAM-2)<br/>name + mode; Join team / 'You're invited — Join' / closed line / Leave team (not the owner);<br/>owner only: Who can join chips (Open | Invite only → setJoinMode) + Invite lifters;<br/>Members (tap → profile) and Team feed (PostCards, 20 a page, pull to refresh)<br/>— both only for members or open teams; missing → 'isn't available'; offline → Retry<br/>B37 (TEAM-3, TEAM-5), members only: 'Coaches of this team can see your training log.';<br/>assignment banners (View / Dismiss); Coach's corner = pushes newest 20 (announcement text,<br/>program / workout cards → TeamProgramSheet; author: Remove); coaches (owner ∪ coach):<br/>Announce · Push a program · Push a workout; roster: owner Make coach / Remove coach,<br/>coaches Assign a program + 'Assigned: X' rows with Revoke"]
+  Communities -->|"tap a team: router.push('/team/[id]')"| TeamScr["Team page (app/team/[id]/index.tsx, B36: TEAM-1, TEAM-2)<br/>name + mode; Join team / 'You're invited — Join' / closed line / Leave team (not the owner);<br/>owner only: Who can join chips (Open | Invite only → setJoinMode) + Invite lifters;<br/>Members (tap → profile) and Team feed (PostCards, 20 a page, pull to refresh)<br/>— both only for members or open teams; missing → 'isn't available'; offline → Retry<br/>B37 (TEAM-3, TEAM-5), members only: 'Coaches of this team can see your training log.';<br/>assignment banners (View / Dismiss); Coach's corner = pushes newest 20 (announcement text,<br/>program / workout cards → TeamProgramSheet; author: Remove); coaches (owner ∪ coach):<br/>Announce · Push a program · Push a workout; roster: owner Make coach / Remove coach,<br/>coaches Assign a program + 'Assigned: X' rows with Revoke<br/>B38 (TEAM-4), owner only: Remove from team on non-owner rows (confirmRemoveMember);<br/>Remove on any push; Hide from Team feed under each post → hidden post becomes a<br/>'Hidden from the Team feed' marker with Unhide; Delete team (confirmDeleteTeam →<br/>router.replace('/communities')). Everyone else's list leaves hidden posts out"]
+  TeamScr -->|"B38 owner: Remove from team (Alert) → removeMember → page re-read;<br/>Hide / Unhide → hideTeamPost / unhideTeamPost → local hide set (no reload);<br/>Delete team (Alert) → deleteTeam → Communities;<br/>on load with the first feed page: teamFeedHides (fails → feed error)"| TeamsMod
   TeamScr -->|"on load (after the roster): reload(isMember, isCoach); every action → page re-read"| CoachHook["useTeamCoaching (components/teams, B37)<br/>loadTeamPosts + myAssignments (+ teamAssignments, listPrograms for names if coach);<br/>then each referenced program / workout payload fetched once (names the cards);<br/>hosts ProgramPickerSheet (onPick mode), CoachPushSheet, TeamProgramSheet"]
   CoachHook -->|"Push a program / Push a workout / Assign: ProgramPickerSheet onPick (no run started)"| PickerSheet
   CoachHook --> PushSheet["CoachPushSheet (components/teams, B37, a Modal)<br/>announcement box (≤ 2000) → Push; or the picked program's workouts<br/>(readProgramTree on the coach's phone) → tap one to push; refusal line"]
@@ -134,7 +135,7 @@ flowchart TD
   InviteScr --> TeamsMod
   Home -->|"on focus: loadTeamsOf(me) + myInvites(me)"| TeamsMod
   ProfileView -->|"on focus: loadTeamsOf(profileId)"| TeamsMod
-  TeamsMod["social/teams.ts (B36) — online only, never mirrored<br/>createTeam · loadTeamsOf · loadTeam · loadTeamMembers · searchTeams ·<br/>joinTeam · leaveTeam · setJoinMode · myInvites · teamInvitees ·<br/>inviteToTeam · removeInvite; 42501 → calm sentence"] -->|"select / insert / update / delete teams, team_members, team_invites (RLS decides)"| DB
+  TeamsMod["social/teams.ts (B36) — online only, never mirrored<br/>createTeam · loadTeamsOf · loadTeam · loadTeamMembers · searchTeams ·<br/>joinTeam · leaveTeam · setJoinMode · myInvites · teamInvitees ·<br/>inviteToTeam · removeInvite · B38: removeMember · hideTeamPost · unhideTeamPost ·<br/>teamFeedHides · deleteTeam; 42501 / zero rows → calm sentence"] -->|"select / insert / update / delete teams, team_members, team_invites,<br/>team_feed_hides (RLS decides; removal trigger clears assignments / invite;<br/>team delete cascades everything team-scoped)"| DB
   Tabs --> Library["Library<br/>browse every launch exercise as a card"]
   Tabs -->|profile button| You["You (app/(tabs)/you.tsx, B25: YOU-1/2/3)<br/>ProfileView for me + gear button → Settings"]
   You --> ProfileView
@@ -700,7 +701,16 @@ flowchart TD
    **Dismiss**. Members are told "Coaches of this team can see your training log": a coach opening
    a member's profile sees their whole History — private workouts too — and a row opens the full
    session (`/session/[id]`). Not PRs, posts, photos or body data. A block or leaving ends it.
-27. Everything else is a placeholder that renders its final layout with inert controls
+27. **Team moderation (B38, TEAM-4) — needs a connection; owner only.** On each non-owner member
+   row the owner taps **Remove from team** → confirm → the member leaves the roster and the Team
+   feed, and their assignments and any unused invite go too (on an open team they may join again;
+   **Invite only** keeps them out). Under each Team-feed post the owner taps **Hide from Team
+   feed**: the post disappears from everyone else's Team feed (it stays on Home and the author's
+   profile — a hide is curation, not privacy) and the owner sees a small "Hidden from the Team
+   feed" marker with **Unhide**. The owner can **Remove** any push in the Coach's corner, and
+   **Delete team** → confirm deletes it for everyone (posts and workouts stay with their owners)
+   and returns to Communities. Anyone else's attempt is refused by the server.
+28. Everything else is a placeholder that renders its final layout with inert controls
    (Marketplace, and the Gyms half of Communities).
 
 ## Data path today
@@ -1041,7 +1051,10 @@ flowchart TD
   rule (who may join, switch, invite, leave, see a roster) is the server's RLS; the module maps
   refusals to sentences and retries "am I already a member?" after a refused join (a double tap on
   an invite-only team). The Team feed is `loadFeedPage` with the roster's ids. Since B37 it also
-  has `setMemberRole` and `isCoachRole`.
+  has `setMemberRole` and `isCoachRole`; since B38 the owner's moderation — `removeMember`,
+  `hideTeamPost` / `unhideTeamPost` / `teamFeedHides` (the hide set is read only by the team page,
+  applied at render time: the owner sees markers, everyone else's list drops the posts) and
+  `deleteTeam`, with `components/teams/confirmRemoveMember.ts` / `confirmDeleteTeam.ts` asking first.
 - **Team coaching** (B37): `social/teamCoaching.ts` is the one home of pushes, assignments and the
   two payload functions (online only). `components/teams/useTeamCoaching.tsx` is the team page's
   coaching state and actions; `CoachPushSheet` and `TeamProgramSheet` are its two modals, and it
