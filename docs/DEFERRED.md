@@ -221,3 +221,18 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - Notifications (B47) and Privacy (B26) sections of Settings, `default_workout_visibility`
     mirroring (B26), email change / password reset (NFR-6) — not in this step.
   - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.
+- B16 tool-kit-calculators follow-ups (`tool-kit-calculators`):
+  - **Device check (Tristen):** in a long workout, scroll to the bottom → the floating Tool Kit
+    button doesn't cover the last card's Log set button or the reps box while the keyboard is
+    open (plan risk 2; fallback = header button); one tap opens the panel, Close returns to the
+    same scroll position with half-typed boxes intact; airplane mode → all four calculators
+    work; plate loader rack edits survive killing the app; kg setting → the three weight
+    calculators read "(kg)", the plate loader keeps the rack last chosen.
+  - **Tool Kit session isn't cleared on sign-out**: typed calculator numbers (not stored, not
+    sensitive under the privacy rule) stay in memory if a second account signs in on the same
+    phone without restarting the app. One-line `resetToolKitSession()` in the sign-out path if
+    it matters.
+  - **Plate solver on a slow phone at absurd inputs**: ~20 ms on desktop at every limit at once;
+    if a low-end device lags, debounce the target box or lower `MAX_TARGET_WEIGHT`.
+  - Prefill from the exercise in progress and stored PRs (TK-6) is B43; Timer (TK-5) is B17.
+  - `mmdc` was not permitted for the headless builder; `app-flow.md` was not render-checked.

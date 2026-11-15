@@ -32,7 +32,7 @@ flowchart TD
 
   Tabs --> Home["Home<br/>social feed (SOC-1)<br/>today: brand + empty state pointing to Workout"]
   Tabs --> Market["Marketplace<br/>programs (MKT-1..5)<br/>today: featured-section skeleton, placeholder cards"]
-  Tabs --> Workout["Workout tab (on focus: re-read astra.db)<br/>no draft: Start empty workout (program start disabled, B35)<br/>draft on phone: Resume workout / Discard (asks first)<br/>Tool Kit tiles (placeholders, TK-1..5)<br/>Past workouts: newest 100 finished, date + duration + counts"]
+  Tabs --> Workout["Workout tab (on focus: re-read astra.db)<br/>no draft: Start empty workout (program start disabled, B35)<br/>draft on phone: Resume workout / Discard (asks first)<br/>Tool Kit tiles: 1RM / RPE / %1RM / Plates open the Tool Kit at that tool (B16);<br/>Timer tile still a placeholder (TK-5, B17)<br/>Past workouts: newest 100 finished, date + duration + counts"]
   Tabs --> Communities["Communities<br/>Teams and Gyms<br/>today: two sections, each an empty state"]
   Tabs --> Library["Library<br/>browse every launch exercise as a card"]
   Tabs -->|profile button| You["You<br/>profile skeleton: avatar ring, follow counts, PRs label (empty values)<br/>gear button → Settings"]
@@ -83,12 +83,33 @@ flowchart TD
     History -->|Back| Logger
     Logger -->|Add exercise| Picker
     Picker -->|tap an exercise| Logger
+    Logger -->|"floating 'Tool Kit' button (always on screen): ONE tap"| ToolKit
+    ToolKit -->|"Close / system back: logger still mounted underneath, exactly as left"| Logger
     Logger -->|Finish| EmptyQ
     EmptyQ -->|"yes: 'Nothing logged yet'<br/>Discard workout / Keep lifting"| Logger
     EmptyQ -->|"no: finish, clear slot,<br/>router.replace"| Saved
   end
   Workout -->|"Start / Resume: store into the session slot<br/>(activeWorkoutSession.ts, keyed by user id)"| Logger
   Workout -->|tap a past workout| Saved
+  Workout -->|"tap a Tool Kit tile: initialTool = that calculator"| ToolKit
+
+  subgraph ToolKitG["Tool Kit (B16, TK-1..4): a Modal panel, NOT a route; no network anywhere"]
+    ToolKit["ToolKitSheet (components/toolkit): header + Close,<br/>switcher 1RM | RPE | %1RM | Plates (radio chips);<br/>contents rebuilt on every open (Modal unmounts them)"]
+    OneRmC["1RM: weight (display unit) + reps 1–30 → epleyE1rm;<br/>a single = its own 1RM; table: weightForReps for 2–10 reps;<br/>Epley (1985) citation on the answer"]
+    RpeC["RPE: 1RM + rep chips 1–12 + RPE chips 6–10 (½ steps)<br/>→ workingWeightFromRpe; 'Load …' snapped to 2.5 kg / 5 lb<br/>(roundToIncrement) + % of 1RM (percentOfOneRm)"]
+    PctC["%1RM: 1RM + percent (0, 150] → workingWeightFromPercent;<br/>out of range refused inline; same 'Load …' line"]
+    PlateC["Plate loader: works in the RACK's unit (kg | lb plates toggle);<br/>target + bar → loadBar: per side '2 × 45 lb', loaded total,<br/>exact / 'short by …' / 'bar alone is over';<br/>rack editor: − / + per side (0–20), remove, add any size"]
+    TkSession["toolkit/session.ts: last tool + every typed box,<br/>in memory only (gone on app restart), shared by both entry points"]
+    TkInputs["toolkit/inputs.ts: read boxes (empty / invalid + why / ok),<br/>lb → kg via lbToKg, loadable snap"]
+    ToolKit --> OneRmC
+    ToolKit --> RpeC
+    ToolKit --> PctC
+    ToolKit --> PlateC
+    OneRmC & RpeC & PctC & PlateC <-->|"restore on open / write as typed"| TkSession
+    OneRmC & RpeC & PctC & PlateC --> TkInputs
+  end
+  PlateC <-->|"toolkit/plateRack.ts: load (cached; damaged → defaults),<br/>save on every edit (fire-and-forget)"| RackStore[("kv-store key astra.toolkit.plateRack<br/>JSON v1: chosen unit (null = display unit) + one rack per unit;<br/>this phone only, not synced, not per account")]
+  DispUnit -->|"unit (weight calculators; plate loader's first rack)"| ToolKit
   Logger -->|"Discard (asks first) / back"| Workout
   Saved -->|"Delete confirmed: router.replace"| Workout
   EditWO_UI -->|"Delete workout confirmed: router.replace"| Workout
@@ -183,17 +204,18 @@ flowchart TD
   Library -.->|"not wired yet: Library still reads the bundled catalog, not astra.db"| LocalDB
 
   subgraph Shared["Shared training math (backend/supabase/functions/_shared/training-math)<br/>import name in the app: @training-math"]
-    MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification<br/>+ recordBooks fold (which set holds each book), beatsRecord, compareRecordBooks (B13),<br/>session volume (volume.ts: warm-ups and weightless sets add 0),<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store and the logger's<br/>display (displayWeight); no server function yet"]
+    MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification<br/>+ recordBooks fold (which set holds each book), beatsRecord, compareRecordBooks (B13),<br/>session volume (volume.ts: warm-ups and weightless sets add 0),<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store, the logger's<br/>display (displayWeight) and the Tool Kit (B16); no server function yet"]
   end
   MathMod -->|"lbToKg, assertValidSetFields (incl. score + set-note length),<br/>assertValidSupersetGroup, title / workout-note / entry-note caps (B12),<br/>round weight / RPE for storage"| MutWO
   MathMod -->|"displayWeight (format.ts) in the unit from useDisplayUnit"| Logger
   MathMod -->|"recordBooks, beatsRecord, roundToIncrement (B13)"| FinishWO
   MathMod -->|"recordBooks, roundToIncrement (B14)"| Recompute
-  MathMod -.->|"not wired yet: Tool Kit calculators (B16),<br/>session volume display"| Workout
+  MathMod -->|"epleyE1rm, weightForReps, workingWeightFromRpe, percentOfOneRm,<br/>workingWeightFromPercent, loadBar, lbToKg / kgToLb, roundToIncrement, displayWeight (B16)"| ToolKit
+  MathMod -.->|"not wired yet: session volume display"| Workout
   MathMod -.->|"not wired yet: post-workout analysis<br/>server function (B18)"| Backend
 
   class Home,Market,Communities scaffold
-  class Seed,Catalog,DB,Store,LocalDB data
+  class Seed,Catalog,DB,Store,LocalDB,RackStore data
 ```
 
 ## What a user can do today
@@ -267,8 +289,21 @@ flowchart TD
    saved on the phone straight away (works offline, survives a killed app) and reaches the
    account at the next sync; a choice made on another phone arrives at this one's next sync.
    **Account** shows the signed-in email and **Sign out**.
-11. Everything else is a placeholder that renders its final layout with inert controls (Start
-   from a program, the Tool Kit tiles, Home, Marketplace, Communities).
+11. **Use the Tool Kit (B16, TK-1..4), with no signal needed.** In the logger, the red **Tool
+   Kit** button floating bottom-right (on screen however far the workout is scrolled) opens the
+   calculators in a panel over the workout; **Close** lands back on the logger exactly as it was
+   — scroll position, half-typed boxes and all. The Workout tab's **1RM / RPE / %1RM / Plates**
+   tiles open the same panel straight at that calculator. **1RM**: weight and reps → the
+   estimated 1RM (Epley, source printed with the answer; a single counts as its own 1RM) and the
+   estimated weight for 2–10 reps. **RPE**: a 1RM plus tapped reps (1–12) and RPE (6–10 in half
+   steps) → the working weight, the nearest loadable weight (2.5 kg / 5 lb) and its % of the 1RM.
+   **%1RM**: a 1RM and a percentage (up to 150 %) → the working weight and its loadable
+   neighbour. Those three work in the lifter's kg / lb setting. **Plates**: a target and bar
+   weight → what to put on each side, the total that loads, and whether it is exact, short (the
+   rack can't make it) or under the bar; the rack (kg or lb plates, each unit its own) is edited
+   right there and remembered on this phone. Typed numbers are remembered until the app restarts.
+12. Everything else is a placeholder that renders its final layout with inert controls (Start
+   from a program, the Timer tile, Home, Marketplace, Communities).
 
 ## Data path today
 
@@ -359,6 +394,21 @@ flowchart TD
   which re-reads the row. No weight math moved: `displayWeight` / `lbToKg` in `@training-math`
   remain the only conversion. The You tab lost its email line and Sign out (now in Settings) and
   gained the gear button; `settings` is declared in the root layout's signed-in guard.
+- **Tool Kit (B16).** `components/toolkit/ToolKitSheet.tsx` is a React Native `Modal`, not a
+  route: the logger (or Workout tab) stays mounted underneath, so closing it restores nothing
+  because nothing was lost. The Modal unmounts its contents on close, so each calculator starts
+  from `toolkit/session.ts` (a module-level, in-memory record of the last tool and every typed
+  box, shared by both entry points, gone on app restart) and writes back to it as the lifter
+  types. Boxes are read by `toolkit/inputs.ts` (empty / invalid with a message / ok; lb → kg
+  with `lbToKg`; working weights snapped to 2.5 kg / 5 lb via `kgToLb` + `roundToIncrement`);
+  answers are formatted by `workout/format.ts` `formatWeight` (`displayWeight`). Every number
+  comes from `@training-math`; nothing in the Tool Kit imports sync, transport or Supabase. The
+  plate loader alone keeps durable state: `toolkit/plateRack.ts` loads and saves
+  `{ version: 1, unit, kg, lb }` under the kv-store key `astra.toolkit.plateRack` — device-only,
+  not synced, not per account; a damaged unit's rack falls back to its default, a failed save is
+  logged and ignored, and an in-memory cache makes reopening instant. Limits there (≤ 20 per
+  side, ≤ 12 sizes, plates and bar ≤ 100, target ≤ 2000, in the rack's unit) bound the solver's
+  work.
 - **On-device store and sync (B07).**
   `src/sync/useSync.ts` runs in the root layout. On launch it opens `astra.db`
   (`src/db/database.ts`: foreign keys on, WAL, migrations by `PRAGMA user_version`). It then seeds
@@ -412,6 +462,10 @@ flowchart TD
   notes boxes, shared by the logger and the edit screen), `confirmDiscardWorkout` (the one
   "Discard this workout?" alert) and `confirmDeleteWorkout` (the one "Delete this workout?"
   alert, B14).
+- `components/toolkit/` (B16) holds ToolKitSheet, the four calculators (OneRmCalculator,
+  RpeCalculator, IntensityCalculator, PlateLoader) and their shared pieces: ChoiceChips (a
+  radio-group chip row), NumberField / WeightField (labeled number box + inline error, the
+  weight one naming its unit) and ResultCard (the big answer + second line).
 - **Training math** (`backend/supabase/functions/_shared/training-math/`, imported in the app as
   `@training-math`) is the only place e1RM, RPE and %1RM working weights, plate breakdowns, kg/lb
   conversion, PR detection and session volume (`volume.ts`, external load only, warm-ups
@@ -420,8 +474,8 @@ flowchart TD
   Weights go in and come out in kg (the plate loader alone works in the rack's own unit); rounded
   display numbers are never stored. `limits.ts` holds the server's rules on a set and the
   storage rounding that matches the server's column decimals. Its callers today are the
-  active-workout store and the logger's display (`displayWeight` via `workout/format.ts`); the
-  calculators and analysis are still to come.
+  active-workout store, the logger's display (`displayWeight` via `workout/format.ts`) and the
+  Tool Kit calculators (B16); post-workout analysis is still to come.
 - Test-only helpers live in `src/test-utils/`: a fake Supabase auth client and fake AppState,
   `renderWithAuth`, a real-SQLite driver over Node's `node:sqlite` (`nodeSqliteDriver.ts`), an
   in-memory fake server for sync (`fakeTransport.ts`: upsert-by-id, server-stamped `updated_at`,

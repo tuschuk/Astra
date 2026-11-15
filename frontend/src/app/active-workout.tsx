@@ -16,7 +16,10 @@
  *   - **Finish**: save any title or note still being typed, then save the workout for good (it
  *     is handed to sync, which uploads it when there is signal) and open the saved workout. Finishing with no sets logged instead asks
  *     "Nothing logged yet" with two choices — discard the workout, or keep lifting;
- *   - **Discard**: after a confirmation, delete the workout from the phone.
+ *   - **Discard**: after a confirmation, delete the workout from the phone;
+ *   - **Tool Kit** (B16): the red button floating bottom-right — always on screen however far
+ *     the list is scrolled — opens the calculators (1RM, RPE, %1RM, plates) in a panel over
+ *     the logger. Closing it lands back on the logger exactly as it was.
  *
  * Everything is saved to the phone the moment it is done, so leaving this screen (or the app
  * being killed) loses nothing: the Workout tab offers Resume. Opened with nothing in progress
@@ -24,8 +27,10 @@
  * nothing to resume.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, FlatList, StyleSheet, View } from 'react-native';
+import { Alert, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { useAuth } from '@/auth/AuthProvider';
 import { Screen } from '@/components/Screen';
@@ -33,6 +38,7 @@ import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { FormError } from '@/components/ui/FormError';
 import { Body, Heading } from '@/components/ui/Text';
+import { ToolKitSheet } from '@/components/toolkit/ToolKitSheet';
 import { EntryCard } from '@/components/workout/EntryCard';
 import { ExercisePicker } from '@/components/workout/ExercisePicker';
 import { confirmDiscardWorkout } from '@/components/workout/confirmDiscardWorkout';
@@ -45,7 +51,10 @@ import { clearSessionWorkout, resumeSessionWorkout } from '@/workout/activeWorko
 import { supersetPlacement, totalSets, workoutDateLabel } from '@/workout/format';
 import { useSessionWorkout, useWorkoutSnapshot } from '@/workout/useActiveWorkout';
 import { AutosaveRegistryContext, createAutosaveRegistry } from '@/workout/useAutosaveText';
-import { spacing } from '@/theme';
+import { colors, glows, layout, radii, spacing, type } from '@/theme';
+
+/** Extra bottom space the list keeps free for the floating Tool Kit button (its height + gap). */
+const TOOL_KIT_BUTTON_CLEARANCE = 64;
 
 export default function ActiveWorkoutScreen() {
   const router = useRouter();
@@ -56,6 +65,8 @@ export default function ActiveWorkoutScreen() {
   const store = useSessionWorkout(userId);
   const snapshot = useWorkoutSnapshot(store);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [toolKitOpen, setToolKitOpen] = useState(false);
+  const insets = useSafeAreaInsets();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Every title / note box on this screen, so Finish can save them all first (LOG-3).
@@ -223,9 +234,25 @@ export default function ActiveWorkoutScreen() {
         }
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.listContent}
+        // The button floats above the bottom safe area, so the clearance counts it too.
+        contentContainerStyle={[styles.listContent, { paddingBottom: styles.listContent.paddingBottom + insets.bottom }]}
       />
       <ExercisePicker visible={pickerOpen} onPick={addExercise} onClose={() => setPickerOpen(false)} />
+      {/* Floats over the list, so the Tool Kit is one tap away wherever the lifter has scrolled. */}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Open Tool Kit"
+        onPress={() => setToolKitOpen(true)}
+        style={({ pressed }) => [
+          styles.toolKitButton,
+          { bottom: insets.bottom + spacing.lg },
+          pressed && styles.toolKitButtonPressed,
+        ]}
+      >
+        <Ionicons name="calculator-outline" size={18} color={colors.text} />
+        <Text style={type.button}>Tool Kit</Text>
+      </Pressable>
+      <ToolKitSheet visible={toolKitOpen} onClose={() => setToolKitOpen(false)} />
     </Screen>
     </AutosaveRegistryContext.Provider>
   );
@@ -248,6 +275,22 @@ const styles = StyleSheet.create({
     paddingBottom: 0,
   },
   listContent: {
-    paddingBottom: spacing.xxl,
+    // Room under the last card so it can scroll clear of the floating Tool Kit button.
+    paddingBottom: spacing.xxl + TOOL_KIT_BUTTON_CLEARANCE,
+  },
+  toolKitButton: {
+    position: 'absolute',
+    right: layout.screenPadding,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    minHeight: layout.minTouchTarget,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radii.pill,
+    backgroundColor: colors.accent,
+    ...glows.accentSm,
+  },
+  toolKitButtonPressed: {
+    backgroundColor: colors.accentBright,
   },
 });
