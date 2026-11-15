@@ -18,36 +18,19 @@
  *   npx -y tsx@4 automation/scripts/generate-library-seed.ts backend/supabase/migrations/<timestamp>_library_seed.sql
  *
  * Self-checks before any file is written (the script refuses to emit a bad seed):
- *   - its UUIDv5 implementation reproduces the RFC 4122 test vector;
+ *   - the shared UUIDv5 implementation (frontend/src/library/uuidv5.ts)
+ *     reproduces the RFC 4122 test vector;
  *   - the row count equals the catalog's and is non-zero;
  *   - slugs are unique and well-formed;
  *   - no emitted name is an alias spelling ("Squats" must never become a row,
  *     or PR history forks across rows later).
  */
-import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
-import {
-  ALL_EXERCISES,
-  LIBRARY_EXERCISE_NAMESPACE,
-  slugify,
-} from '../../frontend/src/library/catalog';
+import { ALL_EXERCISES, slugify } from '../../frontend/src/library/catalog';
 import { EXERCISE_NAME_ALIASES } from '../../frontend/src/library/exercises';
-
-/** RFC 4122 UUIDv5: SHA-1 of namespace bytes + name bytes, version/variant bits set. */
-function uuidv5(namespace: string, name: string): string {
-  const ns = namespace.replace(/-/g, '');
-  if (!/^[0-9a-f]{32}$/.test(ns)) throw new Error(`Bad namespace uuid: ${namespace}`);
-  const nsBytes = Buffer.from(ns, 'hex');
-  const hash = createHash('sha1')
-    .update(nsBytes)
-    .update(Buffer.from(name, 'utf8'))
-    .digest();
-  const b = Buffer.from(hash.subarray(0, 16));
-  b[6] = (b[6] & 0x0f) | 0x50; // version 5
-  b[8] = (b[8] & 0x3f) | 0x80; // RFC 4122 variant
-  const hex = b.toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
+// The repo's one UUIDv5 implementation lives with the app, which computes the
+// same ids on-device; this generator imports it and never keeps its own copy.
+import { libraryExerciseId, uuidv5 } from '../../frontend/src/library/uuidv5';
 
 // Self-check 1: the implementation must reproduce the RFC 4122 known answer.
 const vector = uuidv5('6ba7b810-9dad-11d1-80b4-00c04fd430c8', 'www.example.com');
@@ -66,7 +49,7 @@ const rows = ALL_EXERCISES.map((e) => {
   if (slug !== e.id) throw new Error(`Catalog id for "${e.name}" is not its slug: ${e.id}`);
   // Keep in step with the CHECK constraint in 20261114120000_exercises_slug.sql.
   if (!/^[a-z0-9_]{1,80}$/.test(slug)) throw new Error(`Malformed slug: ${slug}`);
-  return { id: uuidv5(LIBRARY_EXERCISE_NAMESPACE, slug), slug, name: e.name, primary: e.primary, equipment: e.equipment };
+  return { id: libraryExerciseId(slug), slug, name: e.name, primary: e.primary, equipment: e.equipment };
 });
 
 // Self-check 2: nothing dropped, nothing doubled.

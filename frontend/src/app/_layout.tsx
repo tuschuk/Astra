@@ -3,7 +3,8 @@
  *
  * Loads the three brand font families (Permanent Marker for headings,
  * Space Grotesk for UI text, Manrope for body copy), wraps everything in
- * AuthProvider (who is signed in), holds the splash screen until fonts and
+ * AuthProvider (who is signed in), starts the on-device database and sync
+ * engine (useSync), holds the splash screen until fonts and
  * the saved session are both ready, then mounts the router stack with the
  * signed-in tabs and the signed-out sign-in/sign-up screens behind guards.
  */
@@ -27,6 +28,7 @@ import {
 } from '@expo-google-fonts/manrope';
 
 import { AuthProvider, useAuth } from '@/auth/AuthProvider';
+import { useSync } from '@/sync/useSync';
 import { colors } from '@/theme';
 
 // Keep the splash visible until fonts and the saved session are ready
@@ -84,8 +86,12 @@ export default function RootLayout() {
  * the splash.
  */
 function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
-  const { status } = useAuth();
+  const { status, session } = useAuth();
   const ready = fontsReady && status !== 'restoring';
+
+  // Opens the on-device database and, while signed in, keeps it in sync
+  // with the server (src/sync/useSync.ts).
+  useSync(session?.user.id ?? null);
 
   useEffect(() => {
     if (ready) {

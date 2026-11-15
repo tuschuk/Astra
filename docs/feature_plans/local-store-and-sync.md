@@ -339,6 +339,55 @@ no-default `id` columns, `moddatetime`); B07 consumes it unchanged. New *device*
    without new server machinery. If Gate 1 disagrees, the alternative is a small migration
    (stale-write-rejection trigger) and the plan changes before code.
 
+## Deviations during the build (builder run, Nov 14, 2026)
+
+Recorded here because the shipped code differs from the approach above. Each item names the
+section it changes.
+
+1. **§5: push does NOT send `updated_at`.** The plan said created_at/updated_at travel. But an
+   inserted row keeps its client `updated_at`, so a workout logged offline at 09:00 and pushed at
+   11:00 would land stamped 09:00. That is behind any other device's pull bookmark, so the other
+   device would never download it. Push now strips `updated_at` (`withoutUpdatedAt`, `PushRow`
+   type). The column default stamps inserts and `moddatetime` stamps updates. `created_at` still
+   travels (it is the true logging time). This makes §7's "server-authoritative, monotonic"
+   claim actually true for inserts as well as updates.
+2. **§5/§6: the root is re-touched after its children land (found by the Spec review).** Push has
+   to send workouts before entries and sets because of the server's foreign keys. That means the
+   server stamped the root *before* the children arrived. Another device pulling in that gap, or
+   after a failure between the batches, would get the workout without its new contents and then
+   move its bookmark past it for good. Fix: acknowledging a batch of entries or sets re-queues
+   their workouts in the same transaction (`acknowledge(…, requeueWorkouts)`), and push ends with
+   a second workouts pass (`PUSH_PASSES`). This costs one extra workout upsert per changed tree
+   per sync. The re-queue is durable, so a failure in the final pass retries it next time.
+3. **§5 transport shape:** `pullWorkoutChildren(workoutIds)` became `pullWorkoutExercises(ids)` +
+   `pullSets(entryIds)`, so `pull.ts` can chunk each id list to 100 (§6 b). The Supabase transport
+   also pages child reads with `.range()` in 500-row pages ordered by id. Supabase caps a
+   response at 1000 rows by default, and a capped response would otherwise silently drop sets.
+4. **§2 local schema:** `workout_exercises.exercise_id` is nullable, matching the server's
+   `20261114110000_fix_exercise_delete.sql`. With the plan's `not null`, a pulled entry whose
+   custom exercise had been deleted would fail its insert and block that pull page forever.
+5. **§2 driver:** the interface is the plan's five methods. `withTransactionAsync(task)` hands
+   `task` a `tx` executor and is implemented by `createSerializedDriver`, one queue for every
+   statement and transaction. Nothing (sync, seed, future logger) can read another caller's
+   uncommitted state or interleave into its transaction. The expo driver uses its own BEGIN/COMMIT
+   instead of expo-sqlite's `withTransactionAsync`, which does not exclude other queries on the
+   connection.
+6. **§9 hook:** `useSync` opens (and seeds) the database even while signed out, so the library
+   lands on literal first launch. The engine still runs only with a session.
+7. **§1 dependencies:** added the devDependency `@types/node@^22`, which provides types for the
+   `node:sqlite` test driver and the Node-only uuidv5 test. It is types only and does not ship.
+   §10's kv-store swap landed as planned: AsyncStorage was removed, and the Jest mock now fakes
+   `expo-sqlite/kv-store`.
+8. **§6 overlap:** `rewind` trims Postgres's microsecond fractions to milliseconds before
+   `Date.parse`, so a JS engine that rejects six-digit fractions can't silently reset the
+   bookmark to "pull everything".
+
+**Known limits accepted, now named (see `docs/DEFERRED.md`):** (a) a row the server refuses every
+time (for example a value breaking a server CHECK that the device doesn't repeat) blocks the
+uploads queued behind it. Push stops on the first failure, as §5 specifies. Pull keeps working.
+(b) A previous account's leftover outbox lines on a shared phone would be refused by RLS and
+cause (a). The account-switch wipe named in the grilling notes is the fix.
+
 ## Grilling decisions (settled before code)
 
 Run via `mattpocock-skills:grilling`; headless pipeline run, so the planner played both sides
