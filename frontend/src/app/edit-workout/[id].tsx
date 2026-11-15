@@ -31,11 +31,10 @@ import { FormError } from '@/components/ui/FormError';
 import { Body, Heading } from '@/components/ui/Text';
 import { confirmDeleteWorkout } from '@/components/workout/confirmDeleteWorkout';
 import { EntryCard } from '@/components/workout/EntryCard';
-import { ExercisePicker } from '@/components/workout/ExercisePicker';
+import { ExercisePicker, type PickedExercise } from '@/components/workout/ExercisePicker';
 import { WorkoutDetailsFields } from '@/components/workout/WorkoutDetailsFields';
 import { useAppDatabase } from '@/db/useAppDatabase';
-import type { ExerciseDef } from '@/library/catalog';
-import { libraryExerciseId } from '@/library/uuidv5';
+import { useCustomExercises } from '@/library/useCustomExercises';
 import { useDisplayUnit } from '@/settings/displayUnit';
 import type { ActiveWorkoutStore } from '@/workout/activeWorkout';
 import { openWorkoutForEdit } from '@/workout/editWorkout';
@@ -54,6 +53,8 @@ export default function EditWorkoutScreen() {
   const userId = session?.user.id ?? null;
   const { db } = useAppDatabase();
   const unit = useDisplayUnit();
+  // The lifter's own exercises, for the Add-exercise picker (B31).
+  const { customs } = useCustomExercises();
   const [opened, setOpened] = useState<{ forId: string; state: OpenState } | null>(null);
   const state: OpenState = opened && opened.forId === id ? opened.state : { status: 'loading' };
   const store = state.status === 'open' ? state.store : null;
@@ -86,12 +87,12 @@ export default function EditWorkoutScreen() {
     else router.replace('/workout');
   }
 
-  /** Adds the picked library exercise at the end of the workout. */
-  function addExercise(exercise: ExerciseDef): void {
+  /** Adds the picked exercise (library or the lifter's own custom) at the end of the workout. */
+  function addExercise(exercise: PickedExercise): void {
     setPickerOpen(false);
     if (!store) return;
     setError(null);
-    store.addExercise(libraryExerciseId(exercise.id)).catch((caught: unknown) => {
+    store.addExercise(exercise.deviceId).catch((caught: unknown) => {
       console.warn('Edit workout: could not add the exercise', caught);
       setError('That exercise couldn’t be added. Try again.');
     });
@@ -198,7 +199,12 @@ export default function EditWorkoutScreen() {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
         />
-        <ExercisePicker visible={pickerOpen} onPick={addExercise} onClose={() => setPickerOpen(false)} />
+        <ExercisePicker
+          visible={pickerOpen}
+          customExercises={customs}
+          onPick={addExercise}
+          onClose={() => setPickerOpen(false)}
+        />
       </Screen>
     </AutosaveRegistryContext.Provider>
   );

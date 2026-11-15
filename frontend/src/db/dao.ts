@@ -53,6 +53,12 @@ export interface ExerciseRow {
   equipment: string | null;
   /** Library rows only — the stable key their id is derived from. */
   slug: string | null;
+  /**
+   * When the owner deleted this custom exercise (B31); null while it is live, and always null for
+   * library rows. A deleted custom is hidden from the Library and the picker but kept, so the
+   * lifter's history and PRs keep its name.
+   */
+  deleted_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -259,7 +265,17 @@ export const SYNC_ORDER: readonly SyncedTable[] = [
 
 /** Every column of each table, as named on both the device and the server. */
 export const TABLE_COLUMNS: { readonly [T in MirroredTable]: readonly (keyof MirrorRowByTable[T])[] } = {
-  exercises: ['id', 'owner_id', 'name', 'primary_muscle', 'equipment', 'slug', 'created_at', 'updated_at'],
+  exercises: [
+    'id',
+    'owner_id',
+    'name',
+    'primary_muscle',
+    'equipment',
+    'slug',
+    'deleted_at',
+    'created_at',
+    'updated_at',
+  ],
   workouts: ['id', 'user_id', 'title', 'notes', 'started_at', 'ended_at', 'visibility', 'created_at', 'updated_at'],
   workout_exercises: [
     'id',

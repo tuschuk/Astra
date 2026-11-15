@@ -3,11 +3,13 @@ import { describe, expect, it } from '@jest/globals';
 
 import {
   assertValidEntryNotes,
+  assertValidExerciseName,
   assertValidSetFields,
   assertValidSupersetGroup,
   assertValidWorkoutNotes,
   assertValidWorkoutTitle,
   MAX_ENTRY_NOTES_LENGTH,
+  MAX_EXERCISE_NAME_LENGTH,
   MAX_INTEGER,
   MAX_SET_NOTES_LENGTH,
   MAX_SET_SCORE_LENGTH,
@@ -139,6 +141,28 @@ describe.each([
   it('counts characters the way Postgres char_length does (an emoji is one)', () => {
     expect(() => assertFn('🏋'.repeat(max))).not.toThrow();
     expect(() => assertFn('🏋'.repeat(max + 1))).toThrow(RangeError);
+  });
+});
+
+describe('assertValidExerciseName', () => {
+  it('mirrors the server cap of 80', () => {
+    expect(MAX_EXERCISE_NAME_LENGTH).toBe(80);
+  });
+
+  it('accepts 1 through 80 characters', () => {
+    expect(() => assertValidExerciseName('x')).not.toThrow();
+    expect(() => assertValidExerciseName('x'.repeat(80))).not.toThrow();
+  });
+
+  it('refuses an empty name and one over the cap, naming the field', () => {
+    expect(() => assertValidExerciseName('')).toThrow(RangeError);
+    expect(() => assertValidExerciseName('')).toThrow(/name/);
+    expect(() => assertValidExerciseName('x'.repeat(81))).toThrow(/name/);
+  });
+
+  it('counts characters the way Postgres char_length does (an emoji is one)', () => {
+    expect(() => assertValidExerciseName('🏋'.repeat(80))).not.toThrow();
+    expect(() => assertValidExerciseName('🏋'.repeat(81))).toThrow(RangeError);
   });
 });
 

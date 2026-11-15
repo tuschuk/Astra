@@ -6,7 +6,16 @@
 import { describe, expect, it } from '@jest/globals';
 
 import { PATTERN_MUSCLES, type MuscleKey } from './exercises';
-import { MUSCLE_NAMES, MUSCLE_ORDER, rankMuscles } from './muscles';
+import { asMuscleKey, MUSCLE_NAMES, MUSCLE_ORDER, rankMuscles } from './muscles';
+
+describe('asMuscleKey', () => {
+  it('passes every muscle key through and turns anything else into null', () => {
+    for (const key of MUSCLE_ORDER) expect(asMuscleKey(key)).toBe(key);
+    expect(asMuscleKey('Chest')).toBeNull(); // a display name is not a key
+    expect(asMuscleKey('neck')).toBeNull();
+    expect(asMuscleKey(null)).toBeNull();
+  });
+});
 
 describe('muscle vocabulary', () => {
   it('lists all twelve muscle keys once, each with a name', () => {

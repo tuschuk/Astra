@@ -105,6 +105,7 @@ describe('writeLocal', () => {
       primary_muscle: null,
       equipment: null,
       slug: 'made_up',
+      deleted_at: null,
       created_at: LATER,
       updated_at: LATER,
     };
@@ -121,6 +122,7 @@ describe('writeLocal', () => {
       primary_muscle: 'Shoulders',
       equipment: 'Barbell',
       slug: null,
+      deleted_at: null,
       created_at: LATER,
       updated_at: LATER,
     };

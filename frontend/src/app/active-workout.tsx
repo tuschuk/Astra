@@ -7,7 +7,8 @@
  * history screen).
  *
  * What the lifter can do:
- *   - **Add exercise**: search the library and add the exercise at the end;
+ *   - **Add exercise**: search the library and the lifter's own custom exercises (B31) and add
+ *     the exercise at the end;
  *   - everything on each card: log sets (plain, warm-up, timed or scored), log a drop, repeat,
  *     remove sets; move or remove the exercise; link it into a superset with the card above
  *     (B11 — linked cards wear a "Superset" badge, worked out here from the snapshot);
@@ -42,12 +43,11 @@ import { FormError } from '@/components/ui/FormError';
 import { Body, Heading } from '@/components/ui/Text';
 import { ToolKitSheet } from '@/components/toolkit/ToolKitSheet';
 import { EntryCard } from '@/components/workout/EntryCard';
-import { ExercisePicker } from '@/components/workout/ExercisePicker';
+import { ExercisePicker, type PickedExercise } from '@/components/workout/ExercisePicker';
 import { confirmDiscardWorkout } from '@/components/workout/confirmDiscardWorkout';
 import { WorkoutDetailsFields } from '@/components/workout/WorkoutDetailsFields';
 import { useAppDatabase } from '@/db/useAppDatabase';
-import type { ExerciseDef } from '@/library/catalog';
-import { libraryExerciseId } from '@/library/uuidv5';
+import { useCustomExercises } from '@/library/useCustomExercises';
 import { useDisplayUnit } from '@/settings/displayUnit';
 import { clearSessionWorkout, resumeSessionWorkout } from '@/workout/activeWorkoutSession';
 import { supersetPlacement, totalSets, workoutDateLabel } from '@/workout/format';
@@ -64,6 +64,8 @@ export default function ActiveWorkoutScreen() {
   const userId = session?.user.id ?? null;
   const { db } = useAppDatabase();
   const unit = useDisplayUnit();
+  // The lifter's own exercises, for the Add-exercise picker (B31).
+  const { customs } = useCustomExercises();
   const store = useSessionWorkout(userId);
   const snapshot = useWorkoutSnapshot(store);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -103,12 +105,12 @@ export default function ActiveWorkoutScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store, db, userId]);
 
-  /** Adds the picked library exercise at the end of the workout. */
-  function addExercise(exercise: ExerciseDef): void {
+  /** Adds the picked exercise (library or the lifter's own custom) at the end of the workout. */
+  function addExercise(exercise: PickedExercise): void {
     setPickerOpen(false);
     if (!store) return;
     setError(null);
-    store.addExercise(libraryExerciseId(exercise.id)).catch((caught: unknown) => {
+    store.addExercise(exercise.deviceId).catch((caught: unknown) => {
       console.warn('Logger: could not add the exercise', caught);
       setError('That exercise couldn’t be added. Try again.');
     });
@@ -241,7 +243,12 @@ export default function ActiveWorkoutScreen() {
         // The button floats above the bottom safe area, so the clearance counts it too.
         contentContainerStyle={[styles.listContent, { paddingBottom: styles.listContent.paddingBottom + insets.bottom }]}
       />
-      <ExercisePicker visible={pickerOpen} onPick={addExercise} onClose={() => setPickerOpen(false)} />
+      <ExercisePicker
+        visible={pickerOpen}
+        customExercises={customs}
+        onPick={addExercise}
+        onClose={() => setPickerOpen(false)}
+      />
       {/* Floats over the list, so the Tool Kit is one tap away wherever the lifter has scrolled. */}
       <Pressable
         accessibilityRole="button"

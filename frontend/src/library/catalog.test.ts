@@ -9,6 +9,7 @@ import {
   ALL_EXERCISE_NAMES,
   EQUIPMENT_ORDER,
   PATTERN_BODY,
+  asEquipment,
   canonicalExerciseName,
   exerciseById,
   filterExercises,
@@ -16,6 +17,15 @@ import {
   slugify,
 } from './catalog';
 import { MOVEMENT_PATTERNS } from './exercises';
+
+describe('asEquipment', () => {
+  it('passes every equipment kind through and turns anything else into null', () => {
+    for (const kind of EQUIPMENT_ORDER) expect(asEquipment(kind)).toBe(kind);
+    expect(asEquipment('barbell')).toBeNull(); // exact words only, like the chips
+    expect(asEquipment('Kettlebell')).toBeNull();
+    expect(asEquipment(null)).toBeNull();
+  });
+});
 
 describe('exercise catalog', () => {
   it('has exactly one entry per unique exercise name', () => {

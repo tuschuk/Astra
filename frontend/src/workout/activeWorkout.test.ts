@@ -312,6 +312,7 @@ describe('server rules are checked before anything is saved', () => {
       primary_muscle: null,
       equipment: null,
       slug: null,
+      deleted_at: null,
       created_at: '2026-11-14T08:00:00.000Z',
       updated_at: '2026-11-14T08:00:00.000Z',
     };
@@ -331,6 +332,7 @@ describe('server rules are checked before anything is saved', () => {
       primary_muscle: null,
       equipment: null,
       slug: null,
+      deleted_at: null,
       created_at: '2026-11-14T08:00:00.000Z',
       updated_at: '2026-11-14T08:00:00.000Z',
     };
