@@ -77,6 +77,7 @@ export default function RootLayout() {
  * The router stack, split into the two guarded halves of the app:
  * - (tabs), active-workout (the logger), workout/[id] (a saved workout),
  *   analysis/[id] (a finished workout's post-workout analysis, B18),
+ *   post-workout/[id] (the Post step after the analysis — share or skip, B21),
  *   edit-workout/[id] (changing a saved workout, B14),
  *   exercise-history/[exerciseId] (one exercise's past sessions and PRs),
  *   settings (units and account, B15) and find-lifters (search people and follow
@@ -124,6 +125,7 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
           <Stack.Screen name="active-workout" />
           <Stack.Screen name="workout/[id]" />
           <Stack.Screen name="analysis/[id]" />
+          <Stack.Screen name="post-workout/[id]" />
           <Stack.Screen name="edit-workout/[id]" />
           <Stack.Screen name="exercise-history/[exerciseId]" />
           <Stack.Screen name="settings" />

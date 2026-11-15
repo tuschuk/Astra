@@ -4,17 +4,23 @@
  * after reconnecting, and a retried upload creates no duplicates. Plus the
  * deletes phase (B14) and the settings phase (B15).
  */
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from '@jest/globals';
 
 import { prepareDatabase } from '@/db/database';
 import { deleteLocalRowsTx, writeLocal, type SetRow } from '@/db/dao';
+import { replaceFlairsTx } from '@/db/flairs';
 import { createUnitStore } from '@/settings/unitStore';
+import { createWorkoutPost } from '@/social/createPost';
 import { FakeServer } from '@/test-utils/fakeTransport';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { ENTRIES, makeSet, SETS, USER_ID, WORKOUT } from '@/test-utils/workoutFixtures';
 
 import { SyncEngine } from './engine';
-import { enqueueTx, outboxSize } from './outbox';
+import { enqueueTx, outboxSize, pendingRows } from './outbox';
 import { PUSH_BATCH_SIZE, pushOutbox, withoutUpdatedAt } from './push';
 
 const quiet = () => undefined;
@@ -325,5 +331,143 @@ describe('B15: the settings phase', () => {
     expect((await pushOutbox(db, server)).userSettings).toBe(0);
     expect(server.userSettingsPushes).toEqual([]);
     expect(await outboxSize(db)).toBe(0);
+  });
+});
+
+describe('B21: the posts phase', () => {
+  const POST_ID = 'd0000000-0000-4000-8000-000000000001';
+
+  /** A device with the fixture workout finished offline, the flairs synced, and a post of it queued. */
+  async function deviceWithQueuedPost() {
+    const { db, server, engine } = await deviceWithOfflineWorkout();
+    await db.withTransactionAsync((tx) => replaceFlairsTx(tx, server.flairs));
+    await createWorkoutPost(db, USER_ID, WORKOUT.id, 'new-pr', { newId: () => POST_ID });
+    return { db, server, engine };
+  }
+
+  it('offline: the post waits on the phone; reconnected, one sync puts it on the server after its workout, exactly once', async () => {
+    const { db, server, engine } = await deviceWithQueuedPost();
+    await engine.syncNow();
+    expect(server.posts.size).toBe(0);
+    expect(await pendingRows(db, 'posts')).toHaveLength(1);
+
+    server.offline = false;
+    const online = await engine.syncNow();
+    expect(online.push?.posts).toBe(1);
+    const stored = server.posts.get(POST_ID);
+    expect(stored).toMatchObject({
+      id: POST_ID,
+      user_id: USER_ID,
+      flair_id: 'new-pr',
+      workout_id: WORKOUT.id,
+      visibility: 'public',
+    });
+    expect(server.posts.size).toBe(1);
+    expect(await outboxSize(db)).toBe(0);
+
+    // A second sync changes nothing.
+    const again = await engine.syncNow();
+    expect(again.push?.posts).toBe(0);
+    expect(server.posts.size).toBe(1);
+    expect(server.postPushes).toEqual([POST_ID]);
+  });
+
+  it('a post queued offline survives the app dying: reopened from its file, the phone still holds it and uploads it once', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'astra-b21-'));
+    const file = join(dir, 'astra.db');
+    try {
+      const before = await prepareDatabase(createNodeSqliteDriver(file));
+      await writeLocal(before, 'workouts', [WORKOUT]);
+      await before.withTransactionAsync((tx) => replaceFlairsTx(tx, new FakeServer().flairs));
+      await createWorkoutPost(before, USER_ID, WORKOUT.id, 'wod', { newId: () => POST_ID });
+      // "Killed": the old connection is simply abandoned; a new one opens the same file.
+      const after = await prepareDatabase(createNodeSqliteDriver(file));
+      expect(await pendingRows(after, 'posts')).toEqual([{ rowId: POST_ID, mark: expect.any(Number) }]);
+      const server = new FakeServer();
+      expect((await pushOutbox(after, server)).posts).toBe(1);
+      expect([...server.posts.keys()]).toEqual([POST_ID]);
+    } finally {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        // Windows keeps a still-open SQLite file locked; the OS temp folder is cleaned later.
+      }
+    }
+  });
+
+  it('a workout upload failure means the post is never sent (it can’t arrive before its workout)', async () => {
+    const { db, server } = await deviceWithQueuedPost();
+    server.offline = false;
+    server.failUpsertsOn('workouts');
+    await expect(pushOutbox(db, server)).rejects.toThrow();
+    expect(server.postPushes).toEqual([]);
+    expect(await pendingRows(db, 'posts')).toHaveLength(1);
+  });
+
+  it('a lost reply is retried onto the same row — still one post', async () => {
+    const { db, server } = await deviceWithQueuedPost();
+    server.offline = false;
+    await pushOutbox(db, server);
+    await db.withTransactionAsync((tx) => enqueueTx(tx, 'posts', POST_ID, '2026-11-15T00:00:00.000Z'));
+    server.loseNextResponse();
+    await expect(pushOutbox(db, server)).rejects.toThrow(/response lost/);
+    expect(await pendingRows(db, 'posts')).toHaveLength(1);
+    await pushOutbox(db, server);
+    expect(server.posts.size).toBe(1);
+    expect(server.postPushes).toEqual([POST_ID, POST_ID, POST_ID]);
+    expect(await outboxSize(db)).toBe(0);
+  });
+
+  it('another device already posted this workout: the local post is dropped, its lines cleared, nothing thrown', async () => {
+    const { db, server } = await deviceWithQueuedPost();
+    server.offline = false;
+    server.seed('workouts', [withoutUpdatedAt<'workouts'>(WORKOUT)]);
+    const otherPostId = 'd0000000-0000-4000-8000-000000000099';
+    await server.pushPost({
+      id: otherPostId,
+      user_id: USER_ID,
+      flair_id: 'wod',
+      workout_id: WORKOUT.id,
+      visibility: 'public',
+      created_at: WORKOUT.created_at,
+    });
+
+    const result = await pushOutbox(db, server);
+    expect(result.posts).toBe(0);
+    expect([...server.posts.keys()]).toEqual([otherPostId]);
+    expect(await db.getFirstAsync('select count(*) as n from posts')).toEqual({ n: 0 });
+    expect(await outboxSize(db)).toBe(0);
+  });
+
+  it('any other refusal stops the push and keeps the line for the next sync', async () => {
+    const { db, server } = await deviceWithQueuedPost();
+    server.offline = false;
+    server.failPosts = true;
+    await expect(pushOutbox(db, server)).rejects.toThrow(/refused/);
+    expect(await pendingRows(db, 'posts')).toHaveLength(1);
+    server.failPosts = false;
+    expect((await pushOutbox(db, server)).posts).toBe(1);
+  });
+
+  it('deleting the workout with its post still queued leaves no post, no post line, and a clean next push', async () => {
+    const { db, server } = await deviceWithQueuedPost();
+    await db.withTransactionAsync((tx) => deleteLocalRowsTx(tx, 'workouts', [WORKOUT.id], '2026-11-15T00:00:00.000Z'));
+    expect(await db.getFirstAsync('select count(*) as n from posts')).toEqual({ n: 0 });
+    expect(await pendingRows(db, 'posts')).toEqual([]);
+    server.offline = false;
+    const result = await pushOutbox(db, server);
+    expect(result.posts).toBe(0);
+    expect(server.postPushes).toEqual([]);
+    expect(await outboxSize(db)).toBe(0);
+  });
+
+  it('deleting an uploaded workout takes its post off the server too (the cascade)', async () => {
+    const { db, server } = await deviceWithQueuedPost();
+    server.offline = false;
+    await pushOutbox(db, server);
+    expect(server.posts.size).toBe(1);
+    await db.withTransactionAsync((tx) => deleteLocalRowsTx(tx, 'workouts', [WORKOUT.id], '2026-11-15T00:00:00.000Z'));
+    await pushOutbox(db, server);
+    expect(server.posts.size).toBe(0);
   });
 });

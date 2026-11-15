@@ -189,6 +189,9 @@ export class SyncEngine {
       result.pullError = error;
       this.report('Sync: download failed; it will resume from the last saved page', error);
     }
+    if (result.pull?.flairsError !== undefined) {
+      this.report('Sync: flair list refresh failed; the phone keeps its last copy', result.pull.flairsError);
+    }
     // Last (B18): ask the server to analyze finished workouts that have no analysis yet, or an
     // out-of-date one. Only after a successful download — then every workout without unsent
     // changes carries the server's own timestamp, so "is the analysis stale?" is answered

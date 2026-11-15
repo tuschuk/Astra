@@ -1,5 +1,5 @@
 /**
- * The sync engine's view of the server: twelve operations, nothing more.
+ * The sync engine's view of the server: fourteen operations, nothing more.
  *
  * Why an interface: the real implementation (`supabaseTransport.ts`) talks to
  * Supabase over the network; tests use an in-memory fake server
@@ -17,7 +17,9 @@ import type { WeightUnit } from '@training-math';
 
 import type {
   ExerciseRow,
+  FlairRow,
   PersonalRecordRow,
+  PostRow,
   RowByTable,
   SetRow,
   SyncedTable,
@@ -126,6 +128,36 @@ export interface SyncTransport {
    * (updated_at, id) — how a second phone, or a reinstalled one, gets every analysis.
    */
   pullWorkoutAnalyses(userId: string, after: PullCursor | null, limit: number): Promise<WorkoutAnalysisRow[]>;
+
+  /**
+   * Uploads one of the lifter's own posts (B21): insert, or update the post with this id — so a
+   * retry after a lost reply lands on the same row. Sent without `updated_at`, like every upload.
+   * Throws `PostAlreadyExistsError` when the server already holds a DIFFERENT post for the same
+   * workout (another device posted it first — one post per workout); throws a plain error for
+   * anything else (no signal, refused by security rules), which means "try again later".
+   */
+  pushPost(row: PostPushRow): Promise<void>;
+
+  /**
+   * The whole flair list (B21), in display order. Read whole on every download: the server table
+   * is a handful of founder-curated rows with no `updated_at` to bookmark.
+   */
+  pullFlairs(): Promise<FlairRow[]>;
+}
+
+/** A post as uploaded: every column except `updated_at`, which the server stamps (see `PushRow`). */
+export type PostPushRow = Omit<PostRow, 'updated_at'>;
+
+/**
+ * The server refused a post because that workout already has a post (its `posts_workout_unique`
+ * rule, Postgres error 23505) — another device posted it first. Not a "try again" failure: the
+ * workout has its post, so the upload treats this post as settled and drops it (push.ts).
+ */
+export class PostAlreadyExistsError extends Error {
+  constructor(readonly workoutId: string) {
+    super(`Workout ${workoutId} already has a post`);
+    this.name = 'PostAlreadyExistsError';
+  }
 }
 
 /**

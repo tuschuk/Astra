@@ -313,3 +313,23 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - Review judgement calls left: `beforeCursorFilter` mirrors sync's `afterCursorFilter` by hand
     (different column and direction); kept as two small named functions.
   - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.
+- B21 finish-to-post follow-ups (`finish-to-post`):
+  - **Device check (Tristen):** finish a workout → analysis shows **Next** → Post step with the
+    four flair chips → pick one → Post → Home shows the post (needs signal); a second account
+    following you sees it. Repeat in airplane mode: Post still lands on Home (feed offline
+    message), and after reconnecting the post appears once. Finish → Next → **Skip** → Workout
+    tab, no post. Saved workout → Analysis has no Next. Chip layout at phone width.
+  - **Live PostgREST not exercised by the builder:** `posts` upsert on id through the real REST
+    API with a user token (insert path, the retry/update path, and the 23505 code arriving on
+    `error.code`), and the `flairs` select. Pinned against the recording fake client and the B20
+    RLS source only.
+  - **A flair removed on the server would wedge a queued post** that uses it (foreign-key refusal
+    kept and retried every sync). Today flairs are founder-curated and only ever added (B20: "the
+    slug never changes once shipped"); if a flair is ever retired, map that refusal to a settled
+    drop or re-flair, the way 23505 is handled.
+  - Review judgement calls left as-is: `createPost.ts` and `flairs.ts` spell their own insert
+    columns rather than reusing dao's private upsert helper; `pullFlairs` trusts the row shape
+    (like the other plain pulls); the `post=1` route param could be a more descriptive name.
+  - A failing settings upload holds queued posts back too (the posts phase runs after it);
+    accepted, noted in `pushPostsPhase`.
+  - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.

@@ -2,8 +2,9 @@
  * Download: brings the server's changes to the user's own data onto the
  * device — their workouts (with every entry and set inside them), the
  * exercises they can see (the shared library plus their customs), their
- * personal records (B13), their workout analyses (B18), and their settings
- * row (B15, read whole each time — see `pullUserSettingsPass`).
+ * personal records (B13), their workout analyses (B18), their settings
+ * row (B15, read whole each time — see `pullUserSettingsPass`), and the
+ * flair list posts are labelled with (B21, replaced whole each time).
  *
  * How it finds what changed: each table keeps a bookmark in `sync_state` —
  * the (updated_at, id) of the last row downloaded. A pull asks for rows after
@@ -40,7 +41,15 @@
 import { timestampMs } from '@analysis';
 
 import { placeholders, type SqlDriver, type SqlExecutor } from '@/db/driver';
-import { saveServerAnalysesTx, upsertRowsTx, type MirrorRowByTable, type RowByTable, type SyncedTable } from '@/db/dao';
+import {
+  deleteWorkoutPostsTx,
+  saveServerAnalysesTx,
+  upsertRowsTx,
+  type MirrorRowByTable,
+  type RowByTable,
+  type SyncedTable,
+} from '@/db/dao';
+import { replaceFlairsTx } from '@/db/flairs';
 import { writeUserSettingsRowTx, type UserSettingsRow } from '@/db/userSettings';
 
 import { dropLinesTx, rowsWithPendingChanges } from './outbox';
@@ -143,6 +152,15 @@ export interface PullResult {
   tombstones: number;
   /** 1 if the server's settings row was saved on the phone (B15), else 0. */
   userSettings: number;
+  /** Flairs saved on the phone (B21) — the whole list, replaced; 0 if it couldn't be read. */
+  flairs: number;
+  /**
+   * Set when the flair refresh failed (B21). Kept here rather than thrown: it is the last step,
+   * every other table is already saved, and the old flairs keep serving — so one failed read of
+   * a four-row list must not count as a failed download (which would skip the analysis requests).
+   * The engine logs it; the next sync tries again.
+   */
+  flairsError?: unknown;
 }
 
 /**
@@ -364,8 +382,10 @@ async function applyTombstone(tx: SqlExecutor, tombstone: TombstoneRow): Promise
     await dropLinesTx(tx, 'workout_exercises', entryIds);
     await dropLinesTx(tx, 'workouts', [tombstone.row_id]);
     await tx.runAsync('delete from workouts where id = ?', [tombstone.row_id]);
-    // Its analysis too (B18): the server's cascade already removed it there.
+    // Its analysis too (B18), and its post with any unsent lines (B21): the server's cascade
+    // already removed both there, and a queued post of a gone workout could never upload.
     await tx.runAsync('delete from workout_analyses where id = ?', [tombstone.row_id]);
+    await deleteWorkoutPostsTx(tx, [tombstone.row_id]);
     return true;
   }
   const record = await tx.getFirstAsync<{ updated_at: string }>('select updated_at from personal_records where id = ?', [
@@ -453,7 +473,8 @@ export interface PullOptions {
  * Downloads everything new for user `userId`: exercises first (workouts point
  * at them), then workouts with their contents, then the user's personal
  * records (they cite sets), then their workout analyses (B18), then
- * deletions, then their settings row. Throws
+ * deletions, then their settings row, then the flair list (B21 — whose
+ * failure is recorded in the result, not thrown; see `flairsError`). Throws
  * the transport's error on failure; pages already saved stay saved and their
  * bookmarks stay moved.
  */
@@ -473,6 +494,7 @@ export async function pullChanges(
     removed: 0,
     tombstones: 0,
     userSettings: 0,
+    flairs: 0,
   };
   await pullStandalone(db, 'exercises', (after) => transport.pullExercises(after, PULL_PAGE_SIZE), result);
   await pullWorkoutTrees(db, transport, userId, result);
@@ -494,6 +516,13 @@ export async function pullChanges(
   if (settings) {
     result.userSettings = 1;
     options.onUserSettingsPulled?.(settings);
+  }
+  // Last of all (B21), so its failure can cost nothing but itself (see `flairsError`).
+  try {
+    const flairs = await transport.pullFlairs();
+    result.flairs = await db.withTransactionAsync((tx) => replaceFlairsTx(tx, flairs));
+  } catch (error) {
+    result.flairsError = error;
   }
   return result;
 }

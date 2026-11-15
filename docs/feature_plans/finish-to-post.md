@@ -284,7 +284,32 @@ verified in the repo (transport/push/outbox/engine sources, B18/B20 plan files, 
   (`MIGRATIONS` has seven entries) — this step's migration is V8 as planned. (i) B20's RLS
   gives posts owner insert **and** update policies, both checking `owns_workout` — the upsert's
   conflict path is covered.
-- **Scope verdict:** right as written. The queued-post machinery is the one place this plan
+- **Scope verdict (planner):** right as written. The queued-post machinery is the one place this plan
   spends beyond the obvious, and it is spent on the step's own DoD being true for offline
   finishes — the alternative quietly made LOG-7 online-only. Nothing else widened; the
   visibility picker and captions explicitly refused.
+
+## Deviations during the build (builder run)
+
+- **Flair refresh failure is recorded, not thrown.** G9 put the flairs step last; the builder
+  found a throw there would still mark the whole pull failed and make the engine skip the B18
+  analysis requests. So `pullChanges` catches it into `PullResult.flairsError` (count 0, old rows
+  kept) and the engine logs it — the "blast radius nil" G9 intended.
+- **An empty flair answer is ignored** (old rows kept), not written as "no flairs": the server
+  always has flairs, so empty can only be a broken read, and an empty list would disable Post.
+- **Tombstone hygiene too.** The plan's deletion hygiene named only the local delete path (B14).
+  A workout deleted on *another* device (the pull's tombstone pass) leaves the same poison row, so
+  `applyTombstone` also calls `deleteWorkoutPostsTx`. Same helper, both paths.
+- **`unknown-flair` refusal.** `createWorkoutPost` also refuses a flair not on the phone's list —
+  the server's flair FK would refuse it forever and wedge the queue.
+- **Device schema V8 has no `posts_workout_idx`.** The `unique (workout_id)` constraint already
+  creates an index that serves the "already posted?" lookup; review flagged the second as
+  redundant, and V8 had not shipped, so it was dropped before commit.
+- **`flairs` and `posts` joined `MirrorRowByTable` / `TABLE_COLUMNS`** (not `SyncedTable`), so
+  the schema test pins their columns and `getRowsByIds('posts')` serves the push phase; the
+  generic upload and bookmarked-download paths still refuse both at compile time.
+- **One helper for "forget this post":** `dao.deletePostsTx` (post rows + their outbox lines),
+  used by the workout-delete paths and by the push phase's 23505 drop (review: duplicated code).
+- **Kept as the plan said:** Next pushes the Post step; Post → Home, Skip → Workout tab; the
+  posts phase runs after the settings phase (so a failing settings upload also holds posts back —
+  noted in `pushPostsPhase`).

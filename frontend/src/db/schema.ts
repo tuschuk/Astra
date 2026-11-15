@@ -11,6 +11,8 @@
  *   - user_settings — the lifter's kg/lb choice (version 6, B15).
  *   - workout_analyses — each finished workout's post-workout analysis, as the
  *     server function wrote it (version 7, B18; download-only).
+ *   - flairs — the server's list of post flairs (version 8, B21; download-only, replaced whole).
+ *   - posts — the lifter's own workout posts from the Post step (version 8, B21; upload-only).
  *   - outbox — the list of local changes (uploads and, from version 5,
  *     deletions) not yet sent to the server (see `sync/outbox.ts`).
  *   - sync_state — small bookkeeping values, such as how far the last
@@ -190,8 +192,38 @@ create table workout_analyses (
 create index workout_analyses_user_idx on workout_analyses (user_id);
 `;
 
+/**
+ * Version 8 (B21): the two tables behind the Post step after Finish.
+ *   - `flairs` — a copy of the server's founder-curated flair list ("WOD", "New PR", …), so the
+ *     Post step can show its chips with no signal. Download-only and replaced whole on every
+ *     download (the server table has no `updated_at` to bookmark). `upvotes_only` is 0/1.
+ *   - `posts` — the lifter's OWN posts, written at the Post step and upload-only: the feed is
+ *     read from the server, so nothing is ever downloaded into it. `workout_id` is unique, like
+ *     the server's `posts_workout_unique` — one post per workout (the unique rule's own index
+ *     also serves the "already posted?" lookup, so no second index).
+ * Like the rest of the mirror, no foreign keys or CHECKs: the server enforces those.
+ */
+const V8 = `
+create table flairs (
+  id           text primary key not null,
+  name         text not null,
+  position     integer not null,
+  upvotes_only integer not null
+);
+
+create table posts (
+  id         text primary key not null,
+  user_id    text not null,
+  flair_id   text not null,
+  workout_id text not null unique,
+  visibility text not null,
+  created_at text not null,
+  updated_at text not null
+);
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7];
+export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

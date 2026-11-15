@@ -39,7 +39,7 @@
  */
 import type { PrKind } from '@training-math';
 
-import { enqueueTx, type OutboxTable } from '@/sync/outbox';
+import { dropLinesTx, enqueueTx, type OutboxTable } from '@/sync/outbox';
 
 import { placeholders, type SqlDriver, type SqlExecutor, type SqlValue } from './driver';
 
@@ -157,7 +157,45 @@ export interface WorkoutAnalysisRow {
   updated_at: string;
 }
 
-/** The row shape of each synced table (the five the phone uploads). */
+/**
+ * One flair — the label a post wears ("WOD", "Physique Check", …) — as the server's founder-curated
+ * `flairs` table holds it (B20). Download-only on the phone (B21), so the Post step can show the
+ * chips offline. The names are data, never words in the app's code (SOC-3).
+ */
+export interface FlairRow {
+  /** A stable slug ('wod', 'new-pr', …). */
+  id: string;
+  /** What the chip shows. */
+  name: string;
+  /** Display order in the picker, lowest first. */
+  position: number;
+  /** True for Physique Check: such posts take upvotes only (votes arrive with B23). */
+  upvotes_only: boolean;
+}
+
+/**
+ * One of the lifter's own posts (server table `posts`, B20), as the Post step after Finish writes
+ * it (B21). Upload-only on the phone: the feed is read from the server. The post links its
+ * workout through `workout_id` — and through it the workout's analysis, whose id IS the workout id.
+ */
+export interface PostRow {
+  /** Made on the phone, so a retried upload lands on the same server row. */
+  id: string;
+  user_id: string;
+  flair_id: string;
+  /** The shared workout; one post per workout (unique on the phone and the server). */
+  workout_id: string;
+  /** Copied from the workout when the post is made, so the two can't disagree (B20 G7). */
+  visibility: WorkoutVisibility;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * The row shape of each synced table: the five training tables, uploaded and downloaded through
+ * the generic machinery. (The phone also uploads its settings row and its own posts, each through
+ * a small path of its own — see `OutboxTable` in sync/outbox.ts.)
+ */
 export interface RowByTable {
   exercises: ExerciseRow;
   workouts: WorkoutRow;
@@ -171,12 +209,15 @@ export type SyncedTable = keyof RowByTable;
 
 /**
  * Every server table copied onto the phone: the five synced ones plus the download-only
- * `workout_analyses` (B18). Kept as a separate, wider type on purpose: the upload paths
- * (`writeLocal`, the outbox, the push) take `SyncedTable`, so the compiler refuses any attempt
- * to upload an analysis — only the server function may write one.
+ * `workout_analyses` (B18) and `flairs` (B21), and the upload-only `posts` (B21). Kept as a
+ * separate, wider type on purpose: the generic upload paths (`writeLocal`, the batched push) and
+ * the bookmarked downloads take `SyncedTable`, so the compiler refuses any attempt to upload an
+ * analysis or a flair, or to download into `posts` — each of those has its own small path.
  */
 export interface MirrorRowByTable extends RowByTable {
   workout_analyses: WorkoutAnalysisRow;
+  flairs: FlairRow;
+  posts: PostRow;
 }
 
 /** A table mirrored on the device, uploaded or download-only. */
@@ -250,11 +291,14 @@ export const TABLE_COLUMNS: { readonly [T in MirroredTable]: readonly (keyof Mir
     'created_at',
     'updated_at',
   ],
+  flairs: ['id', 'name', 'position', 'upvotes_only'],
+  posts: ['id', 'user_id', 'flair_id', 'workout_id', 'visibility', 'created_at', 'updated_at'],
 };
 
 /** Yes/no columns: SQLite stores them as 0/1, the app and server use true/false. */
 const BOOLEAN_COLUMNS: { readonly [T in MirroredTable]?: readonly string[] } = {
   sets: ['is_warmup'],
+  flairs: ['upvotes_only'],
 };
 
 /** Converts one app-side value into something SQLite can store. */
@@ -451,7 +495,8 @@ async function touchRootsTx(tx: SqlExecutor, workoutIds: readonly string[], now:
  *      rows are gone);
  *   2. the rows are deleted — the device's foreign keys take a workout's
  *      entries and sets, or an entry's sets, with it; a deleted workout's
- *      analysis (B18) is deleted here too;
+ *      analysis (B18) and its post with any unsent upload lines (B21,
+ *      `deleteWorkoutPostsTx`) are deleted here too;
  *   3. one `delete` outbox line per given row. Only the given rows: the
  *      server's foreign keys cascade the same way, so queuing the children too
  *      would be redundant traffic. Any upload lines the children still had
@@ -476,9 +521,45 @@ export async function deleteLocalRowsTx(
   // has no foreign key to do it, and the row was never queued, so nothing is sent for it.
   if (tbl === 'workouts') {
     await tx.runAsync(`delete from workout_analyses where id in (${placeholders(ids.length)})`, ids);
+    await deleteWorkoutPostsTx(tx, ids);
   }
   for (const id of ids) await enqueueTx(tx, tbl, id, now, 'delete');
   await touchRootsTx(tx, roots, now);
+}
+
+/**
+ * Removes the phone's posts of the given workouts, and every outbox line still waiting to upload
+ * them, inside an already-open transaction (B21). Used wherever a workout is deleted on the
+ * phone — by the lifter (`deleteLocalRowsTx`) or because another device deleted it (the
+ * download's tombstone pass) — since the device tables have no foreign key to cascade it.
+ *
+ * Why the waiting lines must go too: the server deletes a workout's post with the workout, and a
+ * queued post whose workout no longer exists would be refused on every upload, forever, blocking
+ * the posts queued behind it. Nothing is queued for the server: its own cascade removes the post.
+ */
+export async function deleteWorkoutPostsTx(tx: SqlExecutor, workoutIds: readonly string[]): Promise<void> {
+  if (workoutIds.length === 0) return;
+  const posts = await tx.getAllAsync<{ id: string }>(
+    `select id from posts where workout_id in (${placeholders(workoutIds.length)})`,
+    workoutIds,
+  );
+  await deletePostsTx(
+    tx,
+    posts.map((p) => p.id),
+  );
+}
+
+/**
+ * Deletes the given posts from the phone along with every outbox line still waiting to upload
+ * them, inside an already-open transaction (B21). Nothing is queued for the server. The one home
+ * of "this post is settled — forget it here": used when its workout is deleted
+ * (`deleteWorkoutPostsTx`) and when the server says the workout already has a post from another
+ * device (sync/push.ts).
+ */
+export async function deletePostsTx(tx: SqlExecutor, postIds: readonly string[]): Promise<void> {
+  if (postIds.length === 0) return;
+  await dropLinesTx(tx, 'posts', postIds);
+  await tx.runAsync(`delete from posts where id in (${placeholders(postIds.length)})`, postIds);
 }
 
 /**

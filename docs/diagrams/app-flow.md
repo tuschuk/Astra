@@ -72,9 +72,9 @@ flowchart TD
 
   subgraph Device["On the device"]
     Store[("expo-sqlite key-value store<br/>the saved Supabase session<br/>(survives killing the app)")]
-    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records, user_settings (B15: user_id, unit),<br/>workout_analyses (B18, download-only, new_prs as JSON text) (schema V7)<br/>+ outbox (unsent changes; op = upsert or delete, B14) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
+    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records, user_settings (B15: user_id, unit),<br/>workout_analyses (B18, download-only, new_prs as JSON text),<br/>flairs (B21, download-only, replaced whole), posts (B21, my own, upload-only) (schema V8)<br/>+ outbox (unsent changes; op = upsert or delete, B14) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
     LocalSeed["First-launch seed (library/seedLocal.ts)<br/>insert-if-missing all 151 exercises,<br/>id = uuidv5(namespace, slug); never queued"]
-    WriteLocal["writeLocal / writeLocalRowsTx / writeLocalTree (db/dao.ts): the queued write paths<br/>rows + outbox lines + re-stamp & queue parent workout,<br/>all-or-nothing (writeLocalTree: a whole workout in one transaction)<br/>deleteLocalRowsTx (B14): delete rows + 'delete' outbox line + touch the root"]
+    WriteLocal["writeLocal / writeLocalRowsTx / writeLocalTree (db/dao.ts): the queued write paths<br/>rows + outbox lines + re-stamp & queue parent workout,<br/>all-or-nothing (writeLocalTree: a whole workout in one transaction)<br/>deleteLocalRowsTx (B14): delete rows + 'delete' outbox line + touch the root<br/>(a deleted workout also drops its analysis and, B21, its post + the post's unsent lines)"]
     Drafts["writeDraftRows / deleteDraftRowsTx (db/dao.ts): the in-progress path<br/>saved at once, NEVER queued; refused for a finished workout"]
     LocalSeed --> LocalDB
     WriteLocal --> LocalDB
@@ -99,11 +99,20 @@ flowchart TD
     ToolKit -->|"Close / system back: logger still mounted underneath, exactly as left"| Logger
     Logger -->|Finish| EmptyQ
     EmptyQ -->|"yes: 'Nothing logged yet'<br/>Discard workout / Keep lifting"| Logger
-    AnalysisScr["Workout analysis (app/analysis/[id].tsx, B18: ANA-1/2/4, NFR-9)<br/>workout title or date; encouraging headline + message (rule-picked, no AI);<br/>Volume (lifter's unit), Sets ('n sets · k warm-up'), Duration (m:ss);<br/>B19 'Muscles trained' card (ANA-3): front + back body figures (MuscleMap),<br/>trained muscles filled red, opacity 0.25 + 0.75 × intensity, the rest plain;<br/>legend 'Chest, Shoulders, Triceps' (most direct first); hidden when nothing maps;<br/>'New PRs': exercise · book · weight; View workout; Back;<br/>not-medical-advice statement in EVERY state (incl. loading / missing);<br/>re-read on every focus; works offline<br/>(another user's / unfinished id: 'not on this phone')"]
-    EmptyQ -->|"no: finish, clear slot,<br/>router.replace"| AnalysisScr
+    AnalysisScr["Workout analysis (app/analysis/[id].tsx, B18: ANA-1/2/4, NFR-9)<br/>workout title or date; encouraging headline + message (rule-picked, no AI);<br/>Volume (lifter's unit), Sets ('n sets · k warm-up'), Duration (m:ss);<br/>B19 'Muscles trained' card (ANA-3): front + back body figures (MuscleMap),<br/>trained muscles filled red, opacity 0.25 + 0.75 × intensity, the rest plain;<br/>legend 'Chest, Shoulders, Triceps' (most direct first); hidden when nothing maps;<br/>'New PRs': exercise · book · weight; B21 finish mode (post=1, only from Finish): Next;<br/>View workout; Back;<br/>not-medical-advice statement in EVERY state (incl. loading / missing);<br/>re-read on every focus; works offline<br/>(another user's / unfinished id: 'not on this phone')"]
+    EmptyQ -->|"no: finish, clear slot,<br/>router.replace(analysis, post=1)"| AnalysisScr
     AnalysisScr -->|"View workout: router.push"| Saved
-    Saved -->|"Analysis: router.push"| AnalysisScr
+    Saved -->|"Analysis: router.push (no post=1 → no Next)"| AnalysisScr
+    PostStep["Post step (app/post-workout/[id].tsx, B21, LOG-7)<br/>workout title or date; 'Share your workout';<br/>flair chips = the device flairs rows by position (never hard-coded, SOC-3),<br/>lowest-position chip picked first, one pick at a time;<br/>Post (disabled while saving) · Skip · Back;<br/>already posted → 'Already posted' + Go to Home;<br/>no flairs synced → Post disabled + a line why, Skip still works<br/>(another user's / unfinished id: 'not on this phone')"]
+    AnalysisScr -->|"Next: router.push"| PostStep
+    PostStep -->|"Back: router.back"| AnalysisScr
+    PostQ["createWorkoutPost (social/createPost.ts, B21): ONE transaction —<br/>check own finished workout, no post yet, flair on the phone;<br/>insert posts row (new uuid, visibility = the workout's) + outbox line 'posts';<br/>then notifyLocalWrite → the engine syncs soon"]
+    PostStep -->|Post| PostQ
   end
+  PostQ -->|"posts row + outbox line"| LocalDB
+  PostQ -.->|"notifies"| Triggers
+  PostStep -->|"Post saved: router.replace('/')"| Home
+  PostStep -->|"Skip (nothing made): router.replace('/workout')"| Workout
   AnalysisScr -->|"Back with nothing behind: router.replace"| Workout
   Workout -->|"Start / Resume: store into the session slot<br/>(activeWorkoutSession.ts, keyed by user id)"| Logger
   Workout -->|tap a past workout| Saved
@@ -206,8 +215,8 @@ flowchart TD
   subgraph SyncEng["Sync engine (src/sync), mounted by useSync in the root layout"]
     Triggers{{"Triggers, debounced 750 ms, one run at a time:<br/>start with a session, app back to foreground,<br/>network reconnects, a local write"}}
     PrePass["Tombstones first (B14): apply other devices' deletions<br/>BEFORE uploading, so an unsent edit can't re-create<br/>a workout deleted elsewhere"]
-    Push["Push: DELETE phase first (B14): outbox 'delete' lines,<br/>children's tables first, batches of 100 ids;<br/>then outbox → server upserts, parents first<br/>(… sets, then personal_records), batches of 500 on id (no updated_at),<br/>then workouts again to re-touch roots;<br/>clear lines up to each row's watermark PER OP; stop on failure;<br/>LAST (B15): settings phase — pending user_settings line → UPDATE unit by user_id<br/>(never insert; zero-row update = done)"]
-    Pull["Pull: exercises, then own workouts by (updated_at, id)<br/>bookmark minus 5 s; fetch their entries and sets;<br/>reconcile (B14): drop local entries / sets the server's copy lacks<br/>(+ PR rows citing them), unless they have unsent lines;<br/>then own personal_records on their own bookmark (B13);<br/>LAST: tombstones after the stored id (B14): deleted workout → local tree<br/>+ its outbox lines go; deleted PR → goes unless unsent or newer;<br/>then (B15) the user_settings row, no bookmark: saved unless a toggle is unsent<br/>(check + save in one transaction), then onUserSettingsPulled → unitStore.applyPulled;<br/>save page + bookmark in one transaction;<br/>skip rows with unsent local edits;<br/>B18: after personal_records, workout_analyses on pull_cursor:workout_analyses<br/>(saved as they come — never any outbox lines); a workout tombstone also drops its analysis"]
+    Push["Push: DELETE phase first (B14): outbox 'delete' lines,<br/>children's tables first, batches of 100 ids;<br/>then outbox → server upserts, parents first<br/>(… sets, then personal_records), batches of 500 on id (no updated_at),<br/>then workouts again to re-touch roots;<br/>clear lines up to each row's watermark PER OP; stop on failure;<br/>LAST (B15): settings phase — pending user_settings line → UPDATE unit by user_id<br/>(never insert; zero-row update = done);<br/>then (B21) posts phase — each pending posts line → upsert on id (no updated_at),<br/>after its workout landed; 23505 (another device posted it) → drop the local post + lines"]
+    Pull["Pull: exercises, then own workouts by (updated_at, id)<br/>bookmark minus 5 s; fetch their entries and sets;<br/>reconcile (B14): drop local entries / sets the server's copy lacks<br/>(+ PR rows citing them), unless they have unsent lines;<br/>then own personal_records on their own bookmark (B13);<br/>LAST: tombstones after the stored id (B14): deleted workout → local tree<br/>+ its outbox lines go; deleted PR → goes unless unsent or newer;<br/>then (B15) the user_settings row, no bookmark: saved unless a toggle is unsent<br/>(check + save in one transaction), then onUserSettingsPulled → unitStore.applyPulled;<br/>save page + bookmark in one transaction;<br/>skip rows with unsent local edits;<br/>B18: after personal_records, workout_analyses on pull_cursor:workout_analyses<br/>(saved as they come — never any outbox lines); a workout tombstone also drops its analysis<br/>and (B21) its post + the post's unsent lines;<br/>VERY LAST (B21): flairs select-all by position → replace the device copy<br/>(a failure is recorded + logged, not a failed pull; an empty answer is ignored)"]
     Triggers --> PrePass --> Push --> Pull
     Pull -->|"only if the pull succeeded (B18)"| ReqPass
   end
@@ -382,6 +391,15 @@ flowchart TD
    exercise with a logged set counts, warm-ups included; an exercise added but never done, or a
    custom exercise (no library muscle data), adds nothing. The card is left out when nothing maps.
    It is always read from the phone, never stored, so it is offline and follows edits at once.
+   Since B21 (LOG-7), when Finish opened it the analysis also has a **Next** button (the saved
+   workout's Analysis button opens it without one, so old workouts are never offered again).
+   Next opens the **Post step**: the workout's title, a row of flair chips (the flair list the
+   phone downloaded, first one picked), **Post** and **Skip**. Post saves a post of that workout
+   with the chosen flair and the workout's own visibility — on the phone, queued, so it works
+   with no signal — and opens Home; the post goes up on the next connection, after its workout,
+   and then appears in the lifter's own feed. Skip makes nothing and goes to the Workout tab.
+   Back returns to the analysis. One post per workout: a workout already posted shows "Already
+   posted".
 14. **Read the Home feed and follow lifters (B20, SOC-1, SOC-3, SOC-7 part) — needs a
    connection.** Home lists workout posts from the people the lifter follows, plus their own,
    newest first, twenty at a time (scrolling to the bottom loads more; pulling down refreshes;
@@ -393,8 +411,7 @@ flowchart TD
    exercise reads "Custom exercise"), and the workout's notes. Cards can't be tapped yet. The
    **Find lifters** button opens a search by name or username; each result has **Follow** /
    **Following** (one-way, no approval; it flips at once and flips back with "You can't follow
-   this lifter." if a block stops it). No screen creates posts yet — that is B21's
-   finish-to-post — so today a feed only has posts written straight into the database.
+   this lifter." if a block stops it). Posts are made at the Post step after Finish (item 13).
    Offline, Home says the feed needs a connection (with Retry); everything else keeps working.
 15. Everything else is a placeholder that renders its final layout with inert controls (Start
    from a program, Marketplace, Communities).
@@ -599,8 +616,21 @@ flowchart TD
   `social/names.ts` `personLabels` is the one spelling of a person on a card; Supabase request
   errors throw through the shared `lib/throwIfError.ts` (also used by the sync transport).
   `find-lifters` is declared in the root layout's signed-in guard.
-- **Still unwired:** the Library reads the bundled catalog, not `astra.db`; no screen creates a
-  post yet (B21 finish-to-post), and posts linking to an analysis don't exist; feed cards don't
+- **Finish to post (B21).** The one place the phone writes social data. Device schema V8 adds
+  `flairs` (download-only: `transport.pullFlairs` reads all rows last in `pullChanges`,
+  `db/flairs.ts` `replaceFlairsTx` swaps them in one transaction; a failure lands in
+  `PullResult.flairsError`, which the engine logs without failing the pull) and `posts` (the
+  lifter's own, upload-only). `social/createPost.ts` `createWorkoutPost` writes the row and its
+  outbox line in one transaction (`OutboxTable` widened to include `'posts'`), refusing a
+  missing / foreign / unfinished workout, a second post, or an unknown flair, then
+  `notifyLocalWrite`. `pushPostsPhase` runs after the settings phase: one `transport.pushPost`
+  (upsert on id) per pending post, watermark-acknowledged; `PostAlreadyExistsError` (the
+  transport's mapping of 23505) deletes the local post via `dao.deletePostsTx`. Deleting a workout
+  locally or by tombstone calls `deleteWorkoutPostsTx`. The analysis route reads a `post=1`
+  param (set only by `active-workout.tsx`'s finish) to show Next; `post-workout/[id]` is declared
+  in the root layout's signed-in guard. Nothing on this path touches the network directly.
+- **Still unwired:** the Library reads the bundled catalog, not `astra.db`; posts can't be
+  edited, deleted or re-offered from old workouts; feed cards don't
   open a detail screen; the muscle map appears only on the analysis screen; Settings has no
   Notifications (B47) or Privacy (B26) section.
 

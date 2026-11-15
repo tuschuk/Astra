@@ -17,8 +17,10 @@ describe('migrate', () => {
     );
     expect(tables.map((t) => t.name)).toEqual([
       'exercises',
+      'flairs',
       'outbox',
       'personal_records',
+      'posts',
       'sets',
       'sync_state',
       'user_settings',
@@ -126,11 +128,32 @@ describe('migrate', () => {
 
     await migrate(db);
 
-    expect(SCHEMA_VERSION).toBe(7);
-    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 7 });
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: SCHEMA_VERSION });
     expect(await db.getFirstAsync('select count(*) as n from workouts')).toEqual({ n: 1 });
     expect(await db.getFirstAsync('select count(*) as n from outbox')).toEqual({ n: 1 });
     expect(await db.getFirstAsync('select count(*) as n from workout_analyses')).toEqual({ n: 0 });
+  });
+
+  it('B21: upgrades a version-7 phone to version 8 (flairs, posts), keeping its workouts and outbox', async () => {
+    const db = createNodeSqliteDriver();
+    for (const migration of MIGRATIONS.slice(0, 7)) await db.execAsync(migration);
+    await db.execAsync('pragma user_version = 7');
+    await db.runAsync(
+      "insert into workouts (id, user_id, started_at, ended_at, created_at, updated_at) values ('w', 'u', 't', 't', 't', 't')",
+    );
+    await db.runAsync("insert into outbox (tbl, row_id, queued_at) values ('workouts', 'w', 't')");
+
+    await migrate(db);
+
+    expect(SCHEMA_VERSION).toBe(8);
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 8 });
+    expect(await db.getFirstAsync('select count(*) as n from workouts')).toEqual({ n: 1 });
+    expect(await db.getFirstAsync('select count(*) as n from outbox')).toEqual({ n: 1 });
+    expect(await db.getFirstAsync('select count(*) as n from flairs')).toEqual({ n: 0 });
+    // One post per workout, on the phone as on the server.
+    const insertPost = "insert into posts (id, user_id, flair_id, workout_id, visibility, created_at, updated_at) values (?, 'u', 'wod', 'w', 'public', 't', 't')";
+    await db.runAsync(insertPost, ['p1']);
+    await expect(db.runAsync(insertPost, ['p2'])).rejects.toThrow(/UNIQUE/);
   });
 
   it('upgrades a version-1 phone through every later version (sets.score), keeping the sets already there', async () => {
