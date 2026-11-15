@@ -612,3 +612,27 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     → finishing it ends the run (tab shows the two start buttons). Judge the run card at phone width.
   - Mermaid render of both diagrams was not run by the builder (`mmdc` needed approval) — Gate 2
     should render them once.
+- **B36 teams:**
+  - **Blocks and open teams (product call for Tristen).** Joining an open team and reading an open
+    team's roster ignore blocks (only inviting checks `blocked_either`), so a lifter you blocked
+    can join your open team and see its roster — never your posts, which posts RLS still hides.
+    Adding a block arm to the join policy is one line if wanted.
+  - **Ownership transfer / team deletion / removing members** — B38's family; today a creator's
+    account deletion cascades the team away (members silently lose it).
+  - **Member counts** on directory rows and on invite-only teams you aren't in — needs a definer
+    view à la `follow_counts`; on evidence.
+  - **Big rosters:** the Team feed puts every member id in one `in.(…)` filter (plan risk 3);
+    revisit with a view if a team reaches hundreds of members.
+  - **Stale chips after a failed re-read:** Home keeps its last "Your teams" row and the team page
+    its last state when a background re-read fails (the "keep what's on screen" pattern) — a leave
+    that succeeded but whose reload failed can briefly still show the member view.
+  - **Small screen-local repetition** across Communities / team page / invite screen (`act()`,
+    `back()`, the debounced search effect) — review smell, left as-is.
+  - **Device check (Tristen):** two accounts. A: Communities → Create a team → page shows "Open",
+    owner switch, no Leave. B: Find teams → Join → Home shows the team chip → its page lists both
+    and B's posts in the Team feed; B Leaves. A switches to Invite only; B's page shows the closed
+    line, no Join. A → Invite lifters → invite B; B sees "1 team invite" on Home and the invite on
+    Communities → Join → in. B's profile shows the Teams section (from A's phone too). Judge the
+    chip row and the team page at phone width; airplane mode → the connection message.
+  - Mermaid render of both diagrams was not run by the builder (`mmdc` declined by the permission
+    layer) — Gate 2 should render them once.

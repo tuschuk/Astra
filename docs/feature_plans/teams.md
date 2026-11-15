@@ -313,6 +313,43 @@ transaction as two synthetic users A and B:
    huge team is also a page-size risk: the posts query is capped at 20 regardless, so the cost
    stays the roster read — capped implicitly by team size; revisit only on evidence.
 
+## Deviations during build (B36 builder)
+
+- **Column revoke → table revoke + column grant.** `revoke update (created_by) … from
+  authenticated` is a no-op in Postgres while the table-level UPDATE grant (Supabase's default)
+  stands. The migration instead revokes UPDATE on `teams` from `authenticated, anon` and grants
+  `update (name, join_mode)` back to `authenticated`. Probed live: an owner's
+  `update … set created_by` is refused 42501; the mode switch still works.
+- **Module surface trimmed:** `loadMyTeams(client, me)` became `loadTeamsOf(client, userId)` —
+  one read serves Home, Communities and the profile (RLS decides what someone else's returns);
+  `teamMemberIds` was dropped (the team page already reads the roster and takes ids from it, one
+  request fewer); `revokeInvite` / `declineInvite` are one `removeInvite(client, teamId, userId)`
+  (the same delete; the policy allows both sides).
+- **Invite search rows:** members show a "Member" label instead of a button (G12's "may mark").
+- **Home and ProfileView adopted `usePostListActions`** (G11) — the swap was mechanical, so all
+  three post lists share the one hook; no DEFERRED note needed.
+- **`teamInvitees(client, teamId)`** added (not in the plan's list) — the owner's invite list,
+  feeding the invite screen's Invite / Invited marks.
+- **Review fixes (code-review, both axes):** a repeat join of an invite-only team (double tap
+  after the invite was used up) is refused by RLS *before* the primary-key check, so `joinTeam`
+  re-asks "am I a member?" after a 42501 and reports success instead of the "invite-only"
+  sentence; Find teams rows now also offer Join on an invite-only team that invited you ("Join
+  where joinable"); the invite screen says "This team isn't available" for a missing team instead
+  of "owner only"; `TEAMS_OFFLINE` lives once in `teams.ts`; the create-name message uses
+  `MAX_TEAM_NAME_LENGTH`; error codes are named constants; unused `spoken` prop dropped.
+  Accepted as-is: the small `act()` / `back()` / debounced-search repetition across the three
+  team screens (each a few lines, screen-local state); `.or(name.ilike…)` kept because the fake
+  client runs `or` filters (and the term escaping is shared with Find lifters).
+- **G5 is proven live, not in Jest** — the fake client has no RLS; the probe's step 7 is the proof.
+- **Live probe ran at build time** (all seven steps of the probe list, two rolled-back DO blocks):
+  owner row by trigger, default open, `created_by` rewrite 42501, team forged for another user
+  42501, forged owner join 42501, open join ok, non-owner switch 0 rows, non-owner invite 42501,
+  owner switch 1 row, uninvited join of invite-only 42501, outsider reads 0 roster rows but the
+  team row, member reads full roster, invite across a block 42501, invitee sees and uses the
+  invite (row gone after join), member leaves, cannot remove the owner, owner cannot leave, no
+  team delete; feed shape — member not following B sees B's public post only, member following B
+  also sees the followers-only one, a non-member's post never returned.
+
 ## Grilling decisions (settled)
 
 - **G1 — "Invite rows: who asked for an invites table at all? Scope says 'switchable to

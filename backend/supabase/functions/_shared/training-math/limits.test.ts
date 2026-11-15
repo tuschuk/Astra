@@ -10,9 +10,11 @@ import {
   assertValidProgramWorkoutName,
   assertValidSetFields,
   assertValidSupersetGroup,
+  assertValidTeamName,
   assertValidWorkoutNotes,
   assertValidWorkoutTitle,
   MAX_ENTRY_NOTES_LENGTH,
+  MAX_TEAM_NAME_LENGTH,
   MAX_EXERCISE_NAME_LENGTH,
   MAX_PROGRAM_NAME_LENGTH,
   MAX_PROGRAM_WORKOUT_NAME_LENGTH,
@@ -238,5 +240,18 @@ describe('program limits (B34)', () => {
   it('assertValidProgramPosition refuses negatives, fractions and overflow', () => {
     expect(() => assertValidProgramPosition(0)).not.toThrow();
     for (const bad of [-1, 0.5, MAX_SMALLINT + 1]) expect(() => assertValidProgramPosition(bad)).toThrow(/position/);
+  });
+});
+
+describe('team limits (B36)', () => {
+  it('mirror the server cap of 80', () => {
+    expect(MAX_TEAM_NAME_LENGTH).toBe(80);
+  });
+
+  it('assertValidTeamName accepts 1…80 characters (an emoji counted once) and refuses empty or 81', () => {
+    expect(() => assertValidTeamName('x')).not.toThrow();
+    expect(() => assertValidTeamName('🏋'.repeat(80))).not.toThrow();
+    expect(() => assertValidTeamName('')).toThrow(/empty/);
+    expect(() => assertValidTeamName('x'.repeat(81))).toThrow(RangeError);
   });
 });

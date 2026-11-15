@@ -30,6 +30,8 @@ customs-only CHECK; see "Custom exercises"), `20261115193156_programs.sql` (B34,
 `programs`, `program_weeks`, `program_workouts`, `program_exercises`, author-only RLS through
 `private.owns_program`; see "Programs"), `20261115203159_program_runs.sql` (B35, applied live —
 `program_runs` with owner-only RLS and `workouts.program_workout_id`; see "Program runs"),
+`20261115212541_teams.sql` (B36, applied live — `teams`, `team_members`, `team_invites`, the
+`team_join_mode` / `team_role` enums, the owner-row and invite-consume triggers; see "Teams"),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -84,6 +86,12 @@ erDiagram
   profiles ||--o{ program_runs : "user_id runs (cascade, B35)"
   programs ||--o{ program_runs : "program_id being run (cascade; existence-only)"
   program_workouts |o--o{ workouts : "program_workout_id: session started from (set null, B35)"
+  profiles ||--o{ teams : "created_by creates (cascade, B36)"
+  teams ||--|{ team_members : "has; owner row made by trigger (cascade)"
+  profiles ||--o{ team_members : "user_id belongs (cascade)"
+  teams ||--o{ team_invites : "invites (cascade)"
+  profiles ||--o{ team_invites : "user_id invited (cascade)"
+  team_members ||..o{ posts : "Team feed: posts where user_id in the roster (no FK; posts RLS decides)"
 
   auth_users {
     uuid id PK "managed by Supabase Auth"
@@ -354,7 +362,61 @@ erDiagram
     timestamptz created_at
     timestamptz updated_at "trigger-maintained"
   }
+
+  teams {
+    uuid id PK "server default gen_random_uuid (online-only)"
+    uuid created_by FK "the creator = the owner; not updatable"
+    text name "1 to 80 characters (CHECK)"
+    team_join_mode join_mode "open (default) or invite"
+    timestamptz created_at
+    timestamptz updated_at "trigger-maintained"
+  }
+
+  team_members {
+    uuid team_id PK,FK "PK (team_id, user_id): one row per lifter per team"
+    uuid user_id PK,FK
+    team_role role "owner (trigger only), coach (B37), member"
+    timestamptz joined_at
+  }
+
+  team_invites {
+    uuid team_id PK,FK "PK (team_id, user_id)"
+    uuid user_id PK,FK "the invitee; row deleted when they join"
+    timestamptz created_at
+  }
 ```
+
+## Teams (B36)
+
+Migration `20261115212541_teams.sql`. A **team** is a named group of lifters with a shared feed.
+Teams are **server-only**: nothing about them is mirrored on the phone, ids default on the server,
+and every create / join / switch / invite is a direct API call (the votes precedent).
+
+- **Join modes.** `join_mode` is `open` by default — any signed-in lifter may add themselves. In
+  `invite` mode only a lifter holding a `team_invites` row may join. Inviting works in both modes.
+- **Owner = creator.** Inserting a `teams` row fires `on_team_created` (`private.handle_new_team`,
+  security definer), which writes the creator's `owner` membership row in the same transaction. No
+  client can write an owner or coach row (the join policy allows `role = 'member'` only), and no
+  B36 policy changes roles, so the owner is always the creator. `coach` exists in the enum for B37
+  and grants nothing yet.
+- **Joining uses the invite up.** Inserting a `team_members` row fires `on_team_member_created`
+  (`private.handle_new_team_member`, security definer), which deletes that lifter's invite to that
+  team. So an invite row always means "may join and hasn't yet".
+- **`created_by` can't be rewritten.** UPDATE on `teams` is revoked from `authenticated` and `anon`
+  at table level and granted back to `authenticated` only on `(name, join_mode)` — so even the owner
+  can only rename the team or switch its mode (`created_by` update → 42501, probed).
+- **No team deletion** in B36 (no delete policy); account deletion cascades a creator's teams, their
+  memberships and invites.
+- **The Team feed is not a table.** It is the ordinary posts read (`loadFeedPage`) with the roster's
+  user ids as the authors. Posts RLS is untouched, so a member's followers-only post shows in the
+  Team feed only to members who follow them.
+- **Helpers** (all `private`, security definer, `stable`): `is_team_member(tid)`,
+  `is_team_owner(tid)`, `team_mode(tid)`, `has_team_invite(tid)` — the team rules' one home.
+- Live-probed at B36 (two rolled-back DO blocks, synthetic users): owner row by trigger; default
+  open; forged owner join, forged creator, non-owner invite, uninvited invite-only join, invite
+  across a block and `created_by` rewrite all 42501; a non-owner's mode switch updates 0 rows; an
+  outsider reads the team row but 0 roster rows of an invite-only team; invitee joins and the
+  invite is gone; the owner can't leave or be removed; the feed query widened nothing.
 
 ## Program runs (B35)
 
@@ -766,6 +828,9 @@ does not own, so another user's public workout can never be analysed over its ow
   B26).
 - `pr_kind`: `true1rm`, `repMax`, `e1rm`. These are exactly the app's `PrKind` names in
   `@training-math`. Used by `personal_records.kind`.
+- `team_join_mode` (B36): `open`, `invite`. Used by `teams.join_mode`.
+- `team_role` (B36): `owner`, `coach`, `member`. Used by `team_members.role`; `coach` is unused
+  until B37.
 
 ## What happens automatically (triggers)
 
@@ -795,6 +860,8 @@ does not own, so another user's public workout can never be analysed over its ow
   on `reports` — see Moderation and safety. Muting has no trigger (follows stay).
 - **A re-share is checked and wears its original's flair** (B28): `posts_reshare_shape` on `posts`
   — see Re-shares.
+- **A new team gets its owner row** (B36): `on_team_created` on `teams`; **joining a team deletes
+  your invite to it**: `on_team_member_created` on `team_members` — see Teams.
 
 ## Re-shares (B28)
 
@@ -858,6 +925,9 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `moderators` (B27) | only your own row | nobody — service role / migration only |
 | `programs`, `program_weeks`, `program_workouts`, `program_exercises` (B34) | only the program's author (`private.owns_program`) | only the program's author: insert, update, delete — the app soft-deletes |
 | `program_runs` (B35) | only your own (`user_id = auth.uid()`) | insert, update, delete only your own — the app never deletes, it stamps `ended_at` |
+| `teams` (B36) | any signed-in user (discoverable) | insert only as yourself (`created_by`); update only the owner (`private.is_team_owner`), and only `name` / `join_mode` (column grant); no deletes |
+| `team_members` (B36) | your own rows; the whole roster if you are a member; any open team's roster | insert only yourself, only as `member`, only when the team is open or you hold an invite; no updates; delete only your own row and never the owner's (leave) |
+| `team_invites` (B36) | invites to you, and the owner sees their team's | insert only the owner, never across a block (`private.blocked_either`); delete by the invitee (decline) or the owner (cancel) |
 | `reports` (B27) | moderators only (`private.is_moderator()`) | insert only as yourself, about a post or comment you can currently see (each table's own read rule decides), never your own; no updates or deletes — the founder works the queue via service role |
 
 **Workout visibility rule** (`private.workout_visible`): you always see your own; a block in either
@@ -875,7 +945,8 @@ they can see rows the caller's own RLS would hide.
   a moderator row, reports filed by them and reports about them (B27), owned exercises, workouts,
   their entries and sets, posts, votes, comments, and the user's tombstones (live-probed at B27),
   and (B34) their programs with every week, workout and slot under them, and (B35) their program
-  runs. A hard-deleted program workout sets `workouts.program_workout_id` to null (the session stays).
+  runs, and (B36) their team memberships and invites, and every team they created (with all of
+  that team's memberships and invites — members silently lose the team; no ownership transfer). A hard-deleted program workout sets `workouts.program_workout_id` to null (the session stays).
   Storage objects are not rows of this graph — the `moderate` function sweeps them.
   Deleting a post cascades to its votes and comments (B23); reports about it stay (no FK, B27).
 - Deleting a workout cascades to its `workout_exercises` and their `sets` (and the records citing
