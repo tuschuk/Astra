@@ -453,8 +453,9 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - `mmdc` needs approval for the headless builder; neither diagram was render-checked.
 - B27 moderation-and-safety follow-ups (`moderation-and-safety`):
   - **Live HTTP probe of `moderate`** (Gate 2 / Tristen): the builder's outbound `curl` was declined
-    by the permission layer. Deployed v2 (`verify_jwt` on); still unproven over HTTP: no token →
-    401, a non-moderator → 403, a moderator removing a real photo post (storage object gone),
+    by the permission layer. Gate 2 (Nov 15, 2026) confirmed over HTTP: no token → 401, anon key
+    only → 401 "Sign in first". Still unproven (needs a signed-in token — Tristen): a
+    non-moderator → 403, a moderator removing a real photo post (storage object gone),
     a comment, a throwaway account (both storage folders swept), and their own account → 409.
     The database side of every removal was proven in SQL.
   - **Appeal address** for `docs/CONTENT_POLICY.md` — Tristen to pick one; the policy says plainly
