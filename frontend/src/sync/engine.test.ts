@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals
 import { prepareDatabase } from '@/db/database';
 import { writeLocal } from '@/db/dao';
 import type { AppStateLike } from '@/lib/supabase';
+import { createUnitStore } from '@/settings/unitStore';
 import { FakeServer } from '@/test-utils/fakeTransport';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { USER_ID, WORKOUT } from '@/test-utils/workoutFixtures';
@@ -178,3 +179,36 @@ describe('SyncEngine — deletions from other devices (B14)', () => {
     expect(await outboxSize(db)).toBe(0);
   });
 });
+
+describe('B15: settings through the engine', () => {
+  it('hands a downloaded settings row to onUserSettingsPulled', async () => {
+    const db = await prepareDatabase(createNodeSqliteDriver());
+    const server = new FakeServer();
+    server.seedUserSettings(USER_ID, 'kg');
+    const onUserSettingsPulled = jest.fn();
+    const engine = new SyncEngine({ db, transport: server, userId: USER_ID, log: quiet, onUserSettingsPulled });
+
+    await engine.syncNow();
+
+    expect(onUserSettingsPulled).toHaveBeenCalledWith(expect.objectContaining({ user_id: USER_ID, unit: 'kg' }));
+  });
+
+  it('a toggle wakes the engine like any local change, and the push carries it', async () => {
+    const { db, server, engine } = await setup();
+    server.seedUserSettings(USER_ID, 'lb');
+    const stop = engine.start();
+    await createUnitStore().setUnit(db, USER_ID, 'kg');
+    await waitForCondition(() => server.userSettings.get(USER_ID)?.unit === 'kg');
+    stop();
+    expect(await outboxSize(db)).toBe(0);
+  });
+});
+
+/** Waits (up to two seconds) until `check` is true. */
+async function waitForCondition(check: () => boolean): Promise<void> {
+  const deadline = Date.now() + 2000;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error('condition never became true');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}

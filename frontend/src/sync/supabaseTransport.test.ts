@@ -14,14 +14,15 @@ type Call = [string, ...unknown[]];
  * A stand-in Supabase client. Every builder call is recorded; awaiting the
  * builder returns the next queued response.
  */
-function recordingClient(responses: { data?: unknown[]; error?: { message: string } | null }[] = []) {
+function recordingClient(responses: { data?: unknown; error?: { message: string } | null }[] = []) {
   const requests: Call[][] = [];
   const client = {
     from(table: string) {
       const calls: Call[] = [['from', table]];
       requests.push(calls);
       const builder: Record<string, unknown> = {};
-      for (const method of ['select', 'eq', 'gt', 'or', 'order', 'limit', 'in', 'range', 'upsert', 'delete']) {
+      const methods = ['select', 'eq', 'gt', 'or', 'order', 'limit', 'in', 'range', 'upsert', 'delete', 'update', 'maybeSingle'];
+      for (const method of methods) {
         builder[method] = (...args: unknown[]) => {
           calls.push([method, ...args]);
           return builder;
@@ -29,7 +30,9 @@ function recordingClient(responses: { data?: unknown[]; error?: { message: strin
       }
       builder.then = (resolve: (v: unknown) => unknown) => {
         const next = responses.shift() ?? { data: [], error: null };
-        return Promise.resolve({ data: next.data ?? [], error: next.error ?? null }).then(resolve);
+        // `data: null` is passed through (a maybeSingle() that found nothing); absent means [].
+        const data = 'data' in next ? next.data : [];
+        return Promise.resolve({ data, error: next.error ?? null }).then(resolve);
       };
       return builder;
     },
@@ -79,6 +82,44 @@ describe('createSupabaseTransport', () => {
       ['order', 'id', { ascending: true }],
       ['limit', 500],
     ]);
+  });
+
+  it('B15: reads the user’s one settings row, and null when there is none', async () => {
+    const row = { user_id: 'u1', unit: 'kg', updated_at: '2026-11-15T00:00:00+00:00' };
+    const { client, requests } = recordingClient([{ data: row }, { data: null }]);
+    const transport = createSupabaseTransport(client);
+    expect(await transport.pullUserSettings('u1')).toEqual(row);
+    expect(await transport.pullUserSettings('u1')).toBeNull();
+    expect(requests[0]).toEqual([
+      ['from', 'user_settings'],
+      ['select', 'user_id,unit,updated_at'],
+      ['eq', 'user_id', 'u1'],
+      ['maybeSingle'],
+    ]);
+  });
+
+  it('B15: throws when the settings download fails', async () => {
+    const { client } = recordingClient([{ data: null, error: { message: 'timeout' } }]);
+    await expect(createSupabaseTransport(client).pullUserSettings('u1')).rejects.toThrow(
+      'Download of settings failed: timeout',
+    );
+  });
+
+  it('B15: saves the unit with an update by user id — never an upsert, never updated_at', async () => {
+    const { client, requests } = recordingClient();
+    await createSupabaseTransport(client).pushUserSettings('u1', 'kg');
+    expect(requests[0]).toEqual([
+      ['from', 'user_settings'],
+      ['update', { unit: 'kg' }],
+      ['eq', 'user_id', 'u1'],
+    ]);
+  });
+
+  it('B15: throws when the server refuses the settings update', async () => {
+    const { client } = recordingClient([{ error: { message: 'permission denied' } }]);
+    await expect(createSupabaseTransport(client).pushUserSettings('u1', 'lb')).rejects.toThrow(
+      'Upload of settings failed: permission denied',
+    );
   });
 
   it('uploads as an upsert on id', async () => {

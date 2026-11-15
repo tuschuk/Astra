@@ -27,7 +27,7 @@ import type { SqlDriver } from '@/db/driver';
 import { onLocalWrite } from '@/db/dao';
 import type { AppStateLike } from '@/lib/supabase';
 
-import { pullChanges, pullTombstonePass, type PullResult } from './pull';
+import { pullChanges, pullTombstonePass, type PullOptions, type PullResult } from './pull';
 import { pushOutbox, type PushResult } from './push';
 import type { SyncTransport } from './transport';
 
@@ -67,6 +67,11 @@ export interface SyncEngineOptions {
   debounceMs?: number;
   /** Where failures are reported; defaults to a console warning. */
   log?: (message: string, error: unknown) => void;
+  /**
+   * Told when a download saves the user's settings row (B15) — the app passes the unit store's
+   * updater, so a kg/lb change made on another device reaches the screens. Optional.
+   */
+  onUserSettingsPulled?: PullOptions['onUserSettingsPulled'];
 }
 
 /**
@@ -75,7 +80,8 @@ export interface SyncEngineOptions {
  * automatic triggers and the returned function to stop them.
  */
 export class SyncEngine {
-  private readonly options: Required<Omit<SyncEngineOptions, 'log'>> & Pick<SyncEngineOptions, 'log'>;
+  private readonly options: Required<Omit<SyncEngineOptions, 'log' | 'onUserSettingsPulled'>> &
+    Pick<SyncEngineOptions, 'log' | 'onUserSettingsPulled'>;
   private inFlight: Promise<SyncRunResult> | null = null;
   private runAgain = false;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -170,7 +176,9 @@ export class SyncEngine {
       this.report('Sync: upload failed; changes stay queued for the next attempt', error);
     }
     try {
-      result.pull = await pullChanges(db, transport, userId);
+      result.pull = await pullChanges(db, transport, userId, {
+        onUserSettingsPulled: this.options.onUserSettingsPulled,
+      });
     } catch (error) {
       result.pullError = error;
       this.report('Sync: download failed; it will resume from the last saved page', error);

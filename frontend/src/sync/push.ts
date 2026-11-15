@@ -36,9 +36,14 @@
  * no longer exists on the device (it was deleted after being edited) uploads
  * nothing; those lines are simply cleared, and its delete line has already
  * told the server.
+ *
+ * The lifter's settings row (B15) goes last, in a phase of its own
+ * (`pushUserSettingsPhase`): it is keyed by user rather than by id and may
+ * only be updated on the server, so it doesn't fit the batches above.
  */
 import type { SqlDriver } from '@/db/driver';
 import { getRowsByIds, rootWorkoutIds, SYNC_ORDER, type RowByTable, type SyncedTable } from '@/db/dao';
+import { readUserSettingsRow } from '@/db/userSettings';
 
 import { acknowledge, pendingRows } from './outbox';
 import type { PushRow, SyncTransport } from './transport';
@@ -80,6 +85,8 @@ export interface PushResult {
   pushed: Record<SyncedTable, number>;
   /** Rows deleted on the server per table (B14) — explicit deletes only, not cascades. */
   deleted: Record<SyncedTable, number>;
+  /** Settings rows sent (B15): 1 when the kg/lb choice changed on this phone, else 0. */
+  userSettings: number;
 }
 
 /** A per-table counter starting at zero. */
@@ -136,5 +143,30 @@ export async function pushOutbox(db: SqlDriver, transport: SyncTransport): Promi
     }
   }
 
-  return { pushed, deleted };
+  const userSettings = await pushUserSettingsPhase(db, transport);
+
+  return { pushed, deleted, userSettings };
+}
+
+/**
+ * The settings phase (B15), after every training table: sends the lifter's kg/lb choice if it
+ * changed on this phone since the last upload. Same watermark rule as everything else — the mark
+ * is read before the row, and only lines up to it are cleared, so a toggle flipped while this
+ * upload is in flight is sent next time rather than lost.
+ *
+ * The outbox line's row id is the user's id (the settings table's key). A line whose local row
+ * is gone uploads nothing and is cleared. Returns how many settings rows were sent (0 or 1 in
+ * practice — one row per user).
+ */
+async function pushUserSettingsPhase(db: SqlDriver, transport: SyncTransport): Promise<number> {
+  let sent = 0;
+  for (const pending of await pendingRows(db, 'user_settings')) {
+    const row = await readUserSettingsRow(db, pending.rowId);
+    if (row) {
+      await transport.pushUserSettings(row.user_id, row.unit);
+      sent += 1;
+    }
+    await acknowledge(db, 'user_settings', [pending]);
+  }
+  return sent;
 }

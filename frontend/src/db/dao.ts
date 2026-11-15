@@ -39,7 +39,7 @@
  */
 import type { PrKind } from '@training-math';
 
-import { enqueueTx } from '@/sync/outbox';
+import { enqueueTx, type OutboxTable } from '@/sync/outbox';
 
 import { placeholders, type SqlDriver, type SqlExecutor, type SqlValue } from './driver';
 
@@ -283,8 +283,11 @@ export async function getRowsByIds<T extends SyncedTable>(
   return raw.map((r) => fromSqlRow(tbl, r));
 }
 
-/** Something that wants to hear when a local change has been saved. */
-export type LocalWriteListener = (tbl: SyncedTable) => void;
+/**
+ * Something that wants to hear when a local change has been saved — to a training table, or
+ * (B15) to the lifter's settings row.
+ */
+export type LocalWriteListener = (tbl: OutboxTable) => void;
 
 const listeners = new Map<SqlDriver, Set<LocalWriteListener>>();
 
@@ -411,7 +414,7 @@ export async function deleteLocalRowsTx(
  * these tables. Call it only after the transaction that saved the change has
  * committed.
  */
-export function notifyLocalWrite(db: SqlDriver, tables: readonly SyncedTable[]): void {
+export function notifyLocalWrite(db: SqlDriver, tables: readonly OutboxTable[]): void {
   for (const tbl of tables) listeners.get(db)?.forEach((listener) => listener(tbl));
 }
 

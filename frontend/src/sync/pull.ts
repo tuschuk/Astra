@@ -1,8 +1,9 @@
 /**
  * Download: brings the server's changes to the user's own data onto the
  * device — their workouts (with every entry and set inside them), the
- * exercises they can see (the shared library plus their customs), and their
- * personal records (B13).
+ * exercises they can see (the shared library plus their customs), their
+ * personal records (B13), and their settings row (B15, read whole each time —
+ * see `pullUserSettingsPass`).
  *
  * How it finds what changed: each table keeps a bookmark in `sync_state` —
  * the (updated_at, id) of the last row downloaded. A pull asks for rows after
@@ -38,6 +39,7 @@
  */
 import { placeholders, type SqlDriver, type SqlExecutor } from '@/db/driver';
 import { upsertRowsTx, type RowByTable, type SyncedTable } from '@/db/dao';
+import { writeUserSettingsRowTx, type UserSettingsRow } from '@/db/userSettings';
 
 import { dropLinesTx, rowsWithPendingChanges } from './outbox';
 import type { PullCursor, SyncTransport, TombstoneRow } from './transport';
@@ -134,6 +136,8 @@ export interface PullResult {
   removed: number;
   /** Tombstones that deleted something on the device (B14). */
   tombstones: number;
+  /** 1 if the server's settings row was saved on the phone (B15), else 0. */
+  userSettings: number;
 }
 
 /**
@@ -396,12 +400,54 @@ export async function pullTombstonePass(
 }
 
 /**
+ * Downloads the user's settings row (B15) and saves it on the phone — unless the phone has an
+ * unsent settings change of its own, which wins until it is uploaded (the same rule as every
+ * other row). The check and the save share one transaction, so a toggle can't slip in between.
+ *
+ * No bookmark: there is exactly one row per user, so it is simply read every time.
+ *
+ * Returns the row that was saved, or null if nothing was (no row on the server, or a local
+ * change pending), so the caller can tell the screens.
+ */
+async function pullUserSettingsPass(
+  db: SqlDriver,
+  transport: SyncTransport,
+  userId: string,
+): Promise<UserSettingsRow | null> {
+  const row = await transport.pullUserSettings(userId);
+  if (!row) return null;
+  let saved = false;
+  await db.withTransactionAsync(async (tx) => {
+    if ((await rowsWithPendingChanges(tx, 'user_settings', [row.user_id])).size > 0) return;
+    await writeUserSettingsRowTx(tx, row);
+    saved = true;
+  });
+  return saved ? row : null;
+}
+
+/** Optional extras for `pullChanges`. */
+export interface PullOptions {
+  /**
+   * Told about the settings row each time a download saves it (B15), after it is safely on the
+   * phone. The app passes the unit store's updater here so a unit changed on another device
+   * shows straight away — without the sync code knowing anything about screens.
+   */
+  onUserSettingsPulled?: (row: UserSettingsRow) => void;
+}
+
+/**
  * Downloads everything new for user `userId`: exercises first (workouts point
  * at them), then workouts with their contents, then the user's personal
- * records (they cite sets). Throws the transport's error on failure; pages
- * already saved stay saved and their bookmarks stay moved.
+ * records (they cite sets), then deletions, then their settings row. Throws
+ * the transport's error on failure; pages already saved stay saved and their
+ * bookmarks stay moved.
  */
-export async function pullChanges(db: SqlDriver, transport: SyncTransport, userId: string): Promise<PullResult> {
+export async function pullChanges(
+  db: SqlDriver,
+  transport: SyncTransport,
+  userId: string,
+  options: PullOptions = {},
+): Promise<PullResult> {
   const result: PullResult = {
     exercises: 0,
     workouts: 0,
@@ -410,6 +456,7 @@ export async function pullChanges(db: SqlDriver, transport: SyncTransport, userI
     personal_records: 0,
     removed: 0,
     tombstones: 0,
+    userSettings: 0,
   };
   await pullStandalone(db, 'exercises', (after) => transport.pullExercises(after, PULL_PAGE_SIZE), result);
   await pullWorkoutTrees(db, transport, userId, result);
@@ -420,5 +467,10 @@ export async function pullChanges(db: SqlDriver, transport: SyncTransport, userI
     result,
   );
   await pullTombstonePass(db, transport, userId, result);
+  const settings = await pullUserSettingsPass(db, transport, userId);
+  if (settings) {
+    result.userSettings = 1;
+    options.onUserSettingsPulled?.(settings);
+  }
   return result;
 }

@@ -35,7 +35,16 @@ flowchart TD
   Tabs --> Workout["Workout tab (on focus: re-read astra.db)<br/>no draft: Start empty workout (program start disabled, B35)<br/>draft on phone: Resume workout / Discard (asks first)<br/>Tool Kit tiles (placeholders, TK-1..5)<br/>Past workouts: newest 100 finished, date + duration + counts"]
   Tabs --> Communities["Communities<br/>Teams and Gyms<br/>today: two sections, each an empty state"]
   Tabs --> Library["Library<br/>browse every launch exercise as a card"]
-  Tabs -->|profile button| You["You<br/>signed-in email + Sign out button<br/>profile skeleton: avatar ring, follow counts, PRs label (empty values)"]
+  Tabs -->|profile button| You["You<br/>profile skeleton: avatar ring, follow counts, PRs label (empty values)<br/>gear button → Settings"]
+  You -->|"gear: router.push('/settings')"| SettingsScr["Settings (app/settings.tsx, B15, YOU-4 part)<br/>Units: kg | lb segmented toggle (radio roles for screen readers)<br/>Account: signed-in email + Sign out<br/>Back (or /you); no Notifications / Privacy until B47 / B26"]
+  SettingsScr -->|"tap kg / lb: unitStore.setUnit"| UnitStore
+  subgraph UnitsMod["Units (src/settings, B15)"]
+    UnitStore["unitStore.ts: the signed-in lifter's unit in memory (default lb)<br/>hydrate (read astra.db row at sign-in) · setUnit (ONE transaction:<br/>user_settings row + outbox line row_id = user id, then notify) ·<br/>applyPulled (re-read the row; ignored for another user) · reset (sign-out)"]
+    DispUnit["displayUnit.ts useDisplayUnit():<br/>useSyncExternalStore over unitStore — every weight screen re-draws on change"]
+    UnitStore --> DispUnit
+  end
+  UnitStore -->|"user_settings row + outbox line"| LocalDB
+  UnitStore -.->|"notifies"| Triggers
 
   Library -->|type a name| Search["Live name search<br/>alias-aware, e.g. Squats finds Back Squat"]
   Library -->|tap a chip| Filter["Body-region filter chips<br/>four regions + result count + no-results state"]
@@ -51,7 +60,7 @@ flowchart TD
 
   subgraph Device["On the device"]
     Store[("expo-sqlite key-value store<br/>the saved Supabase session<br/>(survives killing the app)")]
-    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records (schema V5)<br/>+ outbox (unsent changes; op = upsert or delete, B14) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
+    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records, user_settings (B15: user_id, unit) (schema V6)<br/>+ outbox (unsent changes; op = upsert or delete, B14) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
     LocalSeed["First-launch seed (library/seedLocal.ts)<br/>insert-if-missing all 151 exercises,<br/>id = uuidv5(namespace, slug); never queued"]
     WriteLocal["writeLocal / writeLocalRowsTx / writeLocalTree (db/dao.ts): the queued write paths<br/>rows + outbox lines + re-stamp & queue parent workout,<br/>all-or-nothing (writeLocalTree: a whole workout in one transaction)<br/>deleteLocalRowsTx (B14): delete rows + 'delete' outbox line + touch the root"]
     Drafts["writeDraftRows / deleteDraftRowsTx (db/dao.ts): the in-progress path<br/>saved at once, NEVER queued; refused for a finished workout"]
@@ -61,10 +70,10 @@ flowchart TD
   end
 
   subgraph LoggerUI["Logger screens (signed-in stack, above the tab bar)"]
-    Logger["Active workout (app/active-workout.tsx)<br/>EntryCard per exercise: sets, reps + weight in lb (displayUnit.ts) + optional RPE,<br/>Warm-up chip (next sets are warm-ups), W toggle per logged set (B10),<br/>Bodyweight exercise: weight box = '+ lb' added load, reps alone logs,<br/>Timed chip (B11): reveals Time (s or m:ss) + Score boxes, closing clears them,<br/>Log set (reps, weight, time or score), Drop = next drop of the latest set (B11),<br/>Repeat last set (ONE tap, NFR-2), remove set (a drop set's top row removes all of it),<br/>link toggle (B11): superset with the card above, 'Superset' badge,<br/>drops shown as ↳ rows under one 'Set n' (sets numbered as the lifter counts),<br/>move up / down, remove exercise,<br/>last-time panel (LOG-5): 'Last time' line (work sets only) + 'PRs: 1RM … · e1RM … · 5RM …'<br/>+ History link (B13; PRs read once on mount, they only change at finish)<br/>one store call per card at a time<br/>notes (B12): header Title + Notes boxes; 'Add note' under each exercise;<br/>note icon on every logged set / drop opens its box (one set box per card);<br/>boxes autosave (useAutosaveText) ~750 ms after typing + on close;<br/>Finish flushes every box first (AutosaveRegistry)<br/>empty slot on open: resume from astra.db or go back"]
+    Logger["Active workout (app/active-workout.tsx)<br/>EntryCard per exercise: sets, reps + weight in the lifter's kg / lb (useDisplayUnit) + optional RPE,<br/>Warm-up chip (next sets are warm-ups), W toggle per logged set (B10),<br/>Bodyweight exercise: weight box = '+ lb' added load, reps alone logs,<br/>Timed chip (B11): reveals Time (s or m:ss) + Score boxes, closing clears them,<br/>Log set (reps, weight, time or score), Drop = next drop of the latest set (B11),<br/>Repeat last set (ONE tap, NFR-2), remove set (a drop set's top row removes all of it),<br/>link toggle (B11): superset with the card above, 'Superset' badge,<br/>drops shown as ↳ rows under one 'Set n' (sets numbered as the lifter counts),<br/>move up / down, remove exercise,<br/>last-time panel (LOG-5): 'Last time' line (work sets only) + 'PRs: 1RM … · e1RM … · 5RM …'<br/>+ History link (B13; PRs read once on mount, they only change at finish)<br/>one store call per card at a time<br/>notes (B12): header Title + Notes boxes; 'Add note' under each exercise;<br/>note icon on every logged set / drop opens its box (one set box per card);<br/>boxes autosave (useAutosaveText) ~750 ms after typing + on close;<br/>Finish flushes every box first (AutosaveRegistry)<br/>empty slot on open: resume from astra.db or go back"]
     Picker["Add exercise panel (ExercisePicker, a Modal)<br/>alias-aware searchExercises over the catalog;<br/>slug → libraryExerciseId → store.addExercise"]
     EmptyQ{"Finish with zero sets?"}
-    Saved["Saved workout (app/workout/[id].tsx); re-read on every focus (B14)<br/>date, duration, every exercise + set in lb<br/>superset = ONE card labelled 'Superset' (B11);<br/>drop set = ONE row 'a → b → c'; time and score shown (B11)<br/>title (or date); workout, exercise and set notes as text (B12; drop notes '↳ …')<br/>PR badge under each set that holds a record now: 'PR · 1RM · e1RM' (B13)<br/>Edit button; Delete button (asks first, B14)<br/>(another user's / unfinished id: 'not on this phone')"]
+    Saved["Saved workout (app/workout/[id].tsx); re-read on every focus (B14)<br/>date, duration, every exercise + set in the lifter's unit<br/>superset = ONE card labelled 'Superset' (B11);<br/>drop set = ONE row 'a → b → c'; time and score shown (B11)<br/>title (or date); workout, exercise and set notes as text (B12; drop notes '↳ …')<br/>PR badge under each set that holds a record now: 'PR · 1RM · e1RM' (B13)<br/>Edit button; Delete button (asks first, B14)<br/>(another user's / unfinished id: 'not on this phone')"]
     EditWO_UI["Edit workout (app/edit-workout/[id].tsx, B14, LOG-9)<br/>the logger's surface over a FINISHED workout: Title + Notes boxes,<br/>EntryCard per exercise (log / repeat / remove sets, W, notes, links, move, remove),<br/>Add exercise; each change saved + queued at once, PRs recomputed in the same save<br/>Done = flush note boxes, back; Delete workout (asks first)<br/>(another user's / unfinished id: 'can't be edited on this phone')"]
     Saved -->|"Edit: router.push"| EditWO_UI
     EditWO_UI -->|"Done: router.back"| Saved
@@ -135,12 +144,17 @@ flowchart TD
   subgraph SyncEng["Sync engine (src/sync), mounted by useSync in the root layout"]
     Triggers{{"Triggers, debounced 750 ms, one run at a time:<br/>start with a session, app back to foreground,<br/>network reconnects, a local write"}}
     PrePass["Tombstones first (B14): apply other devices' deletions<br/>BEFORE uploading, so an unsent edit can't re-create<br/>a workout deleted elsewhere"]
-    Push["Push: DELETE phase first (B14): outbox 'delete' lines,<br/>children's tables first, batches of 100 ids;<br/>then outbox → server upserts, parents first<br/>(… sets, then personal_records), batches of 500 on id (no updated_at),<br/>then workouts again to re-touch roots;<br/>clear lines up to each row's watermark PER OP; stop on failure"]
-    Pull["Pull: exercises, then own workouts by (updated_at, id)<br/>bookmark minus 5 s; fetch their entries and sets;<br/>reconcile (B14): drop local entries / sets the server's copy lacks<br/>(+ PR rows citing them), unless they have unsent lines;<br/>then own personal_records on their own bookmark (B13);<br/>LAST: tombstones after the stored id (B14): deleted workout → local tree<br/>+ its outbox lines go; deleted PR → goes unless unsent or newer;<br/>save page + bookmark in one transaction;<br/>skip rows with unsent local edits"]
+    Push["Push: DELETE phase first (B14): outbox 'delete' lines,<br/>children's tables first, batches of 100 ids;<br/>then outbox → server upserts, parents first<br/>(… sets, then personal_records), batches of 500 on id (no updated_at),<br/>then workouts again to re-touch roots;<br/>clear lines up to each row's watermark PER OP; stop on failure;<br/>LAST (B15): settings phase — pending user_settings line → UPDATE unit by user_id<br/>(never insert; zero-row update = done)"]
+    Pull["Pull: exercises, then own workouts by (updated_at, id)<br/>bookmark minus 5 s; fetch their entries and sets;<br/>reconcile (B14): drop local entries / sets the server's copy lacks<br/>(+ PR rows citing them), unless they have unsent lines;<br/>then own personal_records on their own bookmark (B13);<br/>LAST: tombstones after the stored id (B14): deleted workout → local tree<br/>+ its outbox lines go; deleted PR → goes unless unsent or newer;<br/>then (B15) the user_settings row, no bookmark: saved unless a toggle is unsent<br/>(check + save in one transaction), then onUserSettingsPulled → unitStore.applyPulled;<br/>save page + bookmark in one transaction;<br/>skip rows with unsent local edits"]
     Triggers --> PrePass --> Push --> Pull
   end
   Catalog --> LocalSeed
-  Root -->|"useSync: opens astra.db (seeds) always;<br/>engine only while signed in"| LocalDB
+  Root -->|"useSync: opens astra.db (seeds) always;<br/>while signed in: unitStore.hydrate, then the engine;<br/>signed out: unitStore.reset"| LocalDB
+  Root -->|"hydrate / reset; applyPulled passed to the engine"| UnitStore
+  DispUnit -->|"unit"| Logger
+  DispUnit -->|"unit"| Saved
+  DispUnit -->|"unit"| EditWO_UI
+  DispUnit -->|"unit"| History
   Root --> Triggers
   LocalDB -->|outbox rows| Push
   Pull -->|saved rows| LocalDB
@@ -160,9 +174,9 @@ flowchart TD
   AuthAPI -->|"auth change event<br/>(signed in / out / refreshed)"| Guard{{"Route guard (Stack.Protected)<br/>session? tabs : sign in"}}
   Guard --> Tabs
   Guard --> SignIn
-  You -->|"Sign out (local scope:<br/>clears this device first, works offline)"| Store
+  SettingsScr -->|"Sign out (local scope:<br/>clears this device first, works offline)"| Store
 
-  Push -->|"supabase-js delete by id, then upsert, as the signed-in user (RLS)"| DB
+  Push -->|"supabase-js delete by id, then upsert, as the signed-in user (RLS);<br/>user_settings: update by user_id"| DB
   DB -->|"supabase-js select (RLS-scoped), incl. sync_tombstones"| Pull
   DB -->|"sync_tombstones after id"| PrePass
   PrePass -->|"deletes local rows + their lines"| LocalDB
@@ -172,10 +186,10 @@ flowchart TD
     MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification<br/>+ recordBooks fold (which set holds each book), beatsRecord, compareRecordBooks (B13),<br/>session volume (volume.ts: warm-ups and weightless sets add 0),<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store and the logger's<br/>display (displayWeight); no server function yet"]
   end
   MathMod -->|"lbToKg, assertValidSetFields (incl. score + set-note length),<br/>assertValidSupersetGroup, title / workout-note / entry-note caps (B12),<br/>round weight / RPE for storage"| MutWO
-  MathMod -->|"displayWeight (format.ts)"| Logger
+  MathMod -->|"displayWeight (format.ts) in the unit from useDisplayUnit"| Logger
   MathMod -->|"recordBooks, beatsRecord, roundToIncrement (B13)"| FinishWO
   MathMod -->|"recordBooks, roundToIncrement (B14)"| Recompute
-  MathMod -.->|"not wired yet: Tool Kit calculators (B16),<br/>session volume display, unit setting (B15)"| Workout
+  MathMod -.->|"not wired yet: Tool Kit calculators (B16),<br/>session volume display"| Workout
   MathMod -.->|"not wired yet: post-workout analysis<br/>server function (B18)"| Backend
 
   class Home,Market,Communities scaffold
@@ -192,7 +206,7 @@ flowchart TD
    each get a plain-language message.
 3. **Stay signed in.** Killing and reopening the app restores the saved session from the device
    with no network, straight into the tabs.
-4. **Sign out** from the You screen. The guard returns the user to sign-in.
+4. **Sign out** from Settings (You → gear button). The guard returns the user to sign-in.
 5. Move between the five tabs and the You screen. On Library, scroll, search and filter every
    launch exercise from the bundled, read-only catalog.
 6. **Log a workout (B09), with no signal needed.** On the Workout tab, tap **Start empty
@@ -245,7 +259,15 @@ flowchart TD
    the change. **Delete** (on either screen, after "Delete this workout?") removes it from the
    phone now and from the account at the next sync, with the same PR recompute. The lifter's
    other phones drop the deleted workout, removed sets and demoted records at their next sync.
-10. Everything else is a placeholder that renders its final layout with inert controls (Start
+10. **Choose kg or lb (B15, LOG-6).** You → gear button → **Settings**. The **Units** toggle
+   (kg | lb, pounds by default) switches every weight on every open screen at once — the logger's
+   sets, last-time and PR lines and entry boxes ("Weight in kg"), saved workouts, the edit screen
+   and exercise history. Logged weights are never changed: they are stored in kg and only shown
+   in the chosen unit, so flipping back and forth shows exactly the same numbers. The choice is
+   saved on the phone straight away (works offline, survives a killed app) and reaches the
+   account at the next sync; a choice made on another phone arrives at this one's next sync.
+   **Account** shows the signed-in email and **Sign out**.
+11. Everything else is a placeholder that renders its final layout with inert controls (Start
    from a program, the Tool Kit tiles, Home, Marketplace, Communities).
 
 ## Data path today
@@ -271,8 +293,8 @@ flowchart TD
   does the same if opened with an empty slot. Every write goes through the store; every read is
   `workout/history.ts` (`listPastWorkouts`, `readWorkout`, `lastSessionSets`, `exerciseInfo`),
   each filtered by the signed-in `user_id`. Weights are shown and typed in the unit from
-  `settings/displayUnit.ts` — pinned to `lb` (the `user_settings.unit` default) until B15 wires
-  the real setting; text formatting and box parsing are `workout/format.ts`, conversion is
+  `settings/displayUnit.ts` (`useDisplayUnit`, wired to the synced setting by B15 — see below);
+  text formatting and box parsing are `workout/format.ts`, conversion is
   `@training-math`. The two new routes are declared in the root layout's signed-in guard.
   Toggling a logged set's warm-up flag calls the store's `updateSet` with
   `setInputFromRow(set)` (`workout/activeWorkout.ts`) plus the flipped flag — the one write path
@@ -324,6 +346,19 @@ flowchart TD
   upserts; pull reconciles each downloaded workout's tree and finally applies `sync_tombstones`
   (`transport.pullTombstones`, bookmark `pull_cursor:tombstones`), and the engine also applies
   tombstones before each push.
+  **B15:** the kg/lb setting. Device schema V6 mirrors `user_settings (user_id, unit,
+  updated_at)`; its SQL lives in `db/userSettings.ts` (shared by settings and sync, so sync never
+  imports `settings/`). `settings/unitStore.ts` holds the unit in memory: `useSync` calls
+  `hydrate(db, userId)` before starting the engine (no row → `lb`), `reset()` on sign-out, and
+  passes `applyPulled` to the engine as `onUserSettingsPulled`. The Settings toggle calls
+  `setUnit`, which writes the row and an outbox line (`tbl = 'user_settings'`, `row_id` = user
+  id; the outbox's table type widened to `OutboxTable`) in one transaction, then re-draws every
+  `useDisplayUnit` subscriber and wakes the engine. Push ends with a settings phase
+  (`transport.pushUserSettings`: an update by `user_id`, never insert); pull ends with a one-row
+  pass (`transport.pullUserSettings`), saved unless a toggle is unsent, then handed to the store,
+  which re-reads the row. No weight math moved: `displayWeight` / `lbToKg` in `@training-math`
+  remain the only conversion. The You tab lost its email line and Sign out (now in Settings) and
+  gained the gear button; `settings` is declared in the root layout's signed-in guard.
 - **On-device store and sync (B07).**
   `src/sync/useSync.ts` runs in the root layout. On launch it opens `astra.db`
   (`src/db/database.ts`: foreign keys on, WAL, migrations by `PRAGMA user_version`). It then seeds
@@ -359,8 +394,9 @@ flowchart TD
     local edit is never overwritten.
   - **Failures:** they are logged, and whatever didn't upload stays queued. There is no retry
     timer.
-- **Still unwired:** the Library reads the bundled catalog, not `astra.db`; the unit toggle
-  (B15) and post-workout analysis (B18/B21) don't exist yet; nothing feeds the social feed.
+- **Still unwired:** the Library reads the bundled catalog, not `astra.db`; post-workout
+  analysis (B18/B21) doesn't exist yet; Settings has no Notifications (B47) or Privacy (B26)
+  section; nothing feeds the social feed.
 
 ## Shared pieces every screen uses
 
@@ -390,6 +426,6 @@ flowchart TD
   `renderWithAuth`, a real-SQLite driver over Node's `node:sqlite` (`nodeSqliteDriver.ts`), an
   in-memory fake server for sync (`fakeTransport.ts`: upsert-by-id, server-stamped `updated_at`,
   foreign-key refusals, the PR keep-best rule, cascading deletes that write tombstones (B14),
-  offline and lost-reply modes), workout fixtures, and the logger kit
+  an update-only `user_settings` row (B15), offline and lost-reply modes), workout fixtures, and the logger kit
   (`loggerTestKit.tsx`: prepared database, test clock, signed-in render). The app never
   imports them.

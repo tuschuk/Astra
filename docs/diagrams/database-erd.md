@@ -301,14 +301,17 @@ the rows as they are, with no id remapping.
 ## The device mirror (not part of this database)
 
 This diagram draws the server. The phone keeps its own SQLite copy (`frontend/src/db/schema.ts`)
-of `exercises`, `workouts`, `workout_exercises`, `sets` and `personal_records` (schema version 5
-since B14: version 2 (B11) added `sets.score`, version 3 added `sets.notes`, version 4 added
-`personal_records`, version 5 added `outbox.op` (`upsert` or `delete`); versions are append-only,
+of `exercises`, `workouts`, `workout_exercises`, `sets`, `personal_records` and — since B15 —
+`user_settings` (schema version 6: version 2 (B11) added `sets.score`, version 3 added
+`sets.notes`, version 4 added `personal_records`, version 5 added `outbox.op` (`upsert` or
+`delete`), version 6 added `user_settings (user_id, unit, updated_at)` — only the columns the
+phone syncs; `default_workout_visibility` is not mirrored yet; versions are append-only,
 upgraded on launch). There is no device copy of `sync_tombstones` — tombstones are applied as
 they download, and `sync_state` keeps the last applied id (`pull_cursor:tombstones`). It has the same column names, but
 uses text for uuids and timestamps and 0/1 for booleans, and it does not repeat the server's
 CHECK rules as SQL (instead the app checks every set against them before saving, through the
-shared `@training-math` `limits.ts`). It also has two tables of its own: `outbox`, the local changes waiting to upload,
+shared `@training-math` `limits.ts`). It also has two tables of its own: `outbox`, the local changes waiting to upload
+(its `tbl` can also be `user_settings`, whose line's `row_id` is the user id),
 and `sync_state`, the download bookmarks. What this means for the server:
 
 - **Uploads are upserts on `id`** (`INSERT … ON CONFLICT (id) DO UPDATE` through PostgREST), run
@@ -335,3 +338,10 @@ and `sync_state`, the download bookmarks. What this means for the server:
 - **Deletes (B14) are `DELETE … WHERE id IN (…)`** as the signed-in user, sent before any upload
   in each sync, children's tables first. Deleting an id the server no longer has is a no-op, so
   retries are safe.
+- **`user_settings` (B15) syncs outside the id-keyed machinery.** The phone's kg/lb toggle sends
+  `UPDATE user_settings SET unit = … WHERE user_id = …` — never an insert or upsert, since RLS
+  grants the owner select and update only and the signup trigger already made the row; no
+  `updated_at` (the `moddatetime` trigger stamps it). An update that matches no row (a previous
+  account's leftover outbox line, hidden by RLS) changes nothing and counts as sent. Every pull
+  re-reads the one row (no bookmark) and saves it unless the phone has an unsent toggle. Weights
+  are never touched: `sets.weight_kg` and `personal_records.value_kg` stay kg whatever the unit.

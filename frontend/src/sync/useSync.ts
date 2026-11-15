@@ -5,9 +5,10 @@
  * What it does:
  *   - opens the on-device database on launch (which also seeds the exercise
  *     library the first time), signed in or not;
- *   - while someone is signed in, runs a sync engine for them, wired to sync
- *     on start, on returning to the foreground, on reconnecting and after each
- *     local change;
+ *   - while someone is signed in, loads their kg/lb choice into the unit store
+ *     (B15), then runs a sync engine for them, wired to sync on start, on
+ *     returning to the foreground, on reconnecting and after each local
+ *     change — and to hand a downloaded settings row back to the unit store;
  *   - on sign-out or account change, stops that engine. The device data is
  *     kept, so signing back in doesn't re-download history over mobile data.
  *
@@ -17,15 +18,30 @@
 import { useEffect } from 'react';
 
 import type { SqlDriver } from '@/db/driver';
+import type { UserSettingsRow } from '@/db/userSettings';
 
 import { SyncEngine, type SyncTriggers } from './engine';
 import type { SyncTransport } from './transport';
+
+/**
+ * The slice of the unit store (settings/unitStore.ts) `useSync` needs: load the signed-in
+ * lifter's kg/lb choice, hear about a downloaded one, and forget it on sign-out. Handed in
+ * through `deps` so the sync engine and its push/pull code never import the settings code;
+ * only this hook's real-app defaults (`defaultDeps`) load the store.
+ */
+export interface SyncSettingsHooks {
+  hydrate: (db: SqlDriver, userId: string) => Promise<void>;
+  applyPulled: (row: UserSettingsRow) => void;
+  reset: () => void;
+}
 
 /** The pieces `useSync` wires together. */
 export interface SyncDeps {
   openDatabase: () => Promise<SqlDriver>;
   createTransport: () => SyncTransport;
   triggers: () => SyncTriggers;
+  /** The unit store's hooks (B15). Optional: tests that don't care about units leave it out. */
+  settings?: SyncSettingsHooks;
 }
 
 /** The real pieces: expo-sqlite, Supabase, React Native's AppState and expo-network. */
@@ -36,11 +52,13 @@ function defaultDeps(): SyncDeps {
   const { createSupabaseTransport } = require('./supabaseTransport') as typeof import('./supabaseTransport');
   const { AppState } = require('react-native') as typeof import('react-native');
   const Network = require('expo-network') as typeof import('expo-network');
+  const { unitStore } = require('@/settings/unitStore') as typeof import('@/settings/unitStore');
   /* eslint-enable @typescript-eslint/no-require-imports */
   return {
     openDatabase: openAppDatabase,
     createTransport: () => createSupabaseTransport(getSupabase()),
     triggers: () => ({ appState: AppState, network: Network }),
+    settings: { hydrate: unitStore.hydrate, applyPulled: unitStore.applyPulled, reset: unitStore.reset },
   };
 }
 
@@ -54,11 +72,24 @@ export function useSync(userId: string | null, deps?: SyncDeps): void {
     const d = deps ?? defaultDeps();
     let cancelled = false;
     let stop: (() => void) | null = null;
+    // Signed out: back to the default unit, so the next account starts clean.
+    if (!userId) d.settings?.reset();
 
     d.openDatabase()
-      .then((db) => {
+      .then(async (db) => {
         if (cancelled || !userId) return;
-        const engine = new SyncEngine({ db, transport: d.createTransport(), userId });
+        // Load the lifter's kg/lb choice first, so screens switch to it as early as possible.
+        // A failed read only means pounds are shown until the next launch; sync still starts.
+        await d.settings?.hydrate(db, userId).catch((error: unknown) => {
+          console.warn('Sync: the saved weight unit could not be read', error);
+        });
+        if (cancelled) return;
+        const engine = new SyncEngine({
+          db,
+          transport: d.createTransport(),
+          userId,
+          onUserSettingsPulled: d.settings?.applyPulled,
+        });
         stop = engine.start(d.triggers());
       })
       .catch((error: unknown) => {

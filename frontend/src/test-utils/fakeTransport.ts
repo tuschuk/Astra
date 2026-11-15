@@ -12,7 +12,8 @@
  *   - an upload that would lower a personal record keeps the stored best (the
  *     keep-best trigger), but a delete followed by an insert does not (B14);
  *   - deletes cascade like the foreign keys and leave tombstones for deleted
- *     workouts and personal records, like the `record_tombstone` triggers.
+ *     workouts and personal records, like the `record_tombstone` triggers;
+ *   - the settings row (B15) can only be updated by the phone, never created.
  *
  * And it can misbehave on demand:
  *   - `offline = true` — every call fails, like airplane mode;
@@ -20,6 +21,8 @@
  *   - `loseNextResponse()` — the next upload is SAVED but the reply is lost,
  *     so the phone thinks it failed and will retry (the classic duplicate trap).
  */
+import type { WeightUnit } from '@training-math';
+
 import type {
   ExerciseRow,
   PersonalRecordRow,
@@ -29,6 +32,7 @@ import type {
   WorkoutExerciseRow,
   WorkoutRow,
 } from '@/db/dao';
+import type { UserSettingsRow } from '@/db/userSettings';
 import type { PullCursor, PushRow, SyncTransport, TombstoneRow } from '@/sync/transport';
 
 type AnyRow = { id: string; updated_at: string } & Record<string, unknown>;
@@ -214,6 +218,35 @@ export class FakeServer implements SyncTransport {
       .filter((t) => t.id > afterId && this.tombstoneOwner.get(t.id) === userId)
       .slice(0, limit)
       .map((t) => ({ ...t }));
+  }
+
+  /**
+   * The server's `user_settings` table (B15): user id → row. Empty until a test seeds it —
+   * the real one gets its row from the signup trigger (`seedUserSettings` plays that part).
+   */
+  readonly userSettings = new Map<string, UserSettingsRow>();
+  /** Every settings update received, in order (including failed ones). */
+  readonly userSettingsPushes: { userId: string; unit: WeightUnit }[] = [];
+
+  /** Creates or changes a user's settings row directly (the signup trigger, or another device). */
+  seedUserSettings(userId: string, unit: WeightUnit): void {
+    this.userSettings.set(userId, { user_id: userId, unit, updated_at: this.now() });
+  }
+
+  async pullUserSettings(userId: string): Promise<UserSettingsRow | null> {
+    this.guard();
+    const row = this.userSettings.get(userId);
+    return row ? { ...row } : null;
+  }
+
+  /**
+   * Like the real `update … where user_id = …`: changes an existing row (re-stamping it by the
+   * server clock) and silently changes nothing when the user has no row — never inserts.
+   */
+  async pushUserSettings(userId: string, unit: WeightUnit): Promise<void> {
+    this.userSettingsPushes.push({ userId, unit });
+    this.guard();
+    if (this.userSettings.has(userId)) this.seedUserSettings(userId, unit);
   }
 
   async pullWorkoutExercises(workoutIds: readonly string[]): Promise<WorkoutExerciseRow[]> {

@@ -294,3 +294,32 @@ full severity (B08/B09 precedent). What changed or was pinned:
   asserts both entries stored exactly.
 - **"Expo typed-routes staleness again?"** Known, recurring (B06–B14): the builder regenerates
   with `npx expo start` (~150 s) before `tsc`, and Gate 2 re-runs the same order cold.
+
+## Deviations during build (builder run)
+
+Small, all in the direction of the plan's own safety rules; none changes a server contract.
+
+1. **`applyPulled` re-reads the phone's row instead of trusting the downloaded one.** The pull
+   commits the row and only then calls back; a toggle saved in between is the truth on disk and
+   must be the truth on screen. Re-reading closes that window. Still ignores another user's row.
+2. **A `version` counter in the unit store.** A slow sign-in `hydrate` read that started before
+   a toggle (or a pulled row) must not overwrite it; pinned by a test.
+3. **`hydrate` forgets a failed load** so the next call reads again (review finding), instead of
+   caching the rejection until the app restarts.
+4. **`reset()` is wired, not test-only.** `useSync` calls it on sign-out (review finding), so the
+   next account never sees the previous one's unit even briefly. `SyncSettingsHooks` (the
+   `SyncDeps.settings` slice) therefore carries `hydrate`, `applyPulled` and `reset`; only
+   `useSync`'s real-app `defaultDeps` loads `settings/unitStore` — the engine, push and pull
+   never import `settings/`.
+5. **`setUnit` adopts the user if the store was never hydrated** (Settings opened in a test or
+   before `useSync` ran) so the toggle still shows its own change.
+6. **`parseUnit` (db/userSettings.ts)** reads anything but `'kg'` as `'lb'`, on the local read
+   and the Supabase download — a guard against a damaged file; the server CHECK already pins the
+   values.
+7. **`DEFAULT_DISPLAY_UNIT` moved into `unitStore.ts`** (re-exported from `displayUnit.ts`
+   unchanged) to avoid an import cycle between the two modules.
+8. **The You tab's email line was removed** in the review fix pass — the first build had kept it
+   (only Sign out moved), contrary to "moved, not duplicated". The gear button sizes from
+   `layout.minTouchTarget` (48 on Android) rather than a fixed 44.
+9. **Settings screen extras:** a Back button (falls back to `/you`), `radiogroup`/`radio` roles
+   with `selected` + `checked` state, and an inline error if saving the unit fails.

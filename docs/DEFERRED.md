@@ -202,3 +202,21 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     `editWorkout.ts` mirror `workoutIdsOf` in `dao.ts`; the 500-id chunk constant exists in both
     `sync/outbox.ts` and `sync/pull.ts`.
   - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.
+- B15 settings-and-units follow-ups (`settings-and-units`):
+  - **Device check (Tristen):** You → gear → Settings; flip to kg → the logger, a saved workout,
+    edit and exercise history all show kg, entry boxes read "Weight in kg"; flip back → the same
+    numbers as before; flip in airplane mode, kill the app, reopen → still kg; reconnect →
+    `user_settings.unit` is `kg` in Supabase; change it in the dashboard → the next sync shows
+    it on the phone; Sign out from Settings. Gear-button placement beside the floating profile
+    button at phone width is unverified.
+  - **Live probe (Gate 2):** no migration in this step, but the update-only push has only been
+    exercised against the fake server and a recording client — confirm one real toggle updates
+    the row under RLS.
+  - **Pre-hydration flash** (plan risk 2): a kg lifter may see pounds for a frame on a cold
+    start until the one-row read lands. If visible, hold the splash on `unitStore.hydrate`.
+  - **Settings sync is bundled behind the training push:** the settings phase runs after the
+    five table passes, so a training row the server keeps refusing also holds the unit back.
+    Move the phase first if that ever bites.
+  - Notifications (B47) and Privacy (B26) sections of Settings, `default_workout_visibility`
+    mirroring (B26), email change / password reset (NFR-6) — not in this step.
+  - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.
