@@ -61,10 +61,10 @@ flowchart TD
   end
 
   subgraph LoggerUI["Logger screens (signed-in stack, above the tab bar)"]
-    Logger["Active workout (app/active-workout.tsx)<br/>EntryCard per exercise: sets, reps + weight in lb (displayUnit.ts) + optional RPE,<br/>Warm-up chip (next sets are warm-ups), W toggle per logged set (B10),<br/>Bodyweight exercise: weight box = '+ lb' added load, reps alone logs,<br/>Timed chip (B11): reveals Time (s or m:ss) + Score boxes, closing clears them,<br/>Log set (reps, weight, time or score), Drop = next drop of the latest set (B11),<br/>Repeat last set (ONE tap, NFR-2), remove set (a drop set's top row removes all of it),<br/>link toggle (B11): superset with the card above, 'Superset' badge,<br/>drops shown as ↳ rows under one 'Set n' (sets numbered as the lifter counts),<br/>move up / down, remove exercise, 'Last time' line (LOG-5, work sets only)<br/>one store call per card at a time<br/>empty slot on open: resume from astra.db or go back"]
+    Logger["Active workout (app/active-workout.tsx)<br/>EntryCard per exercise: sets, reps + weight in lb (displayUnit.ts) + optional RPE,<br/>Warm-up chip (next sets are warm-ups), W toggle per logged set (B10),<br/>Bodyweight exercise: weight box = '+ lb' added load, reps alone logs,<br/>Timed chip (B11): reveals Time (s or m:ss) + Score boxes, closing clears them,<br/>Log set (reps, weight, time or score), Drop = next drop of the latest set (B11),<br/>Repeat last set (ONE tap, NFR-2), remove set (a drop set's top row removes all of it),<br/>link toggle (B11): superset with the card above, 'Superset' badge,<br/>drops shown as ↳ rows under one 'Set n' (sets numbered as the lifter counts),<br/>move up / down, remove exercise, 'Last time' line (LOG-5, work sets only)<br/>one store call per card at a time<br/>notes (B12): header Title + Notes boxes; 'Add note' under each exercise;<br/>note icon on every logged set / drop opens its box (one set box per card);<br/>boxes autosave (useAutosaveText) ~750 ms after typing + on close;<br/>Finish flushes every box first (AutosaveRegistry)<br/>empty slot on open: resume from astra.db or go back"]
     Picker["Add exercise panel (ExercisePicker, a Modal)<br/>alias-aware searchExercises over the catalog;<br/>slug → libraryExerciseId → store.addExercise"]
     EmptyQ{"Finish with zero sets?"}
-    Saved["Saved workout (app/workout/[id].tsx), read-only<br/>date, duration, every exercise + set in lb<br/>superset = ONE card labelled 'Superset' (B11);<br/>drop set = ONE row 'a → b → c'; time and score shown (B11)<br/>(another user's / unfinished id: 'not on this phone')"]
+    Saved["Saved workout (app/workout/[id].tsx), read-only<br/>date, duration, every exercise + set in lb<br/>superset = ONE card labelled 'Superset' (B11);<br/>drop set = ONE row 'a → b → c'; time and score shown (B11)<br/>title (or date); workout, exercise and set notes as text (B12; drop notes '↳ …')<br/>(another user's / unfinished id: 'not on this phone')"]
     Logger -->|Add exercise| Picker
     Picker -->|tap an exercise| Logger
     Logger -->|Finish| EmptyQ
@@ -87,7 +87,7 @@ flowchart TD
   subgraph ActiveWO["Active-workout store (src/workout/activeWorkout.ts)<br/>driven by the logger screens through the session slot + useActiveWorkout hooks"]
     StartWO["startActiveWorkout: blank public workout<br/>(refused while one is in progress)"]
     ResumeWO["loadActiveWorkout: on launch, rebuild the<br/>signed-in user's unfinished workout from astra.db"]
-    MutWO["add / remove / reorder exercise; log / fix / remove set;<br/>repeat last set; updateSets / removeSets (several sets, one transaction, B11);<br/>linkWithPrevious / unlinkFromPrevious (superset_group, B11):<br/>check server limits, convert lb→kg,<br/>commit to SQLite, then re-read the snapshot"]
+    MutWO["add / remove / reorder exercise; log / fix / remove set;<br/>repeat last set; updateSets / removeSets (several sets, one transaction, B11);<br/>linkWithPrevious / unlinkFromPrevious (superset_group, B11);<br/>setTitle / setNotes / setEntryNotes / setSetNotes (B12, trimmed, blank = none;<br/>repeat never copies a set note):<br/>check server limits, convert lb→kg,<br/>commit to SQLite, then re-read the snapshot"]
     FinishWO["finish: ended_at = max(now, started_at),<br/>queue workout + entries + sets in ONE transaction; store sealed"]
     DiscardWO["discard: delete the draft (cascades), nothing to sync"]
   end
@@ -138,7 +138,7 @@ flowchart TD
   subgraph Shared["Shared training math (backend/supabase/functions/_shared/training-math)<br/>import name in the app: @training-math"]
     MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification,<br/>session volume (volume.ts: warm-ups and weightless sets add 0),<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store and the logger's<br/>display (displayWeight); no server function yet"]
   end
-  MathMod -->|"lbToKg, assertValidSetFields (incl. score length),<br/>assertValidSupersetGroup, round weight / RPE for storage"| MutWO
+  MathMod -->|"lbToKg, assertValidSetFields (incl. score + set-note length),<br/>assertValidSupersetGroup, title / workout-note / entry-note caps (B12),<br/>round weight / RPE for storage"| MutWO
   MathMod -->|"displayWeight (format.ts)"| Logger
   MathMod -.->|"not wired yet: Tool Kit calculators (B16),<br/>logger PR badges + volume (B13), unit setting (B15)"| Workout
   MathMod -.->|"not wired yet: post-workout analysis<br/>server function (B18)"| Backend
@@ -179,6 +179,13 @@ flowchart TD
    **Timed** chip opens a **Time** box ("90" or "4:32") and a **Score** box ("7 rounds + 12
    reps"); either logs alone or with reps / weight ("100 reps · 7:32"). The saved workout shows
    a superset as one card holding its exercises.
+   **Notes (B12):** under "Started …" the logger has a **Workout title** box and a **Notes**
+   box; each exercise card has an **Add note** line (tap to write a note on the exercise); every
+   logged set and drop has a speech-bubble icon that opens a note box for that one set. Notes
+   show as muted lines (tap to edit; clear to remove) and save themselves as they are typed, so a
+   killed app keeps them. **Repeat** does not copy a set's note. The saved workout shows the
+   title (or the date when there is none), the workout's note, each exercise's note, and each
+   set's note under it (a drop's marked "↳").
    **Finish** saves it and opens the read-only saved workout (finishing with no sets offers only
    "Discard workout" or "Keep lifting"). **Discard** asks, then deletes the draft. Leaving the
    logger or killing the app loses nothing: the Workout tab then offers **Resume workout** /
@@ -226,6 +233,16 @@ flowchart TD
   (`groupDropSets`, `formatDropSet`, `supersetRuns` / `supersetPlacement` in `workout/format.ts`).
   `sets.score` (device schema V2) and the older `superset_group` / `drop_set_position` /
   `duration_seconds` columns ride `TABLE_COLUMNS` through finish, push and pull — no sync changes.
+  **B12:** every title / note box uses `workout/useAutosaveText.ts`: it keeps the box's text,
+  calls its store setter ~750 ms after typing stops and again when the box closes or the screen
+  leaves, and drops a pending save once the workout is no longer active. Each box joins the
+  logger's `AutosaveRegistry` (a React context), and Finish awaits `flushAll()` before
+  `store.finish()`, so text typed a moment before Finish is in the finished workout. The setters
+  (`setTitle`, `setNotes`, `setEntryNotes`, `setSetNotes`) write through the draft path like
+  every other store call; `setSetNotes` reads the set inside the store's one-at-a-time queue, so
+  a note never undoes a warm-up flip made just before it. `sets.notes` (device schema V3) joined
+  `TABLE_COLUMNS`; `workouts.title` / `notes` and `workout_exercises.notes` were already there —
+  no sync changes.
 - **On-device store and sync (B07).**
   `src/sync/useSync.ts` runs in the root layout. On launch it opens `astra.db`
   (`src/db/database.ts`: foreign keys on, WAL, migrations by `PRAGMA user_version`). It then seeds

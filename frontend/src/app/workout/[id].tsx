@@ -5,6 +5,9 @@
  * logged, each with every set (reps and weight in the lifter's unit; time and score for timed
  * or WOD-style work). A superset is shown as one card labelled "Superset" holding its
  * exercises (LOG-11); a drop set is one numbered row with its drops joined by arrows (LOG-12).
+ * Notes written in the logger show at all three levels (LOG-3): the workout's under its date
+ * line, an exercise's under its name, and a set's as a muted line under that set (a drop's
+ * marked "↳").
  *
  * This is what Finish opens, and what each row of the Workout tab's history opens — the
  * "reopens with every set intact" half of LOG-2. It reads straight from the phone's database, so it works offline.
@@ -98,6 +101,7 @@ export default function SavedWorkoutScreen() {
       <Body variant="muted" style={styles.details}>
         {details}
       </Body>
+      {workout.notes ? <Body style={styles.workoutNotes}>{workout.notes}</Body> : null}
 
       {/* One Card per unit: a lone exercise, or a whole superset with its exercises inside. */}
       {supersetRuns(entries).map(({ superset, entries: run }) => (
@@ -125,15 +129,30 @@ function SavedExercise({ entry, unit }: { entry: SavedEntry; unit: WeightUnit })
   return (
     <View style={styles.exercise}>
       <Body style={styles.name}>{entry.exerciseName ?? 'Deleted exercise'}</Body>
+      {entry.notes ? (
+        <Body variant="small" style={styles.note}>
+          {entry.notes}
+        </Body>
+      ) : null}
       {entry.sets.length === 0 ? (
         <Body variant="small">No sets logged</Body>
       ) : (
         groupDropSets(entry.sets).map((segments, index) => (
-          <View key={segments[0].id} style={styles.setRow}>
-            <SectionLabel size="small" style={styles.setNumber}>
-              Set {index + 1}
-            </SectionLabel>
-            <Body style={styles.setText}>{formatDropSet(segments, unit)}</Body>
+          <View key={segments[0].id}>
+            <View style={styles.setRow}>
+              <SectionLabel size="small" style={styles.setNumber}>
+                Set {index + 1}
+              </SectionLabel>
+              <Body style={styles.setText}>{formatDropSet(segments, unit)}</Body>
+            </View>
+            {/* Each segment's note, in order; a drop's is marked "↳" so it reads as that drop's. */}
+            {segments.map((segment, segmentIndex) =>
+              segment.notes ? (
+                <Body key={segment.id} variant="small" style={[styles.note, styles.setNote]}>
+                  {segmentIndex === 0 ? segment.notes : `↳ ${segment.notes}`}
+                </Body>
+              ) : null,
+            )}
           </View>
         ))
       )}
@@ -173,5 +192,17 @@ const styles = StyleSheet.create({
   },
   setNumber: {
     width: 48,
+  },
+  workoutNotes: {
+    marginTop: -spacing.md,
+    marginBottom: spacing.xl,
+  },
+  note: {
+    color: colors.muted,
+    fontStyle: 'italic',
+  },
+  setNote: {
+    // Under its set's text, past the "Set n" column.
+    paddingLeft: 48 + spacing.md,
   },
 });

@@ -25,9 +25,16 @@ export { MAX_PERCENT, workingWeightFromPercent } from './intensity.ts';
 export { loadBar } from './plates.ts';
 export type { BarLoad, PlateCount, PlateInventoryItem } from './plates.ts';
 export {
+  assertValidEntryNotes,
   assertValidSetFields,
   assertValidSupersetGroup,
+  assertValidWorkoutNotes,
+  assertValidWorkoutTitle,
+  MAX_ENTRY_NOTES_LENGTH,
+  MAX_SET_NOTES_LENGTH,
   MAX_SET_SCORE_LENGTH,
+  MAX_WORKOUT_NOTES_LENGTH,
+  MAX_WORKOUT_TITLE_LENGTH,
   roundRpeForStorage,
   roundWeightKgForStorage,
 } from './limits.ts';

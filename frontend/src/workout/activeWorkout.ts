@@ -27,8 +27,11 @@
  * needs, so a screen can watch the store without this file knowing about screens.
  */
 import {
+  assertValidEntryNotes,
   assertValidSetFields,
   assertValidSupersetGroup,
+  assertValidWorkoutNotes,
+  assertValidWorkoutTitle,
   lbToKg,
   roundRpeForStorage,
   roundWeightKgForStorage,
@@ -75,6 +78,8 @@ export interface SetInput {
   durationSeconds?: number | null;
   /** Scored WOD work, as the lifter wrote it ("7 rounds + 12 reps"). Blank counts as none. */
   score?: string | null;
+  /** The lifter's remark about this one set ("elbow twinged on rep 3"). Blank counts as none. */
+  notes?: string | null;
 }
 
 /**
@@ -109,7 +114,14 @@ export function setInputFromRow(set: SetRow): SetInput {
     dropSetPosition: set.drop_set_position,
     durationSeconds: set.duration_seconds,
     score: set.score,
+    // Kept, so flipping the warm-up flag (or any other edit) never wipes the set's note.
+    notes: set.notes,
   };
+}
+
+/** Trims a typed text; an empty or all-space text becomes null ("no title", "no note"). */
+function cleanText(text: string | null | undefined): string | null {
+  return text?.trim() || null;
 }
 
 /** Where the active workout is in its life. Only an `active` workout can be changed. */
@@ -153,8 +165,27 @@ export interface ActiveWorkoutStore {
    * a drop never outlives its top set and gets mistaken for part of the set before it.
    */
   removeSets(setIds: readonly string[]): Promise<void>;
-  /** Logs a copy of the exercise's last set — the one-tap "same again" (NFR-2). */
+  /**
+   * Logs a copy of the exercise's last set — the one-tap "same again" (NFR-2). Everything the
+   * set did is copied; its note is not (a remark belongs to the set it was written about).
+   */
   repeatLastSet(entryId: string): Promise<SetRow>;
+  /**
+   * Names the workout ("Push day"), up to 100 characters (LOG-3). The text is trimmed; a blank
+   * title clears it, and the saved workout then shows its date instead.
+   */
+  setTitle(title: string | null): Promise<void>;
+  /** Writes a note on the whole workout, up to 2000 characters; blank clears it (LOG-3). */
+  setNotes(notes: string | null): Promise<void>;
+  /** Writes a note on one exercise of the workout, up to 1000 characters; blank clears it (LOG-3). */
+  setEntryNotes(entryId: string, notes: string | null): Promise<void>;
+  /**
+   * Writes a note on one logged set, up to 500 characters; blank clears it (LOG-3). Only the
+   * note changes: the rest of the set is read as it stands when this runs (after any change
+   * queued before it), so a note saved a moment after flipping the warm-up flag can't flip it
+   * back.
+   */
+  setSetNotes(setId: string, notes: string | null): Promise<void>;
   /**
    * Makes this exercise part of a superset with the exercise just above it (LOG-11): done
    * back-to-back, shown as one unit. If either is already in a superset, the other joins it (so
@@ -236,7 +267,6 @@ function setColumns(input: SetInput, position: number) {
       ? null
       : roundWeightKgForStorage(input.weight.unit === 'lb' ? lbToKg(input.weight.value) : input.weight.value);
   const rpe = input.rpe == null ? null : roundRpeForStorage(input.rpe);
-  const score = input.score?.trim() || null;
   const columns = {
     position,
     reps: input.reps ?? null,
@@ -245,7 +275,8 @@ function setColumns(input: SetInput, position: number) {
     is_warmup: input.isWarmup ?? false,
     drop_set_position: input.dropSetPosition ?? null,
     duration_seconds: input.durationSeconds ?? null,
-    score,
+    score: cleanText(input.score),
+    notes: cleanText(input.notes),
   };
   assertValidSetFields({
     position,
@@ -255,6 +286,7 @@ function setColumns(input: SetInput, position: number) {
     dropSetPosition: columns.drop_set_position,
     durationSeconds: columns.duration_seconds,
     score: columns.score,
+    notes: columns.notes,
   });
   return columns;
 }
@@ -526,6 +558,26 @@ function createStore(
     await db.withTransactionAsync((tx) => writeDraftRowsTx(tx, 'workout_exercises', changed, now));
   }
 
+  /**
+   * Replaces what one set says, keeping its id and place: `inputFor` gets the set as it stands
+   * now and returns what it should say. Every value is checked before anything is saved.
+   * Returns the set's id. Only call it inside `mutate`, so "as it stands now" is after every
+   * earlier queued change.
+   */
+  async function rewriteSet(setId: string, inputFor: (set: SetRow) => SetInput): Promise<string> {
+    const { set } = setById(setId);
+    const now = clock();
+    const updated: SetRow = { ...set, ...setColumns(inputFor(set), set.position), updated_at: now };
+    await db.withTransactionAsync((tx) => writeDraftRowsTx(tx, 'sets', [updated], now));
+    return set.id;
+  }
+
+  /** Saves a change to the workout row itself (its title or note), in one transaction. */
+  async function saveWorkoutRow(change: Partial<Pick<WorkoutRow, 'title' | 'notes'>>): Promise<void> {
+    const now = clock();
+    await db.withTransactionAsync((tx) => writeDraftRowsTx(tx, 'workouts', [{ ...snapshot.workout, ...change }], now));
+  }
+
   /** The saved copy of a set (used after `refresh`), so callers get exactly what SQLite holds. */
   function savedSet(setId: string): SetRow {
     return setById(setId).set;
@@ -599,14 +651,7 @@ function createStore(
         return (await appendSet(entry, setColumns(input, entry.sets.length))).id;
       }, { pick: savedSet }),
 
-    updateSet: (setId, input) =>
-      mutate(async () => {
-        const { set } = setById(setId);
-        const now = clock();
-        const updated: SetRow = { ...set, ...setColumns(input, set.position), updated_at: now };
-        await db.withTransactionAsync((tx) => writeDraftRowsTx(tx, 'sets', [updated], now));
-        return set.id;
-      }, { pick: savedSet }),
+    updateSet: (setId, input) => mutate(() => rewriteSet(setId, () => input), { pick: savedSet }),
 
     updateSets: (changes) =>
       mutate(async () => {
@@ -638,10 +683,45 @@ function createStore(
           drop_set_position: previous.drop_set_position,
           duration_seconds: previous.duration_seconds,
           score: previous.score,
+          // Deliberately NOT copied: a note is the lifter's remark about that one set ("elbow
+          // twinged on rep 3"), not part of its performance — one tap must not duplicate it onto
+          // a set it wasn't said about. (`setInputFromRow` keeps notes on purpose; see there.)
+          notes: null,
         };
         assertValidSetFields({ position: columns.position });
         return (await appendSet(entry, columns)).id;
       }, { pick: savedSet }),
+
+    setTitle: (title) =>
+      mutate(async () => {
+        const cleaned = cleanText(title);
+        assertValidWorkoutTitle(cleaned);
+        await saveWorkoutRow({ title: cleaned });
+      }),
+
+    setNotes: (notes) =>
+      mutate(async () => {
+        const cleaned = cleanText(notes);
+        assertValidWorkoutNotes(cleaned);
+        await saveWorkoutRow({ notes: cleaned });
+      }),
+
+    setEntryNotes: (entryId, notes) =>
+      mutate(async () => {
+        const { sets: _nested, ...entry } = entryById(entryId);
+        const cleaned = cleanText(notes);
+        assertValidEntryNotes(cleaned);
+        const now = clock();
+        await db.withTransactionAsync((tx) =>
+          writeDraftRowsTx(tx, 'workout_exercises', [{ ...entry, notes: cleaned }], now),
+        );
+      }),
+
+    setSetNotes: (setId, notes) =>
+      mutate(async () => {
+        // The set is read inside the queue, so it is as every earlier change left it.
+        await rewriteSet(setId, (set) => ({ ...setInputFromRow(set), notes }));
+      }),
 
     linkWithPrevious: (entryId) =>
       mutate(async () => {

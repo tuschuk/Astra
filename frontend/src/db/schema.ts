@@ -103,8 +103,17 @@ const V2 = `
 alter table sets add column score text;
 `;
 
+/**
+ * Version 3 (B12): a free-text `notes` on each set — the lifter's remark about that one set
+ * ("elbow twinged on rep 3"). Mirrors the server's `…_sets_notes.sql`. Workouts and exercises
+ * have had a `notes` column since version 1.
+ */
+const V3 = `
+alter table sets add column notes text;
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1, V2];
+export const MIGRATIONS: readonly string[] = [V1, V2, V3];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

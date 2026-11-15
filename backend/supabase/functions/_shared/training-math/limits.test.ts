@@ -2,10 +2,17 @@
 import { describe, expect, it } from '@jest/globals';
 
 import {
+  assertValidEntryNotes,
   assertValidSetFields,
   assertValidSupersetGroup,
+  assertValidWorkoutNotes,
+  assertValidWorkoutTitle,
+  MAX_ENTRY_NOTES_LENGTH,
   MAX_INTEGER,
+  MAX_SET_NOTES_LENGTH,
   MAX_SET_SCORE_LENGTH,
+  MAX_WORKOUT_NOTES_LENGTH,
+  MAX_WORKOUT_TITLE_LENGTH,
   MAX_SMALLINT,
   roundRpeForStorage,
   roundWeightKgForStorage,
@@ -90,6 +97,48 @@ describe('assertValidSetFields', () => {
   it('allows an empty or missing score', () => {
     expect(() => assertValidSetFields({ position: 0, score: null })).not.toThrow();
     expect(() => assertValidSetFields({ position: 0, score: '' })).not.toThrow();
+  });
+});
+
+describe('set notes (assertValidSetFields)', () => {
+  it('accepts a note at the 500-character cap and refuses one past it', () => {
+    expect(MAX_SET_NOTES_LENGTH).toBe(500);
+    expect(() => assertValidSetFields({ position: 0, notes: 'x'.repeat(500) })).not.toThrow();
+    expect(() => assertValidSetFields({ position: 0, notes: 'x'.repeat(501) })).toThrow(RangeError);
+    expect(() => assertValidSetFields({ position: 0, notes: 'x'.repeat(501) })).toThrow(/notes/);
+  });
+
+  it('allows a missing note and counts emoji once', () => {
+    expect(() => assertValidSetFields({ position: 0, notes: null })).not.toThrow();
+    expect(() => assertValidSetFields({ position: 0, notes: '💪'.repeat(500) })).not.toThrow();
+    expect(() => assertValidSetFields({ position: 0, notes: '💪'.repeat(501) })).toThrow(/notes/);
+  });
+});
+
+describe.each([
+  ['assertValidWorkoutTitle', assertValidWorkoutTitle, MAX_WORKOUT_TITLE_LENGTH, 100, /title/],
+  ['assertValidWorkoutNotes', assertValidWorkoutNotes, MAX_WORKOUT_NOTES_LENGTH, 2000, /notes/],
+  ['assertValidEntryNotes', assertValidEntryNotes, MAX_ENTRY_NOTES_LENGTH, 1000, /notes/],
+] as const)('%s', (_name, assertFn, max, expected, field) => {
+  it('mirrors the server cap', () => {
+    expect(max).toBe(expected);
+  });
+
+  it('accepts null, an empty text, under and exactly at the cap', () => {
+    expect(() => assertFn(null)).not.toThrow();
+    expect(() => assertFn('')).not.toThrow();
+    expect(() => assertFn('x'.repeat(max - 1))).not.toThrow();
+    expect(() => assertFn('x'.repeat(max))).not.toThrow();
+  });
+
+  it('refuses one character over, naming the field', () => {
+    expect(() => assertFn('x'.repeat(max + 1))).toThrow(RangeError);
+    expect(() => assertFn('x'.repeat(max + 1))).toThrow(field);
+  });
+
+  it('counts characters the way Postgres char_length does (an emoji is one)', () => {
+    expect(() => assertFn('🏋'.repeat(max))).not.toThrow();
+    expect(() => assertFn('🏋'.repeat(max + 1))).toThrow(RangeError);
   });
 });
 

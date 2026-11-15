@@ -94,6 +94,42 @@ describe('Saved workout screen', () => {
     expect(screen.getByText('7 rounds + 12 reps')).toBeTruthy();
   });
 
+  it('B12: shows the workout’s, each exercise’s and each set’s notes, drop notes in order', async () => {
+    const store = await startActiveWorkout(db, SIGNED_IN_USER_ID, steadyOptions(START));
+    const bench = await store.addExercise(libraryExerciseId('bench_press'));
+    const squat = await store.addExercise(libraryExerciseId('squat'));
+    const top = await store.logSet(bench.id, { reps: 8, weight: { value: 225, unit: 'lb' } });
+    const drop1 = await store.logSet(bench.id, { reps: 8, weight: { value: 185, unit: 'lb' }, dropSetPosition: 1 });
+    await store.logSet(bench.id, { reps: 10, weight: { value: 155, unit: 'lb' }, dropSetPosition: 2 });
+    const drop3 = await store.logSet(bench.id, { reps: 12, weight: { value: 135, unit: 'lb' }, dropSetPosition: 3 });
+    await store.logSet(squat.id, { reps: 5 });
+    await store.setTitle('Push day');
+    await store.setNotes('Slept badly.');
+    await store.setEntryNotes(bench.id, 'Grip slipping.');
+    await store.setSetNotes(top.id, 'Belt on');
+    await store.setSetNotes(drop1.id, 'First strip');
+    await store.setSetNotes(drop3.id, 'Grip gave out');
+    await store.finish();
+    mockParams = { id: store.getSnapshot().workout.id };
+
+    await renderSignedIn(<SavedWorkoutScreen />);
+    expect(await screen.findByText('Push day')).toBeTruthy();
+    expect(screen.getByText('Slept badly.')).toBeTruthy();
+    expect(screen.getByText('Grip slipping.')).toBeTruthy();
+    // The drop set's notes, in segment order; the drop with none adds no line.
+    const notes = screen.getAllByText(/^(Belt on|↳ First strip|↳ Grip gave out)$/).map((n) => n.props.children);
+    expect(notes).toEqual(['Belt on', '↳ First strip', '↳ Grip gave out']);
+    // Squat has no note: nothing extra under it.
+    expect(screen.queryByText('Add note')).toBeNull();
+  });
+
+  it('shows no note lines for a workout without notes', async () => {
+    mockParams = { id: await seedWorkout(SIGNED_IN_USER_ID) };
+    await renderSignedIn(<SavedWorkoutScreen />);
+    await screen.findByText('Squat');
+    expect(screen.queryByText(/^↳/)).toBeNull();
+  });
+
   it('never shows another user’s workout', async () => {
     mockParams = { id: await seedWorkout(OTHER_USER_ID) };
     await renderSignedIn(<SavedWorkoutScreen />);

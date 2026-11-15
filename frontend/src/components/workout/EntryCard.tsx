@@ -26,7 +26,12 @@
  *   - tap **Repeat** to log an exact copy of the last set — one tap, nothing to type or confirm
  *     (NFR-2). It is shown but disabled until the first set exists, so it is easy to discover;
  *   - remove any set (a drop set's "Set n" remove takes the whole drop set; each drop row has its
- *     own remove), remove the whole exercise, or move it up / down in the workout.
+ *     own remove), remove the whole exercise, or move it up / down in the workout;
+ *   - write notes (LOG-3): tap **Add note** under the name for a note on the exercise, or the
+ *     speech-bubble icon on any logged set (or drop) for a note on that one set. A note shows as
+ *     a muted line — tap it to edit, clear it to remove it. Notes save themselves as they are
+ *     typed (see `useAutosaveText`), so a killed app keeps them too. Notes are added after a
+ *     set is logged, and Repeat does not copy a set's note.
  *
  * Every action goes straight to the active-workout store, which saves to the phone's database
  * before anything changes on screen; the card redraws from the store's new snapshot. One action
@@ -36,9 +41,9 @@
  * never a crash.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, TextInput, View, type StyleProp, type ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { MAX_SET_SCORE_LENGTH, type WeightUnit } from '@training-math';
+import { MAX_ENTRY_NOTES_LENGTH, MAX_SET_NOTES_LENGTH, MAX_SET_SCORE_LENGTH, type WeightUnit } from '@training-math';
 
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -61,8 +66,10 @@ import {
   parseDurationInput,
   parseNumberInput,
   setErrorMessage,
+  textErrorMessage,
 } from '@/workout/format';
 import { exerciseInfo, lastSessionSets, type ExerciseInfo, type LastSession } from '@/workout/history';
+import { useAutosaveText } from '@/workout/useAutosaveText';
 import { colors, layout, radii, spacing, type } from '@/theme';
 
 interface EntryCardProps {
@@ -144,6 +151,10 @@ export function EntryCard({
   // ref closes the gap before React has redrawn the disabled buttons.
   const [pending, setPending] = useState(false);
   const running = useRef(false);
+  // Which note box is open (LOG-3): the exercise's own note, or one set's. At most one set's
+  // note box is open per card; every other note shows as plain text until tapped.
+  const [editingEntryNote, setEditingEntryNote] = useState(false);
+  const [editingSetId, setEditingSetId] = useState<string | null>(null);
 
   /** Runs one store call at a time, turning a refusal into the card's message line. */
   async function run(action: () => Promise<unknown>): Promise<void> {
@@ -228,6 +239,35 @@ export function EntryCard({
     setTimed(!timed);
   }
 
+  /**
+   * One logged set's note (LOG-3): its note box while open, otherwise the note as a muted line
+   * (tap it to edit), or nothing when the set has no note — the row's note icon adds one.
+   */
+  function renderSetNote(set: SetRow, name: string) {
+    if (editingSetId === set.id) {
+      return (
+        <NoteEditor
+          initial={set.notes}
+          save={(text) => store.setSetNotes(set.id, text)}
+          store={store}
+          maxLength={MAX_SET_NOTES_LENGTH}
+          label={`Note on ${name}`}
+          onClose={() => setEditingSetId((open) => (open === set.id ? null : open))}
+          style={styles.setNote}
+        />
+      );
+    }
+    if (!set.notes) return null;
+    return (
+      <NoteText
+        text={set.notes}
+        label={`Edit note on ${name}`}
+        onPress={() => setEditingSetId(set.id)}
+        style={styles.setNote}
+      />
+    );
+  }
+
   // An RPE alone is not a set — something must have been lifted, held, timed or scored.
   const canLog = [reps, weight, time, score].some((box) => box.trim() !== '');
   const hasSets = entry.sets.length > 0;
@@ -283,10 +323,30 @@ export function EntryCard({
         </Body>
       ) : null}
 
+      {/* The exercise's note (LOG-3): its text, or a muted "Add note"; tapping opens the box. */}
+      {editingEntryNote ? (
+        <NoteEditor
+          initial={entry.notes}
+          save={(text) => store.setEntryNotes(entry.id, text)}
+          store={store}
+          maxLength={MAX_ENTRY_NOTES_LENGTH}
+          label={`Note on ${label}`}
+          onClose={() => setEditingEntryNote(false)}
+        />
+      ) : (
+        <NoteText
+          text={entry.notes}
+          placeholder="Add note"
+          label={entry.notes ? `Edit note on ${label}` : `Add a note on ${label}`}
+          onPress={() => setEditingEntryNote(true)}
+        />
+      )}
+
       {/* Numbered by the sets the lifter thinks in: a drop set is one "Set n", its drops below it. */}
       {logicalSets.map((segments, index) => {
         const number = index + 1;
         const [top, ...drops] = segments;
+        const setName = `set ${number} of ${label}`;
         return (
           <View key={top.id}>
             <View style={styles.setRow}>
@@ -294,6 +354,7 @@ export function EntryCard({
                 Set {number}
               </SectionLabel>
               <Body style={styles.setText}>{formatSet(top, unit)}</Body>
+              <NoteIcon set={top} name={setName} onPress={() => setEditingSetId(top.id)} />
               <ToggleIcon
                 text="W"
                 label={`Warm-up: set ${number} of ${label}`}
@@ -310,17 +371,25 @@ export function EntryCard({
                 onPress={() => void run(() => store.removeSets(segments.map((s) => s.id)))}
               />
             </View>
-            {drops.map((drop, dropIndex) => (
-              <View key={drop.id} style={[styles.setRow, styles.dropRow]}>
-                <Body style={[styles.setText, styles.dropText]}>↳ {formatSet({ ...drop, is_warmup: false }, unit)}</Body>
-                <IconButton
-                  icon="close"
-                  label={`Remove drop ${dropIndex + 1} of set ${number} of ${label}`}
-                  disabled={pending}
-                  onPress={() => void run(() => store.removeSet(drop.id))}
-                />
-              </View>
-            ))}
+            {renderSetNote(top, setName)}
+            {drops.map((drop, dropIndex) => {
+              const dropName = `drop ${dropIndex + 1} of ${setName}`;
+              return (
+                <View key={drop.id}>
+                  <View style={[styles.setRow, styles.dropRow]}>
+                    <Body style={[styles.setText, styles.dropText]}>↳ {formatSet({ ...drop, is_warmup: false }, unit)}</Body>
+                    <NoteIcon set={drop} name={dropName} onPress={() => setEditingSetId(drop.id)} />
+                    <IconButton
+                      icon="close"
+                      label={`Remove ${dropName}`}
+                      disabled={pending}
+                      onPress={() => void run(() => store.removeSet(drop.id))}
+                    />
+                  </View>
+                  {renderSetNote(drop, dropName)}
+                </View>
+              );
+            })}
           </View>
         );
       })}
@@ -478,6 +547,97 @@ function Chip({
   );
 }
 
+/**
+ * An open note box (LOG-3) for the exercise or one set. It saves itself a moment after typing
+ * stops and again when it closes (`useAutosaveText`), so nothing typed is lost. It opens with
+ * the keyboard up and closes when the keyboard goes away (the box loses focus) and its note is
+ * saved. A note cleared to blank is saved as no note. A refused save keeps the box open with a
+ * message under it.
+ */
+function NoteEditor({
+  initial,
+  save,
+  store,
+  maxLength,
+  label,
+  onClose,
+  style,
+}: {
+  initial: string | null;
+  save: (text: string) => Promise<unknown>;
+  store: ActiveWorkoutStore;
+  maxLength: number;
+  label: string;
+  onClose: () => void;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const note = useAutosaveText({ initial, save, store });
+  return (
+    <View style={style}>
+      <TextInput
+        style={[styles.input, styles.noteInput]}
+        value={note.text}
+        onChangeText={note.onChangeText}
+        // Closes only once the note is saved; a refused save keeps the box open with its message.
+        onBlur={() => void note.flush().then((saved) => saved && onClose())}
+        placeholder="Note"
+        placeholderTextColor={colors.muted}
+        maxLength={maxLength}
+        multiline
+        autoFocus
+        accessibilityLabel={label}
+      />
+      <FormError message={note.error ? textErrorMessage(note.error) : null} />
+    </View>
+  );
+}
+
+/**
+ * A saved note shown as a muted line; tapping it opens its note box. With no note it shows
+ * `placeholder` instead ("Add note"), or nothing when there is no placeholder.
+ */
+function NoteText({
+  text,
+  placeholder,
+  label,
+  onPress,
+  style,
+}: {
+  text: string | null;
+  placeholder?: string;
+  label: string;
+  onPress: () => void;
+  style?: StyleProp<ViewStyle>;
+}) {
+  if (!text && !placeholder) return null;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      style={({ pressed }) => [styles.noteRow, pressed && styles.iconPressed, style]}
+    >
+      <Body variant="small" style={text ? styles.noteText : styles.notePlaceholder}>
+        {text || placeholder}
+      </Body>
+    </Pressable>
+  );
+}
+
+/**
+ * The speech-bubble beside a logged set (or drop) that opens its note box (LOG-3). Filled when
+ * the set already has a note, outlined when it has none.
+ */
+function NoteIcon({ set, name, onPress }: { set: SetRow; name: string; onPress: () => void }) {
+  return (
+    <IconButton
+      icon={set.notes ? 'chatbox-ellipses' : 'chatbox-outline'}
+      label={`Write a note on ${name}`}
+      onPress={onPress}
+    />
+  );
+}
+
 /** A small icon-only control with a spoken label (move, remove). */
 function IconButton({
   icon,
@@ -630,6 +790,27 @@ const styles = StyleSheet.create({
   },
   iconPressed: {
     backgroundColor: colors.surfaceHover,
+  },
+  noteRow: {
+    minHeight: layout.minTouchTarget,
+    justifyContent: 'center',
+    borderRadius: radii.md,
+  },
+  noteText: {
+    color: colors.muted,
+    fontStyle: 'italic',
+  },
+  notePlaceholder: {
+    color: colors.muted,
+  },
+  noteInput: {
+    paddingVertical: spacing.sm,
+    maxHeight: 120,
+    textAlignVertical: 'top',
+  },
+  setNote: {
+    // A set's note sits under its row, past the "Set n" column.
+    paddingLeft: 48 + spacing.md,
   },
   iconDisabled: {
     // Matches Button's disabled look.

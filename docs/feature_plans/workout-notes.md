@@ -265,6 +265,42 @@ tests (repo rule).
    no cross-SQL/TS test (nothing executes both); it is review-time discipline, same as B08
    recorded.
 
+## Deviations during the build (builder, recorded before commit)
+
+1. **`setSetNotes(setId, notes)` instead of `updateSet` + a fresh snapshot lookup (§4).** The
+   plan's lookup reads `store.getSnapshot()` when the debounced save fires — but a W flip already
+   *queued* in the store (its transaction still running) isn't in that snapshot yet, so the note
+   save could still write the old flag back. The new store op reads the set inside the store's
+   one-at-a-time mutation queue, after every earlier change. Same write funnel (`setColumns` →
+   `assertValidSetFields`), strictly race-free; pinned by a store test that issues the flip and
+   the note back-to-back, and by the EntryCard stale-row test.
+2. **Finish flushes every autosaving box, not just the two header editors (§4).** The plan's
+   "onFinish flushes both editors" would drop a note typed in an EntryCard box a moment before
+   Finish (its timer fires after the store is sealed and is dropped). A tiny `AutosaveRegistry`
+   (a React context in `useAutosaveText.ts`) lets every box register its flush; Finish awaits
+   `flushAll()` before `store.finish()`. The flow test types into all five boxes and taps Finish
+   with no box closed.
+3. **`textErrorMessage` in `format.ts`** — a one-sentence message for a refused title/note save
+   (the existing `setErrorMessage` speaks about sets).
+4. **Note-box labels:** the set-row icon is "Write a note on set n of X"; the open box is
+   "Note on set n of X" — distinct, so screen readers (and tests) can tell them apart.
+5. **The box keeps its own text while open** and does not copy back the store's trimmed value,
+   or a trailing space being typed would vanish mid-word.
+6. **Migration recorded as `20261115031049_sets_notes.sql`** (the version Supabase assigned).
+7. **Review fix — a refused save never vanishes silently** (Spec review). The plan said a failed
+   save "surfaces as the card/header's inline error", but a note box closed on blur before its
+   save finished, and Finish went ahead after a failed flush. Now `flush()` resolves to whether
+   the box's latest save landed (including one the timer already ran); a note box closes only
+   after its save lands, otherwise stays open with the message; and Finish stops with "A title or
+   note couldn't be saved. Fix it, then tap Finish again." if any box failed. Tested in the hook,
+   the card and the flow test. Still accepted: replacing an open set box by tapping another set's
+   icon unmounts it, and a refusal of *that* save only logs a warning (`maxLength` makes it
+   near-unreachable) — recorded in DEFERRED.
+8. **Review fixes — tidy-ups** (Standards review): `updateSet` and `setSetNotes` share one
+   `rewriteSet` helper; the card's note-icon pair became one `NoteIcon`; `setNote` renamed
+   `renderSetNote`; `AutosaveText` / `useAutosaveText` got their own docstrings;
+   `textErrorMessage` got a test.
+
 ## Grilling decisions (settled before code)
 
 Run per the workflow's Grill step; headless pipeline run, so the planner attacked the plan at

@@ -17,6 +17,7 @@ import {
   parseNumberInput,
   setErrorMessage,
   supersetPlacement,
+  textErrorMessage,
   supersetRuns,
   totalSets,
   workoutDateLabel,
@@ -296,5 +297,14 @@ describe('setErrorMessage', () => {
     );
     expect(setErrorMessage(new RangeError('position must be…'))).toBe('That set has a value Astra can’t save.');
     expect(setErrorMessage(new Error('disk full'))).toBe('That set couldn’t be saved. Try again.');
+  });
+});
+
+describe('textErrorMessage', () => {
+  it('says a refused title or note is too long, and anything else failed', () => {
+    expect(textErrorMessage(new RangeError('notes must be at most 500 characters, got 501'))).toBe(
+      'That’s too long to save — shorten it a little.',
+    );
+    expect(textErrorMessage(new Error('disk full'))).toBe('That couldn’t be saved. Try again.');
   });
 });

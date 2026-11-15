@@ -32,12 +32,15 @@ to rename after `list_migrations`. Statuses: B11 Built; LOG-11, LOG-12 Built; LO
 B08 active-workout-store (NFR-3 Built), B07 local-store-and-sync (FND-3 Built), B06 training-math,
 B05 auth-and-signup. Details in each plan file.
 
-**B12 workout-notes** (planning now): notes on a set (migration adds `sets.notes`), an exercise
-(`workout_exercises.notes` exists) and the whole workout (`workouts.notes` exists), editable in the
-logger and shown on the saved workout. Notes for its planner: B08 deliberately left title/notes
-setters out of the store and their length limits out of `limits.ts` (title ≤ 100, workout notes
-≤ 2000, entry notes ≤ 1000 per the server CHECKs) — B12 adds both; a `sets.notes` migration is
-applied live and the file renamed to the recorded version.
+**B12 workout-notes (built on branch `workout-notes`, awaiting Gate 2):** `sets.notes` (CHECK
+≤ 500) applied live by the builder and the file named for the recorded version
+(`20261115031049_sets_notes.sql`); device schema V3; four text caps in `limits.ts`; store
+`setTitle` / `setNotes` / `setEntryNotes` / `setSetNotes`; Title + Notes boxes in the logger
+header, exercise and per-set note boxes on each card, all autosaving through
+`workout/useAutosaveText.ts`; Finish flushes every box and stops if one is refused; the saved
+workout shows all three levels. Deviations (race-free `setSetNotes`, the autosave registry, the
+refused-save handling) are recorded in the plan. Builder ran expo start → tsc → lint → Jest
+(48 suites / 506 tests) green.
 
 **Pipeline operations** (all in `docs/PIPELINE.md`): n8n detached with `NODES_EXCLUDE=[]`; board
 `gvu4dg0NPtND4tGG` Active with a POST webhook trigger; `claude` CLI 2.1.325; headless allowlist

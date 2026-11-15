@@ -102,6 +102,8 @@ export interface SetRow {
   duration_seconds: number | null;
   /** Scored WOD work (LOG-13): free text like "7 rounds + 12 reps". Display only. */
   score: string | null;
+  /** The lifter's remark about this one set (LOG-3), up to 500 characters. Display only. */
+  notes: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -148,6 +150,7 @@ export const TABLE_COLUMNS: { readonly [T in SyncedTable]: readonly (keyof RowBy
     'drop_set_position',
     'duration_seconds',
     'score',
+    'notes',
     'created_at',
     'updated_at',
   ],

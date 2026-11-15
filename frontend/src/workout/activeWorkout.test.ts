@@ -449,6 +449,7 @@ describe('operations', () => {
       drop_set_position: null,
       duration_seconds: null,
       score: null,
+      notes: null,
       created_at: '',
       updated_at: '',
     };
@@ -460,6 +461,7 @@ describe('operations', () => {
       dropSetPosition: null,
       durationSeconds: null,
       score: null,
+      notes: null,
     });
   });
 
@@ -843,5 +845,129 @@ describe('loadActiveWorkout', () => {
     const loaded = await loadActiveWorkout(db, USER_ID);
     expect(loaded?.getSnapshot().workout.id).toBe(newer.id);
     expect(await getRowsByIds(db, 'workouts', [older.getSnapshot().workout.id])).toHaveLength(1);
+  });
+});
+
+describe('notes at all three levels (LOG-3, B12)', () => {
+  /** A started workout with a bench entry and one logged set. */
+  async function benchWorkout(db?: SqlDriver) {
+    const driver = db ?? (await freshDb());
+    const store = await startActiveWorkout(driver, USER_ID, options());
+    const bench = await store.addExercise(BENCH);
+    const set = await store.logSet(bench.id, { reps: 5, weight: { value: 100, unit: 'kg' } });
+    return { db: driver, store, bench, set };
+  }
+
+  it('saves a title, a workout note, an exercise note and a set note, trimmed', async () => {
+    const { store, bench, set } = await benchWorkout();
+    await store.setTitle('  Push day ');
+    await store.setNotes(' slept badly ');
+    await store.setEntryNotes(bench.id, ' grip slipping ');
+    await store.setSetNotes(set.id, ' elbow twinged on rep 3 ');
+    const snap = store.getSnapshot();
+    expect(snap.workout).toMatchObject({ title: 'Push day', notes: 'slept badly' });
+    expect(snap.entries[0].notes).toBe('grip slipping');
+    expect(snap.entries[0].sets[0]).toMatchObject({ notes: 'elbow twinged on rep 3', reps: 5, weight_kg: 100 });
+  });
+
+  it('clears a note or title saved blank', async () => {
+    const { store, bench, set } = await benchWorkout();
+    await store.setTitle('Push');
+    await store.setNotes('n');
+    await store.setEntryNotes(bench.id, 'e');
+    await store.setSetNotes(set.id, 's');
+    await store.setTitle('   ');
+    await store.setNotes('');
+    await store.setEntryNotes(bench.id, null);
+    await store.setSetNotes(set.id, ' ');
+    const snap = store.getSnapshot();
+    expect(snap.workout).toMatchObject({ title: null, notes: null });
+    expect(snap.entries[0].notes).toBeNull();
+    expect(snap.entries[0].sets[0].notes).toBeNull();
+  });
+
+  it('refuses text past each server cap before writing anything', async () => {
+    const { db, store, bench, set } = await benchWorkout();
+    const before = await dumpTables(db);
+    await expect(store.setTitle('x'.repeat(101))).rejects.toThrow(RangeError);
+    await expect(store.setNotes('x'.repeat(2001))).rejects.toThrow(RangeError);
+    await expect(store.setEntryNotes(bench.id, 'x'.repeat(1001))).rejects.toThrow(RangeError);
+    await expect(store.setSetNotes(set.id, 'x'.repeat(501))).rejects.toThrow(RangeError);
+    await expect(store.logSet(bench.id, { reps: 1, notes: 'x'.repeat(501) })).rejects.toThrow(/notes/);
+    expect(await dumpTables(db)).toEqual(before);
+    // Exactly at the caps is fine.
+    await store.setTitle('x'.repeat(100));
+    await store.setNotes('x'.repeat(2000));
+    await store.setEntryNotes(bench.id, 'x'.repeat(1000));
+    await store.setSetNotes(set.id, 'x'.repeat(500));
+    expect(store.getSnapshot().entries[0].sets[0].notes).toHaveLength(500);
+  });
+
+  it('keeps a set note through a warm-up flip, but Repeat does not copy it', async () => {
+    const { store, bench, set } = await benchWorkout();
+    await store.setSetNotes(set.id, 'belt on');
+    const current = store.getSnapshot().entries[0].sets[0];
+    const warm = await store.updateSet(set.id, { ...setInputFromRow(current), isWarmup: true });
+    expect(warm).toMatchObject({ is_warmup: true, notes: 'belt on' });
+    const copy = await store.repeatLastSet(bench.id);
+    expect(copy).toMatchObject({ reps: 5, weight_kg: 100, is_warmup: true, notes: null });
+  });
+
+  it('a set note saved right after a queued warm-up flip keeps the flip', async () => {
+    const { store, set } = await benchWorkout();
+    // Both calls are made before either runs: the note must read the set after the flip.
+    const flip = store.updateSet(set.id, { ...setInputFromRow(set), isWarmup: true });
+    const note = store.setSetNotes(set.id, 'felt light');
+    await Promise.all([flip, note]);
+    expect(store.getSnapshot().entries[0].sets[0]).toMatchObject({ is_warmup: true, notes: 'felt light' });
+  });
+
+  it('survives a killed app: a reloaded store holds all three levels', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'astra-b12-'));
+    tempDirs.push(dir);
+    const file = join(dir, 'astra.db');
+    const { store, bench, set } = await benchWorkout(await prepareDatabase(createNodeSqliteDriver(file)));
+    await store.setTitle('Push day');
+    await store.setNotes('slept badly');
+    await store.setEntryNotes(bench.id, 'grip slipping');
+    await store.setSetNotes(set.id, 'elbow twinged');
+
+    // The kill: the first connection is abandoned, a new one opens the same file.
+    const rebuilt = await loadActiveWorkout(await prepareDatabase(createNodeSqliteDriver(file)), USER_ID);
+    expect(rebuilt!.getSnapshot()).toEqual(store.getSnapshot());
+    expect(rebuilt!.getSnapshot().workout).toMatchObject({ title: 'Push day', notes: 'slept badly' });
+    expect(rebuilt!.getSnapshot().entries[0]).toMatchObject({ notes: 'grip slipping' });
+    expect(rebuilt!.getSnapshot().entries[0].sets[0].notes).toBe('elbow twinged');
+  });
+
+  it('uploads every level of note on finish (the "syncs" half)', async () => {
+    const { db, store, bench, set } = await benchWorkout();
+    await store.setTitle('Push day');
+    await store.setNotes('slept badly');
+    await store.setEntryNotes(bench.id, 'grip slipping');
+    await store.setSetNotes(set.id, 'elbow twinged');
+    const finished = await store.finish();
+    const server = new FakeServer();
+    await pushOutbox(db, server);
+    expect(server.tables.workouts.get(finished.id)).toMatchObject({ title: 'Push day', notes: 'slept badly' });
+    expect(server.tables.workout_exercises.get(bench.id)).toMatchObject({ notes: 'grip slipping' });
+    expect(server.tables.sets.get(set.id)).toMatchObject({ notes: 'elbow twinged' });
+  });
+
+  it('refuses every note and title change once the workout is finished', async () => {
+    const { store, bench, set } = await benchWorkout();
+    await store.finish();
+    await expect(store.setTitle('late')).rejects.toThrow(/finished/);
+    await expect(store.setNotes('late')).rejects.toThrow(/finished/);
+    await expect(store.setEntryNotes(bench.id, 'late')).rejects.toThrow(/finished/);
+    await expect(store.setSetNotes(set.id, 'late')).rejects.toThrow(/finished/);
+  });
+
+  it('keeps notes off the upload queue while the workout is in progress', async () => {
+    const { db, store, bench, set } = await benchWorkout();
+    await store.setTitle('Push');
+    await store.setEntryNotes(bench.id, 'e');
+    await store.setSetNotes(set.id, 's');
+    expect(await outboxSize(db)).toBe(0);
   });
 });
