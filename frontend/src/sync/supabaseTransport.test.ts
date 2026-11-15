@@ -6,7 +6,7 @@
 import { describe, expect, it } from '@jest/globals';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { CHILD_PAGE_ROWS, afterCursorFilter, createSupabaseTransport } from './supabaseTransport';
+import { CHILD_PAGE_ROWS, afterCursorFilter, createSupabaseTransport, toAnalysisRow } from './supabaseTransport';
 
 type Call = [string, ...unknown[]];
 
@@ -175,6 +175,48 @@ describe('createSupabaseTransport', () => {
     expect(requests).toHaveLength(2);
     expect(requests[0]).toContainEqual(['in', 'workout_exercise_id', ['e1', 'e2']]);
     expect(requests[1]).toContainEqual(['range', CHILD_PAGE_ROWS, 2 * CHILD_PAGE_ROWS - 1]);
+  });
+
+  it('B18: asks the analyze-workout function for one workout and stores its reply in the phone’s shape', async () => {
+    const reply = { id: 'w1', user_id: 'u1', total_volume_kg: '860.000', new_prs: [{ kind: 'e1rm' }], headline: 'h' };
+    const calls: unknown[][] = [];
+    const client = {
+      functions: {
+        invoke: async (...args: unknown[]) => {
+          calls.push(args);
+          return { data: reply, error: null };
+        },
+      },
+    } as unknown as SupabaseClient;
+    const row = await createSupabaseTransport(client).requestAnalysis('w1');
+    expect(calls).toEqual([['analyze-workout', { body: { workoutId: 'w1' } }]]);
+    expect(row.total_volume_kg).toBe(860);
+    expect(row.new_prs).toBe('[{"kind":"e1rm"}]');
+  });
+
+  it('B18: throws when the function refuses or errors', async () => {
+    const client = {
+      functions: { invoke: async () => ({ data: null, error: { message: 'Edge Function returned a non-2xx status code' } }) },
+    } as unknown as SupabaseClient;
+    await expect(createSupabaseTransport(client).requestAnalysis('w1')).rejects.toThrow('Analysis request failed');
+  });
+
+  it('B18: pulls the user’s analyses after a bookmark, converting new_prs to text', async () => {
+    const { client, requests } = recordingClient([{ data: [{ id: 'w1', total_volume_kg: 5, new_prs: [] }] }]);
+    const rows = await createSupabaseTransport(client).pullWorkoutAnalyses('u1', null, 500);
+    expect(rows).toEqual([{ id: 'w1', total_volume_kg: 5, new_prs: '[]' }]);
+    expect(requests[0]).toEqual([
+      ['from', 'workout_analyses'],
+      [
+        'select',
+        'id,user_id,engine_version,total_volume_kg,total_sets,working_sets,duration_seconds,new_prs,headline,message,workout_updated_at,created_at,updated_at',
+      ],
+      ['eq', 'user_id', 'u1'],
+      ['order', 'updated_at', { ascending: true }],
+      ['order', 'id', { ascending: true }],
+      ['limit', 500],
+    ]);
+    expect(toAnalysisRow({ new_prs: '[]', total_volume_kg: 1 }).new_prs).toBe('[]');
   });
 
   it('pulls entries by workout id and throws on a download error', async () => {

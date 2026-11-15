@@ -9,7 +9,8 @@ Source migrations: `20261114100000_identity.sql`, `20261114100100_training.sql`,
 `20261114110000_fix_exercise_delete.sql`, `20261114120000_exercises_slug.sql`,
 `20261114120100_library_seed.sql` (generated — see below), `20261115024010_sets_score.sql`,
 `20261115031049_sets_notes.sql`, `20261115035806_personal_records.sql`,
-`20261115045638_sync_tombstones.sql` (B14, applied live), `20261114224613_signup_birthdate_gate.sql`
+`20261115045638_sync_tombstones.sql` (B14, applied live), `20261115080420_workout_analyses.sql`
+(B18, applied live), `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
 not stamp the birthdate).
@@ -34,6 +35,8 @@ erDiagram
   profiles ||--o{ sync_tombstones : "user_id (cascade)"
   workouts ||..o{ sync_tombstones : "row_id, written by trigger on delete (no FK)"
   personal_records ||..o{ sync_tombstones : "row_id, written by trigger on delete (no FK)"
+  workouts ||--o| workout_analyses : "id = workout id (cascade); one per workout"
+  profiles ||--o{ workout_analyses : "user_id owns (cascade)"
 
   auth_users {
     uuid id PK "managed by Supabase Auth"
@@ -146,6 +149,22 @@ erDiagram
     uuid row_id "id of the deleted row"
     timestamptz deleted_at "server clock"
   }
+
+  workout_analyses {
+    uuid id PK "FK to workouts.id: the analysed workout"
+    uuid user_id FK "copied from the workout row"
+    integer engine_version "rules version (ANALYSIS_ENGINE_VERSION)"
+    numeric total_volume_kg "work-set reps x weight, 3 decimals, 0 or more"
+    integer total_sets "every set, 0 or more"
+    integer working_sets "non-warm-up sets, at most total_sets"
+    integer duration_seconds "ended_at minus started_at, 0 or more"
+    jsonb new_prs "array of {exercise_id, exercise_name, kind, reps, value_kg}"
+    text headline "encouraging copy, picked by rule"
+    text message "encouraging copy, picked by rule"
+    timestamptz workout_updated_at "workout's updated_at it was computed from"
+    timestamptz created_at
+    timestamptz updated_at
+  }
 ```
 
 ## The launch library inside `exercises`
@@ -230,6 +249,21 @@ drop what is missing. Devices read "tombstones after id N" by the `bigint` ident
 (`private.record_tombstone`, `security definer`) skips users whose profile is already gone, so
 deleting an account is not blocked by the `user_id` foreign key. Retention is unbounded for now.
 
+## Workout analyses (B18)
+
+`workout_analyses` (migration `20261115080420_workout_analyses.sql`) holds **exactly one
+post-workout analysis per finished workout**: its primary key *is* the workout's id, so retries,
+crashes or two devices can never make a second one. It is written **only** by the
+`analyze-workout` server function (`backend/supabase/functions/analyze-workout/`), using the
+service role, as an upsert on `id` — so a re-analysis after an edit replaces the row (keeping
+`created_at`; `moddatetime` moves `updated_at`). The numbers and copy come from the shared,
+deterministic rules in `functions/_shared/analysis/` (no AI model): volume via `@training-math`'s
+`sessionVolumeKg`, `new_prs` = the `personal_records` rows citing the workout's sets at the time
+it was computed (exercise names snapshotted). `workout_updated_at` is the staleness test: when it
+is older than the workout's `updated_at`, the phone asks for the analysis again. A CHECK keeps
+`new_prs` a JSON array. The function reads as the caller and refuses (404) any workout the caller
+does not own, so another user's public workout can never be analysed over its owner's row.
+
 ## Enums
 
 - `workout_visibility`: `public` (any signed-in user), `followers` (people who follow the owner),
@@ -274,6 +308,7 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `workout_exercises`, `sets` | visible when their workout is | only the workout's owner |
 | `personal_records` | only your own (B25 will widen this for public profiles) | only your own, and `source_set_id` must be a set in one of your workouts (`private.owns_set`) |
 | `sync_tombstones` | only your own | nobody — only the `record_tombstone` trigger inserts |
+| `workout_analyses` | only your own | nobody — no write policies; only the `analyze-workout` function (service role) upserts |
 
 **Workout visibility rule** (`private.workout_visible`): you always see your own; a block in either
 direction hides everything; otherwise `public` is open to any signed-in user, `followers` requires
@@ -286,7 +321,8 @@ they can see rows the caller's own RLS would hide.
 - Deleting an auth user cascades through `profiles` to settings, body data, follows, blocks, owned
   exercises, workouts, their entries and sets, and the user's tombstones.
 - Deleting a workout cascades to its `workout_exercises` and their `sets` (and the records citing
-  them), and leaves tombstones for the workout and each record. The app deletes a finished
+  them) and to its `workout_analyses` row, and leaves tombstones for the workout and each record
+  (an analysis gets none: other devices drop it with the workout's tombstone). The app deletes a finished
   workout (B14) by sending only the workout's delete; these cascades do the rest.
 - Deleting an exercise keeps the history: `workout_exercises.exercise_id` becomes null rather than
   deleting the logged work. Its `personal_records` rows are deleted.
@@ -305,7 +341,8 @@ of `exercises`, `workouts`, `workout_exercises`, `sets`, `personal_records` and 
 `user_settings` (schema version 6: version 2 (B11) added `sets.score`, version 3 added
 `sets.notes`, version 4 added `personal_records`, version 5 added `outbox.op` (`upsert` or
 `delete`), version 6 added `user_settings (user_id, unit, updated_at)` — only the columns the
-phone syncs; `default_workout_visibility` is not mirrored yet; versions are append-only,
+phone syncs; `default_workout_visibility` is not mirrored yet; version 7 (B18) added
+`workout_analyses`, download-only, with `new_prs` as JSON text; versions are append-only,
 upgraded on launch). There is no device copy of `sync_tombstones` — tombstones are applied as
 they download, and `sync_state` keeps the last applied id (`pull_cursor:tombstones`). It has the same column names, but
 uses text for uuids and timestamps and 0/1 for booleans, and it does not repeat the server's
@@ -345,3 +382,8 @@ and `sync_state`, the download bookmarks. What this means for the server:
   account's leftover outbox line, hidden by RLS) changes nothing and counts as sent. Every pull
   re-reads the one row (no bookmark) and saves it unless the phone has an unsent toggle. Weights
   are never touched: `sets.weight_kg` and `personal_records.value_kg` stay kg whatever the unit.
+- **`workout_analyses` (B18) is never uploaded.** After each successful download the phone
+  calls `POST /functions/v1/analyze-workout {workoutId}` (its login token attached) for up to 10
+  finished workouts with no analysis or a stale one and no unsent changes, and saves each reply.
+  Other devices get the rows on their own bookmark (`pull_cursor:workout_analyses`), after
+  personal records.

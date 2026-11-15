@@ -14,7 +14,8 @@
  *   - give the workout a **title** and a **note** in the boxes at the top (LOG-3); notes on an
  *     exercise or a set are written on its card. Every box saves itself as it is typed;
  *   - **Finish**: save any title or note still being typed, then save the workout for good (it
- *     is handed to sync, which uploads it when there is signal) and open the saved workout. Finishing with no sets logged instead asks
+ *     is handed to sync, which uploads it when there is signal) and open its post-workout
+ *     analysis (B18), which links on to the saved workout. Finishing with no sets logged instead asks
  *     "Nothing logged yet" with two choices — discard the workout, or keep lifting;
  *   - **Discard**: after a confirmation, delete the workout from the phone;
  *   - **Tool Kit** (B16): the red button floating bottom-right — always on screen however far
@@ -131,7 +132,7 @@ export default function ActiveWorkoutScreen() {
     }
   }
 
-  /** Saves the workout for good and opens the saved view. */
+  /** Saves the workout for good and opens its analysis (B18). */
   function finish(): Promise<void> {
     return endWorkout(async () => {
       if (!store) return;
@@ -146,8 +147,9 @@ export default function ActiveWorkoutScreen() {
       const workout = await store.finish();
       ended.current = true;
       clearSessionWorkout();
-      // Replace, so going back from the saved workout lands on the tab, not a dead logger.
-      router.replace({ pathname: '/workout/[id]', params: { id: workout.id } });
+      // Replace, so going back from the analysis lands on the tab, not a dead logger. The
+      // analysis shows at once, computed on the phone, even with no signal (B18).
+      router.replace({ pathname: '/analysis/[id]', params: { id: workout.id } });
     }, 'The workout couldn’t be finished. Try again.');
   }
 

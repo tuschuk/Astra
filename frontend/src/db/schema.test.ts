@@ -22,6 +22,7 @@ describe('migrate', () => {
       'sets',
       'sync_state',
       'user_settings',
+      'workout_analyses',
       'workout_exercises',
       'workouts',
     ]);
@@ -107,12 +108,29 @@ describe('migrate', () => {
 
     await migrate(db);
 
-    expect(SCHEMA_VERSION).toBe(6);
-    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 6 });
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: SCHEMA_VERSION });
     expect(await db.getFirstAsync('select count(*) as n from workouts')).toEqual({ n: 1 });
     expect(await db.getFirstAsync('select count(*) as n from outbox')).toEqual({ n: 1 });
     const columns = await db.getAllAsync<{ name: string }>('pragma table_info(user_settings)');
     expect(columns.map((c) => c.name)).toEqual(['user_id', 'unit', 'updated_at']);
+  });
+
+  it('B18: upgrades a version-6 phone to version 7 (workout_analyses), keeping its workouts and outbox', async () => {
+    const db = createNodeSqliteDriver();
+    for (const migration of MIGRATIONS.slice(0, 6)) await db.execAsync(migration);
+    await db.execAsync('pragma user_version = 6');
+    await db.runAsync(
+      "insert into workouts (id, user_id, started_at, created_at, updated_at) values ('w', 'u', 't', 't', 't')",
+    );
+    await db.runAsync("insert into outbox (tbl, row_id, queued_at) values ('workouts', 'w', 't')");
+
+    await migrate(db);
+
+    expect(SCHEMA_VERSION).toBe(7);
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 7 });
+    expect(await db.getFirstAsync('select count(*) as n from workouts')).toEqual({ n: 1 });
+    expect(await db.getFirstAsync('select count(*) as n from outbox')).toEqual({ n: 1 });
+    expect(await db.getFirstAsync('select count(*) as n from workout_analyses')).toEqual({ n: 0 });
   });
 
   it('upgrades a version-1 phone through every later version (sets.score), keeping the sets already there', async () => {

@@ -13,7 +13,9 @@
  *     keep-best trigger), but a delete followed by an insert does not (B14);
  *   - deletes cascade like the foreign keys and leave tombstones for deleted
  *     workouts and personal records, like the `record_tombstone` triggers;
- *   - the settings row (B15) can only be updated by the phone, never created.
+ *   - the settings row (B15) can only be updated by the phone, never created;
+ *   - analyses (B18) are made only by `requestAnalysis` — which runs the real server
+ *     function's handler — one per workout, only for its owner, and deleted with their workout.
  *
  * And it can misbehave on demand:
  *   - `offline = true` — every call fails, like airplane mode;
@@ -23,12 +25,16 @@
  */
 import type { WeightUnit } from '@training-math';
 
+// The real server function's request logic, so app tests run it end to end.
+import { handleAnalyzeRequest, type AnalyzeDeps } from '../../../backend/supabase/functions/analyze-workout/handler.ts';
+
 import type {
   ExerciseRow,
   PersonalRecordRow,
   RowByTable,
   SetRow,
   SyncedTable,
+  WorkoutAnalysisRow,
   WorkoutExerciseRow,
   WorkoutRow,
 } from '@/db/dao';
@@ -195,6 +201,8 @@ export class FakeServer implements SyncTransport {
     const row = this.tables[tbl].get(id) as { user_id?: string } | undefined;
     if (!row) return;
     this.tables[tbl].delete(id);
+    // The analysis's foreign key cascades from its workout (B18); analyses leave no tombstone.
+    if (tbl === 'workouts') this.analyses.delete(id);
     if (tbl === 'workouts' || tbl === 'personal_records') {
       const tombstoneId = this.nextTombstoneId++;
       this.tombstones.push({ id: tombstoneId, tbl, row_id: id, deleted_at: this.now() });
@@ -247,6 +255,71 @@ export class FakeServer implements SyncTransport {
     this.userSettingsPushes.push({ userId, unit });
     this.guard();
     if (this.userSettings.has(userId)) this.seedUserSettings(userId, unit);
+  }
+
+  /** The server's `workout_analyses` table (B18): workout id → row. */
+  readonly analyses = new Map<string, WorkoutAnalysisRow>();
+  /** Every analysis request received, by workout id, in order (including failed ones). */
+  readonly analysisRequests: string[] = [];
+  /** When true, analysis requests fail (the server function erroring) while the rest works. */
+  failAnalyses = false;
+
+  /**
+   * Who is calling the analysis function. Null (the default) means "the owner of whichever
+   * workout is asked about" — the fake has no logins, and tests seed one user's data. Set it to
+   * play another signed-in user.
+   */
+  callerId: string | null = null;
+
+  /**
+   * The `analyze-workout` server function: runs the REAL request handler
+   * (`analyze-workout/handler.ts`, with the shared rules inside) against this server's tables,
+   * then turns its answer into what the phone receives — the stored row (its `new_prs` as
+   * text, like the real transport delivers it), or a thrown error for a 4xx. Saving upserts the
+   * one row per workout, keeping `created_at` on a repeat and stamping `updated_at` from the
+   * server clock.
+   */
+  async requestAnalysis(workoutId: string): Promise<WorkoutAnalysisRow> {
+    this.analysisRequests.push(workoutId);
+    this.guard();
+    if (this.failAnalyses) throw new Error('Analysis request failed: 500');
+    const caller = this.callerId ?? this.tables.workouts.get(workoutId)?.user_id ?? '';
+    const response = await handleAnalyzeRequest({ workoutId }, caller, this.analyzeDeps());
+    if (response.status !== 200) throw new Error(`Analysis request failed: ${response.status} ${response.body.error}`);
+    return { ...response.body, new_prs: JSON.stringify(response.body.new_prs) };
+  }
+
+  /** The server function's database access, over this fake's tables (the caller's RLS view). */
+  private analyzeDeps(): AnalyzeDeps {
+    const t = this.tables;
+    return {
+      readWorkout: async (id) => t.workouts.get(id) ?? null,
+      readEntries: async (id) => [...t.workout_exercises.values()].filter((e) => e.workout_id === id),
+      readSets: async (ids) => [...t.sets.values()].filter((s) => ids.includes(s.workout_exercise_id)),
+      readRecords: async (ids) => [...t.personal_records.values()].filter((r) => ids.includes(r.source_set_id)),
+      readExerciseNames: async (ids) =>
+        Object.fromEntries(ids.flatMap((id) => (t.exercises.has(id) ? [[id, t.exercises.get(id)!.name]] : []))),
+      saveAnalysis: async (analysis) => {
+        const now = this.now();
+        const created = this.analyses.get(analysis.id)?.created_at ?? now;
+        this.analyses.set(analysis.id, {
+          ...analysis,
+          new_prs: JSON.stringify(analysis.new_prs),
+          created_at: created,
+          updated_at: now,
+        });
+        return { ...analysis, created_at: created, updated_at: now };
+      },
+    };
+  }
+
+  async pullWorkoutAnalyses(userId: string, after: PullCursor | null, limit: number): Promise<WorkoutAnalysisRow[]> {
+    this.guard();
+    return ([...this.analyses.values()] as unknown as AnyRow[])
+      .filter((r) => r.user_id === userId && isAfter(r, after))
+      .sort(byCursorOrder)
+      .slice(0, limit)
+      .map((r) => ({ ...r })) as unknown as WorkoutAnalysisRow[];
   }
 
   async pullWorkoutExercises(workoutIds: readonly string[]): Promise<WorkoutExerciseRow[]> {

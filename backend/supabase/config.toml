@@ -397,6 +397,13 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# B18: the post-workout analysis function. JWT verification stays on (the default, written out
+# so the security posture is in the repo): only a signed-in lifter can ask for an analysis, and
+# the function reads with their login. This governs local serving; the deployed function's
+# setting is fixed at deploy time (deployed with verification on).
+[functions.analyze-workout]
+verify_jwt = true
+
 [analytics]
 enabled = true
 port = 54327

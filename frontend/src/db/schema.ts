@@ -9,6 +9,8 @@
  *     syncing a row is a straight copy, not a translation.
  *   - personal_records — the lifter's current PRs per exercise (version 4, B13).
  *   - user_settings — the lifter's kg/lb choice (version 6, B15).
+ *   - workout_analyses — each finished workout's post-workout analysis, as the
+ *     server function wrote it (version 7, B18; download-only).
  *   - outbox — the list of local changes (uploads and, from version 5,
  *     deletions) not yet sent to the server (see `sync/outbox.ts`).
  *   - sync_state — small bookkeeping values, such as how far the last
@@ -162,8 +164,34 @@ create table user_settings (
 );
 `;
 
+/**
+ * Version 7 (B18): `workout_analyses` — the post-workout analysis of each finished workout,
+ * mirroring the server table (…_workout_analyses.sql); `id` is the workout's id. Download-only:
+ * the phone never writes it except to save a row the server sent (a download, or the server
+ * function's reply), so it never gets outbox lines. `new_prs` holds the server's JSON list as
+ * text, parsed where it is read (`analysis/analysis.ts`).
+ */
+const V7 = `
+create table workout_analyses (
+  id                 text primary key not null,
+  user_id            text not null,
+  engine_version     integer not null,
+  total_volume_kg    real not null,
+  total_sets         integer not null,
+  working_sets       integer not null,
+  duration_seconds   integer not null,
+  new_prs            text not null,
+  headline           text not null,
+  message            text not null,
+  workout_updated_at text not null,
+  created_at         text not null,
+  updated_at         text not null
+);
+create index workout_analyses_user_idx on workout_analyses (user_id);
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6];
+export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

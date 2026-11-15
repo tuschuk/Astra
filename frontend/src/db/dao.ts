@@ -133,7 +133,31 @@ export interface PersonalRecordRow {
   updated_at: string;
 }
 
-/** The row shape of each synced table. */
+/**
+ * One finished workout's post-workout analysis (server table `workout_analyses`, B18), as the
+ * `analyze-workout` server function wrote it; `id` is the workout's id. Download-only on the
+ * phone. `new_prs` is the server's JSON list kept as text — read it through
+ * `analysis/analysis.ts`, which parses it.
+ */
+export interface WorkoutAnalysisRow {
+  id: string;
+  user_id: string;
+  engine_version: number;
+  total_volume_kg: number;
+  total_sets: number;
+  working_sets: number;
+  duration_seconds: number;
+  /** JSON text of the analysis's PR list ([{exercise_id, exercise_name, kind, reps, value_kg}]). */
+  new_prs: string;
+  headline: string;
+  message: string;
+  /** The workout's server `updated_at` the analysis was computed from. */
+  workout_updated_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** The row shape of each synced table (the five the phone uploads). */
 export interface RowByTable {
   exercises: ExerciseRow;
   workouts: WorkoutRow;
@@ -142,8 +166,21 @@ export interface RowByTable {
   personal_records: PersonalRecordRow;
 }
 
-/** The five tables mirrored on the device and kept in sync with the server. */
+/** The five tables mirrored on the device and kept in sync with the server (both directions). */
 export type SyncedTable = keyof RowByTable;
+
+/**
+ * Every server table copied onto the phone: the five synced ones plus the download-only
+ * `workout_analyses` (B18). Kept as a separate, wider type on purpose: the upload paths
+ * (`writeLocal`, the outbox, the push) take `SyncedTable`, so the compiler refuses any attempt
+ * to upload an analysis — only the server function may write one.
+ */
+export interface MirrorRowByTable extends RowByTable {
+  workout_analyses: WorkoutAnalysisRow;
+}
+
+/** A table mirrored on the device, uploaded or download-only. */
+export type MirroredTable = keyof MirrorRowByTable;
 
 /**
  * Parents before children: the order rows must reach the server in, so a set
@@ -159,7 +196,7 @@ export const SYNC_ORDER: readonly SyncedTable[] = [
 ];
 
 /** Every column of each table, as named on both the device and the server. */
-export const TABLE_COLUMNS: { readonly [T in SyncedTable]: readonly (keyof RowByTable[T])[] } = {
+export const TABLE_COLUMNS: { readonly [T in MirroredTable]: readonly (keyof MirrorRowByTable[T])[] } = {
   exercises: ['id', 'owner_id', 'name', 'primary_muscle', 'equipment', 'slug', 'created_at', 'updated_at'],
   workouts: ['id', 'user_id', 'title', 'notes', 'started_at', 'ended_at', 'visibility', 'created_at', 'updated_at'],
   workout_exercises: [
@@ -198,10 +235,25 @@ export const TABLE_COLUMNS: { readonly [T in SyncedTable]: readonly (keyof RowBy
     'created_at',
     'updated_at',
   ],
+  workout_analyses: [
+    'id',
+    'user_id',
+    'engine_version',
+    'total_volume_kg',
+    'total_sets',
+    'working_sets',
+    'duration_seconds',
+    'new_prs',
+    'headline',
+    'message',
+    'workout_updated_at',
+    'created_at',
+    'updated_at',
+  ],
 };
 
 /** Yes/no columns: SQLite stores them as 0/1, the app and server use true/false. */
-const BOOLEAN_COLUMNS: { readonly [T in SyncedTable]?: readonly string[] } = {
+const BOOLEAN_COLUMNS: { readonly [T in MirroredTable]?: readonly string[] } = {
   sets: ['is_warmup'],
 };
 
@@ -214,12 +266,12 @@ function toSql(value: unknown): SqlValue {
 }
 
 /** Turns a row read from SQLite back into the app's shape (0/1 → false/true). */
-export function fromSqlRow<T extends SyncedTable>(tbl: T, raw: Record<string, unknown>): RowByTable[T] {
+export function fromSqlRow<T extends MirroredTable>(tbl: T, raw: Record<string, unknown>): MirrorRowByTable[T] {
   const booleans = BOOLEAN_COLUMNS[tbl];
-  if (!booleans) return raw as unknown as RowByTable[T];
+  if (!booleans) return raw as unknown as MirrorRowByTable[T];
   const row: Record<string, unknown> = { ...raw };
   for (const column of booleans) row[column] = row[column] === 1 || row[column] === true;
-  return row as unknown as RowByTable[T];
+  return row as unknown as MirrorRowByTable[T];
 }
 
 /**
@@ -230,7 +282,7 @@ export function fromSqlRow<T extends SyncedTable>(tbl: T, raw: Record<string, un
  * deletes the old row first, and the delete would cascade — replacing a
  * workout would wipe every set inside it.
  */
-function upsertSql(tbl: SyncedTable): string {
+function upsertSql(tbl: MirroredTable): string {
   const columns = TABLE_COLUMNS[tbl] as readonly string[];
   const updates = columns.filter((c) => c !== 'id').map((c) => `${c} = excluded.${c}`);
   return (
@@ -239,21 +291,26 @@ function upsertSql(tbl: SyncedTable): string {
   );
 }
 
+/** Insert-or-update by id for any mirrored table — the untyped core of the two entry points below. */
+async function upsertMirrorRowsTx(tx: SqlExecutor, tbl: MirroredTable, rows: readonly object[]): Promise<void> {
+  const sql = upsertSql(tbl);
+  const columns = TABLE_COLUMNS[tbl] as readonly string[];
+  for (const row of rows) {
+    const record = row as Record<string, unknown>;
+    await tx.runAsync(
+      sql,
+      columns.map((c) => toSql(record[c])),
+    );
+  }
+}
+
 /** Writes rows (insert-or-update by id) using an already-open transaction. */
 export async function upsertRowsTx<T extends SyncedTable>(
   tx: SqlExecutor,
   tbl: T,
   rows: readonly RowByTable[T][],
 ): Promise<void> {
-  const sql = upsertSql(tbl);
-  const columns = TABLE_COLUMNS[tbl] as readonly string[];
-  for (const row of rows) {
-    const record = row as unknown as Record<string, unknown>;
-    await tx.runAsync(
-      sql,
-      columns.map((c) => toSql(record[c])),
-    );
-  }
+  await upsertMirrorRowsTx(tx, tbl, rows);
 }
 
 /**
@@ -268,12 +325,21 @@ export async function upsertRows<T extends SyncedTable>(
   await db.withTransactionAsync((tx) => upsertRowsTx(tx, tbl, rows));
 }
 
+/**
+ * Saves analysis rows the SERVER sent (B18) — a download, or the server function's reply —
+ * inside an already-open transaction. Insert-or-update by id; never queued: the phone never
+ * uploads an analysis. Its own entry point so the upload-side types never admit the table.
+ */
+export async function saveServerAnalysesTx(tx: SqlExecutor, rows: readonly WorkoutAnalysisRow[]): Promise<void> {
+  await upsertMirrorRowsTx(tx, 'workout_analyses', rows);
+}
+
 /** Reads the rows of `tbl` with the given ids (missing ids are simply absent). */
-export async function getRowsByIds<T extends SyncedTable>(
+export async function getRowsByIds<T extends MirroredTable>(
   db: SqlExecutor,
   tbl: T,
   ids: readonly string[],
-): Promise<RowByTable[T][]> {
+): Promise<MirrorRowByTable[T][]> {
   if (ids.length === 0) return [];
   const columns = (TABLE_COLUMNS[tbl] as readonly string[]).join(', ');
   const raw = await db.getAllAsync<Record<string, unknown>>(
@@ -384,7 +450,8 @@ async function touchRootsTx(tx: SqlExecutor, workoutIds: readonly string[], now:
  *   1. the parent workouts of any entries / sets are looked up (before the
  *      rows are gone);
  *   2. the rows are deleted — the device's foreign keys take a workout's
- *      entries and sets, or an entry's sets, with it;
+ *      entries and sets, or an entry's sets, with it; a deleted workout's
+ *      analysis (B18) is deleted here too;
  *   3. one `delete` outbox line per given row. Only the given rows: the
  *      server's foreign keys cascade the same way, so queuing the children too
  *      would be redundant traffic. Any upload lines the children still had
@@ -405,6 +472,11 @@ export async function deleteLocalRowsTx(
   if (ids.length === 0) return;
   const roots = tbl === 'workout_exercises' || tbl === 'sets' ? await workoutIdsOf(tx, tbl, ids) : [];
   await tx.runAsync(`delete from ${tbl} where id in (${placeholders(ids.length)})`, ids);
+  // A deleted workout's analysis (B18) goes with it, as the server's cascade does. The mirror
+  // has no foreign key to do it, and the row was never queued, so nothing is sent for it.
+  if (tbl === 'workouts') {
+    await tx.runAsync(`delete from workout_analyses where id in (${placeholders(ids.length)})`, ids);
+  }
   for (const id of ids) await enqueueTx(tx, tbl, id, now, 'delete');
   await touchRootsTx(tx, roots, now);
 }

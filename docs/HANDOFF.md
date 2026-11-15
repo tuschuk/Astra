@@ -31,20 +31,17 @@ set-types (LOG-14, LOG-15), B09 logger-screen (LOG-2, NFR-2), B08 active-workout
 B07 local-store-and-sync (FND-3), B06 training-math, B05 auth-and-signup. Details in each plan
 file.
 
-**B18 analysis-engine** (planning now): edge function `analyze-workout` of deterministic rules
-(no model) → session summary (total volume, sets, duration, new PRs) with encouraging copy for
-every state; `workout_analyses` table with RLS; runs when a finished workout syncs; analysis
-screen after finish and from any past workout, carrying the not-medical-advice statement;
-offline shows the locally computed summary and fills in the server analysis when synced. Standing
-inputs for its planner: this is the first Deno consumer of `@training-math` — the module was
-built Deno-clean (`.ts` imports, no deps) but never loaded under Deno; B06/B07 deferred Deno
-verification and a `_shared` lint target to this step; `volume.ts` (B10) is the one volume home;
-"new PRs" = diff of `personal_records` before/after (B13 record); server-function tests live in
-`backend/supabase/functions/tests/` (CLAUDE.md) with fixtures, never the live project; the
-Supabase MCP has `deploy_edge_function` (allowlisted) for the live deploy — free tier, no paid
-add-on; the not-medical-advice statement (NFR-9) must appear on the analysis screen; copy must
-not shame (ANA-4) and any numeric performance claim cites a source; the uuidv5 recipe stays in
-`frontend/` unless a server-side writer needs it (B13 tripwire).
+**B18 analysis-engine (built on branch `analysis-engine`, awaiting Gate 2):** shared rules
+`_shared/analysis` (`@analysis`: summary, four-state copy, `NOT_MEDICAL_ADVICE`, engine v1);
+edge function `analyze-workout` (`handler.ts` logic + Deno `index.ts`), **deployed live v2,
+verify_jwt on**, owner-only (404 for anyone else's workout — a review fix); migration
+`20261115080420_workout_analyses.sql` applied live and RLS-probed (owner read only, no client
+writes); device schema V7 mirror; engine request pass after each successful pull (≤ 10/sync);
+fourth pull bookmark; analysis screen (`app/analysis/[id].tsx`) after Finish and from the saved
+workout's Analysis button. `npm run lint` now covers `backend/supabase/functions`. Builder
+checks: routes regenerated → tsc clean → lint clean → Jest 74 suites / 817 tests. Gate 2 still
+owes the two live HTTP probes (no-token refused; signed-in invoke + cross-user 404) — curl was
+not permitted to the builder. Deviations and the review record are in the plan file.
 
 **Dev server for Tristen's phone:** worktree `C:\Users\trist\Astra\Astra-main` on a detached HEAD
 (never `main` — see `docs/PIPELINE.md`), Expo dev server detached on port 8081 (`--lan`), QR at

@@ -10,15 +10,16 @@
  * marked "↳"). A set that currently holds a personal record wears a badge naming the record
  * ("PR · 5RM", "PR · 1RM · e1RM") — B13, read from the phone's `personal_records`.
  *
- * This is what Finish opens, and what each row of the Workout tab's history opens — the
+ * This is what the analysis's "View workout" opens (Finish lands on the analysis, B18), and what each row of the Workout tab's history opens — the
  * "reopens with every set intact" half of LOG-2. It reads straight from the phone's database, so it works offline.
  *
- * What the lifter can do: read it; go back; tap **Edit** to change it (LOG-9, B14 — the edit
+ * What the lifter can do: read it; go back; tap **Analysis** to open its post-workout analysis
+ * (B18 — works for every finished workout, offline too); tap **Edit** to change it (LOG-9, B14 — the edit
  * screen, which saves every change at once and recomputes the PRs); or tap **Delete** and
  * confirm, which deletes the workout, works the PRs out again from what remains (a record it
  * held passes to the next best set) and returns to the Workout tab. The screen re-reads the
  * workout every time it comes back into view, so it shows an edit the moment the lifter
- * returns. The post-workout analysis arrives with B18/B21.
+ * returns.
  */
 import React, { useCallback, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -168,6 +169,13 @@ export default function SavedWorkoutScreen() {
       </Body>
       {workout.notes ? <Body style={styles.workoutNotes}>{workout.notes}</Body> : null}
       <View style={styles.actions}>
+        <Button
+          label="Analysis"
+          variant="outline"
+          disabled={busy}
+          style={styles.actionButton}
+          onPress={() => router.push({ pathname: '/analysis/[id]', params: { id: workout.id } })}
+        />
         <Button
           label="Edit"
           variant="outline"

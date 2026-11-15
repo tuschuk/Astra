@@ -7,7 +7,9 @@
  * failed — one row the server keeps refusing must not stop the device from
  * ever receiving updates. One exception (B14): deletions made on other
  * devices are read and applied BEFORE the push, so this phone never uploads
- * an edit of a workout that no longer exists.
+ * an edit of a workout that no longer exists. And after a successful pull
+ * (B18), the engine asks the server to analyze any finished workout still
+ * missing an up-to-date analysis (see `analysis/analysis.ts`).
  *
  * When a sync happens (all without the user doing anything — NFR-1):
  *   - when the engine starts (the app opened with someone signed in, or they
@@ -23,6 +25,7 @@
  * There is deliberately no retry timer — the triggers above fire often enough
  * in real use, and adding one waits on evidence that it's needed.
  */
+import { analysisRequestPass, type AnalysisPassResult } from '@/analysis/analysis';
 import type { SqlDriver } from '@/db/driver';
 import { onLocalWrite } from '@/db/dao';
 import type { AppStateLike } from '@/lib/supabase';
@@ -47,12 +50,15 @@ export interface SyncTriggers {
   network?: NetworkSourceLike;
 }
 
-/** What one sync run did. `error` fields are set when that half failed. */
+/** What one sync run did. `error` fields are set when that part failed. */
 export interface SyncRunResult {
   push: PushResult | null;
   pull: PullResult | null;
+  /** The analysis requests (B18); null when skipped because the download failed. */
+  analysis?: AnalysisPassResult | null;
   pushError?: unknown;
   pullError?: unknown;
+  analysisError?: unknown;
 }
 
 /** What a sync engine is built from. */
@@ -161,7 +167,7 @@ export class SyncEngine {
     };
   }
 
-  /** One push-then-pull, each half's failure caught and logged. */
+  /** One push-then-pull-then-analysis-requests, each part's failure caught and logged. */
   private async runOnce(): Promise<SyncRunResult> {
     const { db, transport, userId } = this.options;
     const result: SyncRunResult = { push: null, pull: null };
@@ -182,6 +188,21 @@ export class SyncEngine {
     } catch (error) {
       result.pullError = error;
       this.report('Sync: download failed; it will resume from the last saved page', error);
+    }
+    // Last (B18): ask the server to analyze finished workouts that have no analysis yet, or an
+    // out-of-date one. Only after a successful download — then every workout without unsent
+    // changes carries the server's own timestamp, so "is the analysis stale?" is answered
+    // honestly. A failed download skips it; the next sync asks.
+    result.analysis = null;
+    if (result.pull) {
+      try {
+        result.analysis = await analysisRequestPass(db, transport, userId, (message, error) =>
+          this.report(message, error),
+        );
+      } catch (error) {
+        result.analysisError = error;
+        this.report('Sync: analysis requests failed; the next sync asks again', error);
+      }
     }
     return result;
   }

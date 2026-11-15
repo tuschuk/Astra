@@ -514,3 +514,72 @@ overrules). Questions that changed or sharpened the plan:
 - **Scope verdict:** right as written, with the G5 regeneration extension argued above as
   required by ANA-2's own DoD rather than added to it. Everything else that touches analyses
   (muscle map, posts, trends, recovery) stays with its own step.
+
+## Build record (builder, Nov 15, 2026)
+
+### Deviations from the plan
+
+1. **Owner check in the function (review fix, security).** The plan said RLS alone means the
+   function "can only ever read the caller's own workout". False: `workouts` / `workout_exercises`
+   / `sets` are readable for other people's public (and, to followers, followers-only) workouts,
+   while `personal_records` is owner-only — so user B analyzing A's public workout would have
+   upserted, via the service role, a wrong analysis (no PRs) over A's row. `handleAnalyzeRequest`
+   now takes the caller id (`index.ts` gets it from `auth.getUser(token)`) and answers 404 unless
+   `workout.user_id === callerId`. Tested in the fixture suite and through the fake server.
+2. **`MirroredTable` instead of adding the table to `RowByTable`.** `workout_analyses` is in
+   `TABLE_COLUMNS` / `fromSqlRow` via a wider `MirrorRowByTable`, but `SyncedTable` (which every
+   upload path, the outbox and the push take) stays the five uploaded tables, so the compiler
+   refuses any upload of an analysis. Downloads and function replies are saved through
+   `saveServerAnalysesTx`; `upsertRowsTx` kept its `SyncedTable` signature.
+3. **The request pass runs only after a successful pull** (not merely "after push and pull"),
+   so the staleness compare is always server stamp vs server stamp; a failed pull skips it.
+4. **Local deletion drops the analysis too.** Besides the tombstone path, `deleteLocalRowsTx` on
+   `workouts` deletes the mirror row (the device mirror has no FK to cascade it).
+5. **Unfinished / foreign / missing workout on the analysis screen** shows the same "isn't on
+   this phone" empty state as the saved-workout screen, with Back — not an automatic redirect.
+   The not-medical-advice statement shows in that state and while loading too.
+6. **Duration is shown as a clock reading** (`formatDuration`, m:ss / h:mm:ss) — exact to the
+   second, matching the stored `duration_seconds`.
+7. **The fake server runs the real `handler.ts`** (not a re-implementation), so app-level Jest
+   exercises the function's request logic end to end.
+8. **Deno verification:** `deno` was not permitted in the builder sandbox, so the plan's fallback
+   ran: the real `deploy_edge_function` (bundles and type-checks the whole graph:
+   `analyze-workout` → `_shared/analysis` → `_shared/training-math`). Deployed version 2, ACTIVE,
+   `verify_jwt: true`. The deployed copy is the repo code with doc comments trimmed (code
+   identical). The plan's "first real Deno consumer" risk is retired by that bundle.
+9. **Lint target:** `npm run lint` = `expo lint && npm run lint:functions`; the latter runs the
+   app's ESLint config from the repo root over `backend/supabase/functions` (base path = repo root
+   under `-c`), with `import/no-unresolved` off for those files only (`@jest/globals`, `npm:`).
+10. **`timestampMs` is the one microsecond-trimming parser**; `sync/pull.ts`'s `toMs` now is it.
+11. **New-PR staleness is by workout only (accepted).** A record moving onto or off this
+   workout's sets because of ANOTHER workout's finish/edit does not re-stamp this workout, so the
+   stored analysis keeps the records as they stood when it was computed — i.e. "PRs flagged that
+   session", which is what ANA-2 asks for. A later local recompute (offline, never synced) would
+   list only records the sets still hold. Same-rows-same-output still holds; the rows differ.
+
+### Review (mattpocock-skills:code-review, both axes)
+
+- **Standards:** one hard finding — a mirrored record-kind order (`KIND_ORDER`) in `summary.ts`
+  duplicating `compareRecordBooks` → fixed (now imports it). Judgement calls: timestamp-parse
+  duplicate (fixed, item 10); fake re-implementing the handler (fixed, item 7); `ANALYSIS_COLUMNS`
+  in the Deno file restating `TABLE_COLUMNS` (kept — Deno can't import the app); hand-rolled
+  `is_warmup === 1` in `readAnalysisInput` (kept, one line); `tbl === 'workout_analyses'` branch
+  in `pullStandalone` (kept, documented); two `ID_CHUNK`s with different reasons (kept, each
+  commented).
+- **Spec:** owner-check hole → fixed (deviation 1); PR staleness by workout only → accepted and
+  recorded (deviation 11); batch of the 10 newest could be starved by 10 permanently failing
+  workouts → deferred (DEFERRED.md); redirect vs empty state → deviation 5. No scope creep found.
+- **ANA-4 copy review (verdict: passes).** All four states read encouraging; no shaming, no
+  comparison with past sessions, no performance claims, no units, banned-word tripwire clean.
+  Review nit fixed: "today" → "this session" (analyses are reopened, backfilled and recomputed
+  later), and the no-load message now names warm-up work too (a warm-up-only session lands there).
+
+### Live probes run
+
+- Migration applied via MCP, file renamed to the recorded version `20261115080420`.
+- RLS probe (SQL, as `authenticated` with a real profile's claims, rolled back): owner reads 1
+  row; owner UPDATE changes 0 rows; owner INSERT refused by RLS; owner DELETE leaves the row;
+  another user reads 0; upsert-on-conflict keeps 1 row; deleting the workout cascades it away.
+- Security advisors: no new findings.
+- **Not run** (curl not permitted to the builder): an unauthenticated invoke being refused, and a
+  real signed-in invoke against a seeded workout — Gate 2.
