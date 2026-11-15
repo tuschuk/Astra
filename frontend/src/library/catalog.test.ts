@@ -7,8 +7,11 @@ import { describe, expect, it } from '@jest/globals';
 import {
   ALL_EXERCISES,
   ALL_EXERCISE_NAMES,
+  EQUIPMENT_ORDER,
   PATTERN_BODY,
   canonicalExerciseName,
+  exerciseById,
+  filterExercises,
   searchExercises,
   slugify,
 } from './catalog';
@@ -91,5 +94,71 @@ describe('exercise catalog', () => {
   it('empty search returns the full catalog', () => {
     expect(searchExercises('')).toHaveLength(ALL_EXERCISES.length);
     expect(searchExercises('   ')).toHaveLength(ALL_EXERCISES.length);
+  });
+});
+
+describe('filterExercises (Library muscle / equipment / region chips)', () => {
+  it('with no active filter returns the catalog unchanged', () => {
+    expect(filterExercises(ALL_EXERCISES, {})).toEqual(ALL_EXERCISES);
+    expect(filterExercises(ALL_EXERCISES, { body: null, muscle: null, equipment: null })).toEqual(ALL_EXERCISES);
+  });
+
+  it('equipment matches exactly', () => {
+    const dumbbell = filterExercises(ALL_EXERCISES, { equipment: 'Dumbbell' });
+    expect(dumbbell.length).toBeGreaterThan(0);
+    expect(dumbbell.every((e) => e.equipment === 'Dumbbell')).toBe(true);
+    expect(dumbbell).toHaveLength(ALL_EXERCISES.filter((e) => e.equipment === 'Dumbbell').length);
+  });
+
+  it('muscle includes any involvement, however light', () => {
+    const triceps = filterExercises(ALL_EXERCISES, { muscle: 'triceps' });
+    const expected = ALL_EXERCISES.filter((e) => (e.muscles.triceps ?? 0) > 0);
+    expect(new Set(triceps.map((e) => e.id))).toEqual(new Set(expected.map((e) => e.id)));
+    // Bench Press only assists with the triceps (0.25) but is still findable under it.
+    expect(triceps.map((e) => e.name)).toContain('Bench Press');
+  });
+
+  it('muscle orders by involvement, hardest first, ties in catalog order', () => {
+    const triceps = filterExercises(ALL_EXERCISES, { muscle: 'triceps' });
+    const levels = triceps.map((e) => e.muscles.triceps ?? 0);
+    expect(levels).toEqual([...levels].sort((a, b) => b - a));
+    // A dedicated triceps movement outranks a press that only assists with them.
+    const firstAccessory = triceps.findIndex((e) => e.patterns[0] === 'Tricep Accessory');
+    expect(firstAccessory).toBeGreaterThanOrEqual(0);
+    expect(firstAccessory).toBeLessThan(triceps.findIndex((e) => e.name === 'Bench Press'));
+    for (let i = 1; i < triceps.length; i++) {
+      if (levels[i] === levels[i - 1]) {
+        expect(ALL_EXERCISES.indexOf(triceps[i])).toBeGreaterThan(ALL_EXERCISES.indexOf(triceps[i - 1]));
+      }
+    }
+  });
+
+  it('combines filters with AND, and composes with name search', () => {
+    const narrowed = filterExercises(ALL_EXERCISES, { body: 'upper', muscle: 'chest', equipment: 'Dumbbell' });
+    expect(narrowed.length).toBeGreaterThan(0);
+    for (const e of narrowed) {
+      expect([e.name, e.body, e.equipment, (e.muscles.chest ?? 0) > 0]).toEqual([e.name, 'upper', 'Dumbbell', true]);
+    }
+    const searched = searchExercises('fly', narrowed);
+    expect(searched.length).toBeGreaterThan(0);
+    expect(searched.every((e) => e.name.toLowerCase().includes('fly'))).toBe(true);
+    // An impossible combination is an honest empty list, not a silent filter reset.
+    expect(filterExercises(ALL_EXERCISES, { body: 'lower', muscle: 'chest' })).toEqual([]);
+  });
+
+  it('every equipment value the catalog uses has a chip, once', () => {
+    for (const e of ALL_EXERCISES) expect(EQUIPMENT_ORDER).toContain(e.equipment);
+    expect(new Set(EQUIPMENT_ORDER).size).toBe(EQUIPMENT_ORDER.length);
+  });
+});
+
+describe('exerciseById', () => {
+  it('finds every catalog exercise by its slug', () => {
+    for (const e of ALL_EXERCISES) expect(exerciseById(e.id)).toBe(e);
+  });
+
+  it('returns undefined for an unknown slug', () => {
+    expect(exerciseById('not_an_exercise')).toBeUndefined();
+    expect(exerciseById('')).toBeUndefined();
   });
 });

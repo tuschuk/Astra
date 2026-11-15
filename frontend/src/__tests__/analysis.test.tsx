@@ -10,9 +10,9 @@ import React from 'react';
 import { fireEvent, screen } from '@testing-library/react-native';
 import { NOT_MEDICAL_ADVICE } from '@analysis';
 
-import { MUSCLE_ORDER } from '@/components/muscleMapPaths';
 import type { SqlDriver } from '@/db/driver';
 import type { MuscleKey } from '@/library/exercises';
+import { MUSCLE_ORDER } from '@/library/muscles';
 import { libraryExerciseId } from '@/library/uuidv5';
 import { unitStore } from '@/settings/unitStore';
 import { createPreparedDb, renderSignedIn, SIGNED_IN_USER_ID, steadyOptions } from '@/test-utils/loggerTestKit';

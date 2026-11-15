@@ -10,7 +10,7 @@
  * the shapes alone mean nothing without sight.
  *
  * Input: the session's muscle table (from `sessionMuscleLoads`). The shapes come from
- * `muscleMapPaths.ts`; the colour comes from the theme.
+ * `muscleMapPaths.ts`, muscle names from `@/library/muscles`; the colour comes from the theme.
  */
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
@@ -18,16 +18,10 @@ import Svg, { Path } from 'react-native-svg';
 
 import type { SessionMuscleLoads } from '@/analysis/muscles';
 import type { MuscleKey } from '@/library/exercises';
+import { MUSCLE_NAMES, rankMuscles } from '@/library/muscles';
 import { colors, spacing } from '@/theme';
 
-import {
-  BODY_OUTLINE,
-  FIGURE_VIEWBOX,
-  MUSCLE_NAMES,
-  MUSCLE_ORDER,
-  MUSCLE_REGIONS,
-  type FigureSide,
-} from './muscleMapPaths';
+import { BODY_OUTLINE, FIGURE_VIEWBOX, MUSCLE_REGIONS, type FigureSide } from './muscleMapPaths';
 
 /** The faintest a trained muscle is ever drawn, so even a light supporting role stays visible. */
 export const MIN_SHADE_OPACITY = 0.25;
@@ -44,13 +38,12 @@ export function shadeOpacity(intensity: number): number {
 
 /**
  * The trained muscles in reading order: most direct first, ties broken by the fixed top-to-bottom
- * order in `MUSCLE_ORDER` — so the same workout always lists the same way. Used by the legend and
- * the screen-reader label.
+ * muscle order — so the same workout always lists the same way. Used by the legend and the
+ * screen-reader label. The ordering rule itself is the library's `rankMuscles`, shared with the
+ * exercise detail screen so the two can never disagree.
  */
 export function trainedMuscles(loads: SessionMuscleLoads): MuscleKey[] {
-  return MUSCLE_ORDER.filter((m) => (loads[m] ?? 0) > 0).sort(
-    (a, b) => (loads[b] ?? 0) - (loads[a] ?? 0) || MUSCLE_ORDER.indexOf(a) - MUSCLE_ORDER.indexOf(b),
-  );
+  return rankMuscles(loads);
 }
 
 /** The trained muscles as one readable list: "Chest, Shoulders, Triceps". */

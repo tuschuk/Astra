@@ -156,6 +156,87 @@ export const ALL_EXERCISES: readonly ExerciseDef[] = buildCatalog();
 /** Every exercise name in the catalog (canonical spellings only). */
 export const ALL_EXERCISE_NAMES: readonly string[] = ALL_EXERCISES.map((e) => e.name);
 
+/** How each body region is written on screen — the Library chips and the detail screen. */
+export const BODY_REGION_LABELS: Record<BodyRegion, string> = {
+  upper: 'Upper',
+  lower: 'Lower',
+  core: 'Core',
+  cardio: 'Cardio',
+};
+
+/**
+ * Each kind of equipment's place in the chip row. Typed as a full `Record`, so adding a new
+ * equipment kind to the library without giving it a place here fails the type check — no kind
+ * can silently go unfilterable.
+ */
+const EQUIPMENT_RANK: Record<Equipment, number> = {
+  Barbell: 0,
+  Dumbbell: 1,
+  Bodyweight: 2,
+  Cable: 3,
+  Machine: 4,
+  'Cardio Machine': 5,
+};
+
+/**
+ * Every kind of equipment, in the order the Library tab's equipment chips show them (free weights
+ * first, then cable and machines, cardio last).
+ */
+export const EQUIPMENT_ORDER: readonly Equipment[] = (Object.keys(EQUIPMENT_RANK) as Equipment[]).sort(
+  (a, b) => EQUIPMENT_RANK[a] - EQUIPMENT_RANK[b],
+);
+
+/** The Library tab's active filters. A missing (or null) criterion means "any". */
+export interface ExerciseFilters {
+  body?: BodyRegion | null;
+  muscle?: MuscleKey | null;
+  equipment?: Equipment | null;
+}
+
+/**
+ * Narrow the catalog by the Library tab's filter chips (LIB-1).
+ *
+ * Input: a list of exercises and the active filters. Output: only the exercises matching *every*
+ * active filter —
+ *   - body region: the exercise's region is that region;
+ *   - equipment: performed with exactly that equipment;
+ *   - muscle: the exercise trains that muscle at all (any involvement counts — someone looking for
+ *     forearm work should find Farmer Carries even though forearms aren't its main muscle).
+ *
+ * When a muscle is chosen, the results are re-ordered so the exercises that train it hardest come
+ * first (equal ones keep catalog order) — tapping Chest leads with the bench press family rather
+ * than whatever merely brushes the chest. Without a muscle filter the catalog order is kept.
+ *
+ * Why it lives here, not in the screen: it is plain logic over the catalog, so it is tested here
+ * beside `searchExercises` and the screen stays a thin layer of chips.
+ */
+export function filterExercises(
+  exercises: readonly ExerciseDef[],
+  filters: ExerciseFilters,
+): readonly ExerciseDef[] {
+  const { body, muscle, equipment } = filters;
+  const matched = exercises.filter(
+    (e) =>
+      (!body || e.body === body) &&
+      (!equipment || e.equipment === equipment) &&
+      (!muscle || (e.muscles[muscle] ?? 0) > 0),
+  );
+  if (!muscle) return matched;
+  // Array sort is stable, so exercises with the same involvement keep their catalog order.
+  return [...matched].sort((a, b) => (b.muscles[muscle] ?? 0) - (a.muscles[muscle] ?? 0));
+}
+
+/** Slug → exercise, built once at load for the detail screen's lookup. */
+const EXERCISES_BY_ID: ReadonlyMap<string, ExerciseDef> = new Map(ALL_EXERCISES.map((e) => [e.id, e]));
+
+/**
+ * Find one library exercise by its slug id ('bench_press'), or `undefined` if no exercise has that
+ * id (e.g. a stale link). Used by the exercise detail screen.
+ */
+export function exerciseById(id: string): ExerciseDef | undefined {
+  return EXERCISES_BY_ID.get(id);
+}
+
 /**
  * Case-insensitive, alias-aware name search over the catalog. An empty or
  * whitespace query returns everything (the Library tab's resting state).

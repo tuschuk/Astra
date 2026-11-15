@@ -1,6 +1,7 @@
 /**
  * The drawing data of the muscle map (ANA-3): two simple body figures, front and back, and the
- * shape of each muscle group on them — plus the human name of every muscle group.
+ * shape of each muscle group on them. (Muscle names and their fixed order are not here — they live
+ * with the library in `@/library/muscles`, which the map reads from.)
  *
  * This file is art kept as data. Nothing in it decides *what* is shaded (that comes from the
  * workout and the exercise library); it only says *where* each muscle sits on the figures. A
@@ -24,42 +25,6 @@ export interface MuscleRegion {
 
 /** Width and height of one figure's drawing box. */
 export const FIGURE_VIEWBOX = { width: 100, height: 220 } as const;
-
-/**
- * Every muscle key in a fixed order (top of the body to the bottom). Wherever muscles are listed
- * and two have the same value, this order breaks the tie — so the same workout always reads the
- * same list.
- */
-export const MUSCLE_ORDER: readonly MuscleKey[] = [
-  'traps',
-  'shoulders',
-  'chest',
-  'lats',
-  'biceps',
-  'triceps',
-  'forearms',
-  'abs',
-  'glutes',
-  'quads',
-  'hamstrings',
-  'calves',
-];
-
-/** The display name of each muscle key, for the legend and the screen-reader label. */
-export const MUSCLE_NAMES: Record<MuscleKey, string> = {
-  traps: 'Traps',
-  shoulders: 'Shoulders',
-  chest: 'Chest',
-  lats: 'Lats',
-  biceps: 'Biceps',
-  triceps: 'Triceps',
-  forearms: 'Forearms',
-  abs: 'Abs',
-  glutes: 'Glutes',
-  quads: 'Quads',
-  hamstrings: 'Hamstrings',
-  calves: 'Calves',
-};
 
 type Point = readonly [number, number];
 

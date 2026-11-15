@@ -80,6 +80,7 @@ export default function RootLayout() {
  *   post-workout/[id] (the Post step after the analysis — share or skip, B21),
  *   edit-workout/[id] (changing a saved workout, B14),
  *   exercise-history/[exerciseId] (one exercise's past sessions and PRs),
+ *   exercise/[id] (a library exercise's card — cues, tips, muscles, B29),
  *   settings (units and account, B15), find-lifters (search people and follow
  *   them, B20), new-post (Share a photo — a progress pic or PR photo, B22) and
  *   post-comments/[id] (one post's comments, B23), profile/[id] (a lifter's
@@ -132,6 +133,7 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
           <Stack.Screen name="post-workout/[id]" />
           <Stack.Screen name="edit-workout/[id]" />
           <Stack.Screen name="exercise-history/[exerciseId]" />
+          <Stack.Screen name="exercise/[id]" />
           <Stack.Screen name="settings" />
           <Stack.Screen name="find-lifters" />
           <Stack.Screen name="new-post" />
