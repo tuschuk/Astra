@@ -1,5 +1,5 @@
 /**
- * The sync engine's view of the server: ten operations, nothing more.
+ * The sync engine's view of the server: twelve operations, nothing more.
  *
  * Why an interface: the real implementation (`supabaseTransport.ts`) talks to
  * Supabase over the network; tests use an in-memory fake server
@@ -21,6 +21,7 @@ import type {
   RowByTable,
   SetRow,
   SyncedTable,
+  WorkoutAnalysisRow,
   WorkoutExerciseRow,
   WorkoutRow,
 } from '@/db/dao';
@@ -110,6 +111,21 @@ export interface SyncTransport {
    * update changes nothing and still counts as done, so it can't block the queue.
    */
   pushUserSettings(userId: string, unit: WeightUnit): Promise<void>;
+
+  /**
+   * Asks the server to analyze one of the user's finished workouts (B18) — the
+   * `analyze-workout` server function — and returns the analysis row it stored (computed or
+   * recomputed from the workout as the server holds it now). Asking twice is harmless: the
+   * server keeps exactly one analysis per workout and replaces it. Throws if the server refuses
+   * (not found, not finished) or can't be reached.
+   */
+  requestAnalysis(workoutId: string): Promise<WorkoutAnalysisRow>;
+
+  /**
+   * One page of the user's own workout analyses (B18) changed after `after`, ordered by
+   * (updated_at, id) — how a second phone, or a reinstalled one, gets every analysis.
+   */
+  pullWorkoutAnalyses(userId: string, after: PullCursor | null, limit: number): Promise<WorkoutAnalysisRow[]>;
 }
 
 /**

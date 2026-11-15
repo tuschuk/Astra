@@ -106,12 +106,13 @@ describe('logger flow (B09 definition of done)', () => {
     await fireEvent.press(screen.getByLabelText('Finish'));
     await waitFor(() => expect(mockRouter.replace).toHaveBeenCalled());
     const [[target]] = mockRouter.replace.mock.calls as [[{ pathname: string; params: { id: string } }]];
-    expect(target.pathname).toBe('/workout/[id]');
+    // B18: Finish lands on the workout's analysis (its own tests: analysis.test.tsx).
+    expect(target.pathname).toBe('/analysis/[id]');
     // Finishing replaced the logger; it did not also try to go "back".
     expect(mockRouter.back).not.toHaveBeenCalled();
     await screen.unmount();
 
-    // 3. Finish opened the saved workout: every set, as logged.
+    // 3. The saved workout (the analysis's "View workout"): every set, as logged.
     mockParams = { id: target.params.id };
     await renderSignedIn(<SavedWorkoutScreen />);
     await screen.findByText('Bench Press');

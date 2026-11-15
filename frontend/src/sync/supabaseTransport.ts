@@ -12,11 +12,13 @@
  * equally harmless to retry. Downloads read in (updated_at, id) order after a
  * bookmark, and tombstones in id order (see transport.ts, pull.ts). The
  * settings row (B15) is the exception to both: it is read whole every time
- * and saved with a plain update (see `pushUserSettings`).
+ * and saved with a plain update (see `pushUserSettings`). Analyses (B18) are never uploaded:
+ * the phone asks the `analyze-workout` server function to make one (`requestAnalysis`) and
+ * downloads them like any bookmarked table.
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-import { TABLE_COLUMNS, type RowByTable, type SyncedTable } from '@/db/dao';
+import { TABLE_COLUMNS, type MirroredTable, type MirrorRowByTable, type RowByTable, type WorkoutAnalysisRow } from '@/db/dao';
 import { parseUnit } from '@/db/userSettings';
 
 import type { PullCursor, SyncTransport, TombstoneRow } from './transport';
@@ -37,19 +39,34 @@ export function afterCursorFilter(cursor: PullCursor): string {
 }
 
 /** The column list for a table's select, in the device's column order. */
-function columnsOf(tbl: SyncedTable): string {
+function columnsOf(tbl: MirroredTable): string {
   return (TABLE_COLUMNS[tbl] as readonly string[]).join(',');
+}
+
+/**
+ * Turns a `workout_analyses` row as the server sends it into the phone's row shape (B18). The
+ * one table whose column types differ between the two: the server's `new_prs` is JSON (it
+ * arrives as a list) while the phone keeps it as text, and `total_volume_kg` is a numeric that
+ * is made sure to be a number. Done here, once, so no reader has to care.
+ */
+export function toAnalysisRow(raw: Record<string, unknown>): WorkoutAnalysisRow {
+  const prs = raw.new_prs;
+  return {
+    ...(raw as unknown as WorkoutAnalysisRow),
+    total_volume_kg: Number(raw.total_volume_kg),
+    new_prs: typeof prs === 'string' ? prs : JSON.stringify(prs ?? []),
+  };
 }
 
 /** Builds a `SyncTransport` that talks to Supabase through `client`. */
 export function createSupabaseTransport(client: SupabaseClient): SyncTransport {
   /** One page of a table after a cursor, optionally narrowed to one user. */
-  async function page<T extends 'workouts' | 'exercises' | 'personal_records'>(
+  async function page<T extends 'workouts' | 'exercises' | 'personal_records' | 'workout_analyses'>(
     tbl: T,
     after: PullCursor | null,
     limit: number,
     userId?: string,
-  ): Promise<RowByTable[T][]> {
+  ): Promise<MirrorRowByTable[T][]> {
     let query = client.from(tbl).select(columnsOf(tbl));
     if (userId) query = query.eq('user_id', userId);
     if (after) query = query.or(afterCursorFilter(after));
@@ -58,7 +75,7 @@ export function createSupabaseTransport(client: SupabaseClient): SyncTransport {
       .order('id', { ascending: true })
       .limit(limit);
     throwIfError(error, `Download of ${tbl} failed`);
-    return (data ?? []) as unknown as RowByTable[T][];
+    return (data ?? []) as unknown as MirrorRowByTable[T][];
   }
 
   return {
@@ -117,6 +134,20 @@ export function createSupabaseTransport(client: SupabaseClient): SyncTransport {
       // No updated_at — the server's moddatetime trigger stamps it.
       const { error } = await client.from('user_settings').update({ unit }).eq('user_id', userId);
       throwIfError(error, 'Upload of settings failed');
+    },
+
+    async requestAnalysis(workoutId) {
+      // `functions.invoke` sends the signed-in user's login token, which the server function
+      // both requires (JWT check) and reads with (row-level security).
+      const { data, error } = await client.functions.invoke('analyze-workout', { body: { workoutId } });
+      throwIfError(error, 'Analysis request failed');
+      if (typeof data !== 'object' || data === null) throw new Error('Analysis request failed: empty reply');
+      return toAnalysisRow(data as Record<string, unknown>);
+    },
+
+    async pullWorkoutAnalyses(userId, after, limit) {
+      const rows = await page('workout_analyses', after, limit, userId);
+      return rows.map((r) => toAnalysisRow(r as unknown as Record<string, unknown>));
     },
   };
 

@@ -18,6 +18,11 @@
       "@training-math": [
         "../backend/supabase/functions/_shared/training-math/index.ts"
       ],
+      // `@analysis` — the post-workout analysis rules (B18), shared with the analyze-workout
+      // server function the same way.
+      "@analysis": [
+        "../backend/supabase/functions/_shared/analysis/index.ts"
+      ],
       "@jest/globals": [
         "./node_modules/@jest/globals"
       ]
@@ -28,6 +33,11 @@
     "**/*.tsx",
     ".expo/types/**/*.ts",
     "expo-env.d.ts",
-    "../backend/supabase/functions/_shared/training-math/**/*.ts"
+    "../backend/supabase/functions/_shared/training-math/**/*.ts",
+    "../backend/supabase/functions/_shared/analysis/**/*.ts",
+    // The analyze-workout function's request logic and its tests. Its index.ts is left out on
+    // purpose: it is Deno-only wiring (Deno.serve, an npm: import) that this compiler can't see.
+    "../backend/supabase/functions/analyze-workout/handler.ts",
+    "../backend/supabase/functions/tests/**/*.ts"
   ]
 }

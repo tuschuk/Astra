@@ -45,7 +45,8 @@
     "ios": "expo start --ios",
     "test": "jest",
     "typecheck": "tsc --noEmit",
-    "lint": "expo lint"
+    "lint": "expo lint && npm run lint:functions",
+    "lint:functions": "cd .. && node frontend/node_modules/eslint/bin/eslint.js -c frontend/eslint.config.js backend/supabase/functions"
   },
   "private": true
 }

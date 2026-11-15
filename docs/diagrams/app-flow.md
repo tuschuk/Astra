@@ -60,7 +60,7 @@ flowchart TD
 
   subgraph Device["On the device"]
     Store[("expo-sqlite key-value store<br/>the saved Supabase session<br/>(survives killing the app)")]
-    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records, user_settings (B15: user_id, unit) (schema V6)<br/>+ outbox (unsent changes; op = upsert or delete, B14) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
+    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records, user_settings (B15: user_id, unit),<br/>workout_analyses (B18, download-only, new_prs as JSON text) (schema V7)<br/>+ outbox (unsent changes; op = upsert or delete, B14) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
     LocalSeed["First-launch seed (library/seedLocal.ts)<br/>insert-if-missing all 151 exercises,<br/>id = uuidv5(namespace, slug); never queued"]
     WriteLocal["writeLocal / writeLocalRowsTx / writeLocalTree (db/dao.ts): the queued write paths<br/>rows + outbox lines + re-stamp & queue parent workout,<br/>all-or-nothing (writeLocalTree: a whole workout in one transaction)<br/>deleteLocalRowsTx (B14): delete rows + 'delete' outbox line + touch the root"]
     Drafts["writeDraftRows / deleteDraftRowsTx (db/dao.ts): the in-progress path<br/>saved at once, NEVER queued; refused for a finished workout"]
@@ -73,7 +73,7 @@ flowchart TD
     Logger["Active workout (app/active-workout.tsx)<br/>EntryCard per exercise: sets, reps + weight in the lifter's kg / lb (useDisplayUnit) + optional RPE,<br/>Warm-up chip (next sets are warm-ups), W toggle per logged set (B10),<br/>Bodyweight exercise: weight box = '+ lb' added load, reps alone logs,<br/>Timed chip (B11): reveals Time (s or m:ss) + Score boxes, closing clears them,<br/>Log set (reps, weight, time or score), Drop = next drop of the latest set (B11),<br/>Repeat last set (ONE tap, NFR-2), remove set (a drop set's top row removes all of it),<br/>link toggle (B11): superset with the card above, 'Superset' badge,<br/>drops shown as ↳ rows under one 'Set n' (sets numbered as the lifter counts),<br/>move up / down, remove exercise,<br/>last-time panel (LOG-5): 'Last time' line (work sets only) + 'PRs: 1RM … · e1RM … · 5RM …'<br/>+ History link (B13; PRs read once on mount, they only change at finish)<br/>one store call per card at a time<br/>notes (B12): header Title + Notes boxes; 'Add note' under each exercise;<br/>note icon on every logged set / drop opens its box (one set box per card);<br/>boxes autosave (useAutosaveText) ~750 ms after typing + on close;<br/>Finish flushes every box first (AutosaveRegistry)<br/>empty slot on open: resume from astra.db or go back"]
     Picker["Add exercise panel (ExercisePicker, a Modal)<br/>alias-aware searchExercises over the catalog;<br/>slug → libraryExerciseId → store.addExercise"]
     EmptyQ{"Finish with zero sets?"}
-    Saved["Saved workout (app/workout/[id].tsx); re-read on every focus (B14)<br/>date, duration, every exercise + set in the lifter's unit<br/>superset = ONE card labelled 'Superset' (B11);<br/>drop set = ONE row 'a → b → c'; time and score shown (B11)<br/>title (or date); workout, exercise and set notes as text (B12; drop notes '↳ …')<br/>PR badge under each set that holds a record now: 'PR · 1RM · e1RM' (B13)<br/>Edit button; Delete button (asks first, B14)<br/>(another user's / unfinished id: 'not on this phone')"]
+    Saved["Saved workout (app/workout/[id].tsx); re-read on every focus (B14)<br/>date, duration, every exercise + set in the lifter's unit<br/>superset = ONE card labelled 'Superset' (B11);<br/>drop set = ONE row 'a → b → c'; time and score shown (B11)<br/>title (or date); workout, exercise and set notes as text (B12; drop notes '↳ …')<br/>PR badge under each set that holds a record now: 'PR · 1RM · e1RM' (B13)<br/>Analysis button (B18); Edit button; Delete button (asks first, B14)<br/>(another user's / unfinished id: 'not on this phone')"]
     EditWO_UI["Edit workout (app/edit-workout/[id].tsx, B14, LOG-9)<br/>the logger's surface over a FINISHED workout: Title + Notes boxes,<br/>EntryCard per exercise (log / repeat / remove sets, W, notes, links, move, remove),<br/>Add exercise; each change saved + queued at once, PRs recomputed in the same save<br/>Done = flush note boxes, back; Delete workout (asks first)<br/>(another user's / unfinished id: 'can't be edited on this phone')"]
     Saved -->|"Edit: router.push"| EditWO_UI
     EditWO_UI -->|"Done: router.back"| Saved
@@ -87,8 +87,12 @@ flowchart TD
     ToolKit -->|"Close / system back: logger still mounted underneath, exactly as left"| Logger
     Logger -->|Finish| EmptyQ
     EmptyQ -->|"yes: 'Nothing logged yet'<br/>Discard workout / Keep lifting"| Logger
-    EmptyQ -->|"no: finish, clear slot,<br/>router.replace"| Saved
+    AnalysisScr["Workout analysis (app/analysis/[id].tsx, B18: ANA-1/2/4, NFR-9)<br/>workout title or date; encouraging headline + message (rule-picked, no AI);<br/>Volume (lifter's unit), Sets ('n sets · k warm-up'), Duration (m:ss);<br/>'New PRs': exercise · book · weight; View workout; Back;<br/>not-medical-advice statement in EVERY state (incl. loading / missing);<br/>re-read on every focus; works offline<br/>(another user's / unfinished id: 'not on this phone')"]
+    EmptyQ -->|"no: finish, clear slot,<br/>router.replace"| AnalysisScr
+    AnalysisScr -->|"View workout: router.push"| Saved
+    Saved -->|"Analysis: router.push"| AnalysisScr
   end
+  AnalysisScr -->|"Back with nothing behind: router.replace"| Workout
   Workout -->|"Start / Resume: store into the session slot<br/>(activeWorkoutSession.ts, keyed by user id)"| Logger
   Workout -->|tap a past workout| Saved
   Workout -->|"tap a Tool Kit tile: initialTool = that tool"| ToolKit
@@ -141,6 +145,17 @@ flowchart TD
   PrQ --> Saved
   PrQ --> History
 
+  subgraph AnaMod["Analysis on the phone (src/analysis/analysis.ts, B18)"]
+    ForScreen{"analysisForScreen: unsent lines in the workout tree / its PR rows?<br/>yes → LOCAL (no clock compare);<br/>no → STORED row unless stale (workout_updated_at &lt; workout.updated_at);<br/>no stored row → LOCAL"}
+    LocalA["localAnalysis: read workout + slots + sets + PR rows citing them<br/>+ exercise names → buildAnalysis (same rules as the server)"]
+    StoredA["storedAnalysis: the mirror row, new_prs JSON parsed"]
+    ReqPass["analysisRequestPass: finished workouts with no / stale analysis<br/>and no unsent lines, newest first, max 10 per sync;<br/>requestAnalysis each; save the reply (saveServerAnalysesTx);<br/>a failure is logged, retried next sync"]
+    ForScreen --> LocalA
+    ForScreen --> StoredA
+  end
+  LocalDB --> ForScreen --> AnalysisScr
+  DispUnit -->|"unit"| AnalysisScr
+
   subgraph ActiveWO["Active-workout store (src/workout/activeWorkout.ts)<br/>driven by the logger screens through the session slot + useActiveWorkout hooks"]
     StartWO["startActiveWorkout: blank public workout<br/>(refused while one is in progress)"]
     ResumeWO["loadActiveWorkout: on launch, rebuild the<br/>signed-in user's unfinished workout from astra.db"]
@@ -177,9 +192,11 @@ flowchart TD
     Triggers{{"Triggers, debounced 750 ms, one run at a time:<br/>start with a session, app back to foreground,<br/>network reconnects, a local write"}}
     PrePass["Tombstones first (B14): apply other devices' deletions<br/>BEFORE uploading, so an unsent edit can't re-create<br/>a workout deleted elsewhere"]
     Push["Push: DELETE phase first (B14): outbox 'delete' lines,<br/>children's tables first, batches of 100 ids;<br/>then outbox → server upserts, parents first<br/>(… sets, then personal_records), batches of 500 on id (no updated_at),<br/>then workouts again to re-touch roots;<br/>clear lines up to each row's watermark PER OP; stop on failure;<br/>LAST (B15): settings phase — pending user_settings line → UPDATE unit by user_id<br/>(never insert; zero-row update = done)"]
-    Pull["Pull: exercises, then own workouts by (updated_at, id)<br/>bookmark minus 5 s; fetch their entries and sets;<br/>reconcile (B14): drop local entries / sets the server's copy lacks<br/>(+ PR rows citing them), unless they have unsent lines;<br/>then own personal_records on their own bookmark (B13);<br/>LAST: tombstones after the stored id (B14): deleted workout → local tree<br/>+ its outbox lines go; deleted PR → goes unless unsent or newer;<br/>then (B15) the user_settings row, no bookmark: saved unless a toggle is unsent<br/>(check + save in one transaction), then onUserSettingsPulled → unitStore.applyPulled;<br/>save page + bookmark in one transaction;<br/>skip rows with unsent local edits"]
+    Pull["Pull: exercises, then own workouts by (updated_at, id)<br/>bookmark minus 5 s; fetch their entries and sets;<br/>reconcile (B14): drop local entries / sets the server's copy lacks<br/>(+ PR rows citing them), unless they have unsent lines;<br/>then own personal_records on their own bookmark (B13);<br/>LAST: tombstones after the stored id (B14): deleted workout → local tree<br/>+ its outbox lines go; deleted PR → goes unless unsent or newer;<br/>then (B15) the user_settings row, no bookmark: saved unless a toggle is unsent<br/>(check + save in one transaction), then onUserSettingsPulled → unitStore.applyPulled;<br/>save page + bookmark in one transaction;<br/>skip rows with unsent local edits;<br/>B18: after personal_records, workout_analyses on pull_cursor:workout_analyses<br/>(saved as they come — never any outbox lines); a workout tombstone also drops its analysis"]
     Triggers --> PrePass --> Push --> Pull
+    Pull -->|"only if the pull succeeded (B18)"| ReqPass
   end
+  ReqPass -->|"reply row"| LocalDB
   Catalog --> LocalSeed
   Root -->|"useSync: opens astra.db (seeds) always;<br/>while signed in: unitStore.hydrate, then the engine;<br/>signed out: unitStore.reset"| LocalDB
   Root -->|"hydrate / reset; applyPulled passed to the engine"| UnitStore
@@ -195,9 +212,12 @@ flowchart TD
   subgraph Backend["Supabase project (live)"]
     AuthAPI["Supabase Auth<br/>email + password accounts"]
     Trigger{"signup trigger handle_new_user<br/>refuses missing / under-18 birthdate;<br/>creates profile, settings, body data"}
-    DB[("Postgres<br/>profiles, settings, body data, follows, blocks,<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records (owner-only RLS; keep-best trigger<br/>never lets an UPDATE lower a record; delete+insert can),<br/>sync_tombstones (B14: written by delete triggers, owner-only read)<br/>see database-erd.md")]
+    DB[("Postgres<br/>profiles, settings, body data, follows, blocks,<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records (owner-only RLS; keep-best trigger<br/>never lets an UPDATE lower a record; delete+insert can),<br/>sync_tombstones (B14: written by delete triggers, owner-only read),<br/>workout_analyses (B18: owner read only; NO write policies)<br/>see database-erd.md")]
+    AnalyzeFn["Edge function analyze-workout (B18, deployed, verify_jwt on)<br/>POST {workoutId} with the user's token → getUser;<br/>reads AS THE CALLER (RLS); 404 unless the caller OWNS the workout;<br/>422 if unfinished; buildAnalysis (no model); upsert by id<br/>with the SERVICE ROLE (one statement); returns the stored row"]
     AuthAPI --> Trigger --> DB
+    AnalyzeFn -->|"select as caller; upsert workout_analyses as service role"| DB
   end
+  ReqPass -->|"supabase.functions.invoke('analyze-workout')"| AnalyzeFn
 
   Gate -->|no: signUp with birthdate in metadata| AuthAPI
   SignIn -->|signInWithPassword| AuthAPI
@@ -215,15 +235,19 @@ flowchart TD
   Library -.->|"not wired yet: Library still reads the bundled catalog, not astra.db"| LocalDB
 
   subgraph Shared["Shared training math (backend/supabase/functions/_shared/training-math)<br/>import name in the app: @training-math"]
-    MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification<br/>+ recordBooks fold (which set holds each book), beatsRecord, compareRecordBooks (B13),<br/>session volume (volume.ts: warm-ups and weightless sets add 0),<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store, the logger's<br/>display (displayWeight) and the Tool Kit (B16); no server function yet"]
+    MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification<br/>+ recordBooks fold (which set holds each book), beatsRecord, compareRecordBooks (B13),<br/>session volume (volume.ts: warm-ups and weightless sets add 0),<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store, the logger's<br/>display (displayWeight), the Tool Kit (B16) and the analysis rules (B18)"]
+    AnaRules["Analysis rules (_shared/analysis, B18), import name @analysis:<br/>buildSummary (sessionVolumeKg, set counts, duration, PRs citing the sets),<br/>pickCopy (4 states: pr / weighted / unloaded / empty), NOT_MEDICAL_ADVICE,<br/>buildAnalysis + ANALYSIS_ENGINE_VERSION = 1; pure, deterministic"]
+    MathMod --> AnaRules
   end
+  AnaRules -->|"buildAnalysis (Deno, relative import)"| AnalyzeFn
+  AnaRules -->|"buildAnalysis (offline view)"| LocalA
+  AnaRules -->|"NOT_MEDICAL_ADVICE"| AnalysisScr
   MathMod -->|"lbToKg, assertValidSetFields (incl. score + set-note length),<br/>assertValidSupersetGroup, title / workout-note / entry-note caps (B12),<br/>round weight / RPE for storage"| MutWO
   MathMod -->|"displayWeight (format.ts) in the unit from useDisplayUnit"| Logger
   MathMod -->|"recordBooks, beatsRecord, roundToIncrement (B13)"| FinishWO
   MathMod -->|"recordBooks, roundToIncrement (B14)"| Recompute
   MathMod -->|"epleyE1rm, weightForReps, workingWeightFromRpe, percentOfOneRm,<br/>workingWeightFromPercent, loadBar, lbToKg / kgToLb, roundToIncrement, displayWeight (B16)"| ToolKit
   MathMod -.->|"not wired yet: session volume display"| Workout
-  MathMod -.->|"not wired yet: post-workout analysis<br/>server function (B18)"| Backend
 
   class Home,Market,Communities scaffold
   class Seed,Catalog,DB,Store,LocalDB,RackStore data
@@ -268,7 +292,8 @@ flowchart TD
    killed app keeps them. **Repeat** does not copy a set's note. The saved workout shows the
    title (or the date when there is none), the workout's note, each exercise's note, and each
    set's note under it (a drop's marked "↳").
-   **Finish** saves it and opens the read-only saved workout (finishing with no sets offers only
+   **Finish** saves it and opens its post-workout analysis (B18; **View workout** there opens the
+   read-only saved workout) (finishing with no sets offers only
    "Discard workout" or "Keep lifting"). **Discard** asks, then deletes the draft. Leaving the
    logger or killing the app loses nothing: the Workout tab then offers **Resume workout** /
    **Discard workout** instead of Start.
@@ -325,7 +350,17 @@ flowchart TD
    A finite timer books a local notification for its zero, so the alert arrives with Astra in
    the background (or closed). The first start asks notification permission; if it is refused,
    a line says alerts are off and the timer works the same.
-13. Everything else is a placeholder that renders its final layout with inert controls (Start
+13. **Read the post-workout analysis (B18, ANA-1/2/4/11, NFR-9).** Finishing a workout lands on
+   its analysis; any saved workout's **Analysis** button reopens it (workouts finished before
+   B18 included). It shows an encouraging headline and message picked by fixed rules (a PR day,
+   a solid weighted session, bodyweight / timed / warm-up work, or an empty finish — never
+   shaming, no performance claims, no AI), the session's total volume in the lifter's unit, sets
+   (with warm-ups counted separately), duration, and the records the session holds
+   ("Squat · 5RM · 225 lb"). The not-medical-advice statement is at the bottom of every state.
+   With no signal it is computed on the phone with the very rules the server uses; after the
+   next sync the server's stored copy (identical unless the data differs) takes over. Editing
+   the workout recomputes it.
+14. Everything else is a placeholder that renders its final layout with inert controls (Start
    from a program, Home, Marketplace, Communities).
 
 ## Data path today
@@ -483,9 +518,28 @@ flowchart TD
     local edit is never overwritten.
   - **Failures:** they are logged, and whatever didn't upload stays queued. There is no retry
     timer.
-- **Still unwired:** the Library reads the bundled catalog, not `astra.db`; post-workout
-  analysis (B18/B21) doesn't exist yet; Settings has no Notifications (B47) or Privacy (B26)
-  section; nothing feeds the social feed.
+- **Post-workout analysis (B18).** The rules live once, in
+  `backend/supabase/functions/_shared/analysis/` (`@analysis` in the app — same alias wiring as
+  `@training-math`): `buildSummary` (volume via `sessionVolumeKg`, rounded to 3 decimals; total
+  and working sets; whole-second duration; the `personal_records` rows citing the workout's sets,
+  ordered by set then `compareRecordBooks`, exercise names snapshotted), `pickCopy` (four
+  deterministic states; no numbers but a PR count, no units), `NOT_MEDICAL_ADVICE`, and
+  `buildAnalysis` (+ `ANALYSIS_ENGINE_VERSION`). The edge function
+  `functions/analyze-workout/` is `index.ts` (Deno wiring: caller client from the request's
+  token, `auth.getUser`, service-role client for the one upsert) over `handler.ts` (the testable
+  logic: 400 bad id, 404 not the caller's own, 422 unfinished, then build + save). On the phone,
+  `src/analysis/analysis.ts` reads device SQLite for `localAnalysis`, the mirror row for
+  `storedAnalysis`, and picks between them in `analysisForScreen` (pending outbox lines → local;
+  else stored unless stale). The engine runs `analysisRequestPass` after every successful pull:
+  up to 10 finished workouts with no or a stale analysis and nothing pending, newest first, each
+  through `transport.requestAnalysis` (`functions.invoke('analyze-workout')`), the reply saved
+  via `saveServerAnalysesTx` (the table is `MirroredTable` but not `SyncedTable`, so nothing can
+  queue an upload of it). Pull's fourth bookmark (`pull_cursor:workout_analyses`) follows the
+  records; a workout tombstone or a local `deleteLocalRowsTx('workouts')` also drops the
+  analysis row. Device schema V7.
+- **Still unwired:** the Library reads the bundled catalog, not `astra.db`; posts linking to an
+  analysis (B21) and the muscle map (B19) don't exist yet; Settings has no Notifications (B47) or
+  Privacy (B26) section; nothing feeds the social feed.
 
 ## Shared pieces every screen uses
 
@@ -508,7 +562,7 @@ flowchart TD
 - **Training math** (`backend/supabase/functions/_shared/training-math/`, imported in the app as
   `@training-math`) is the only place e1RM, RPE and %1RM working weights, plate breakdowns, kg/lb
   conversion, PR detection and session volume (`volume.ts`, external load only, warm-ups
-  excluded; no screen shows it yet) are computed. It lives beside the server functions so Supabase can
+  excluded; shown on the analysis screen since B18) are computed. It lives beside the server functions so Supabase can
   bundle it; `frontend/metro.config.js`, `tsconfig.json` and `jest.config.js` map the alias.
   Weights go in and come out in kg (the plate loader alone works in the rack's own unit); rounded
   display numbers are never stored. `limits.ts` holds the server's rules on a set and the

@@ -2,8 +2,8 @@
  * Download: brings the server's changes to the user's own data onto the
  * device — their workouts (with every entry and set inside them), the
  * exercises they can see (the shared library plus their customs), their
- * personal records (B13), and their settings row (B15, read whole each time —
- * see `pullUserSettingsPass`).
+ * personal records (B13), their workout analyses (B18), and their settings
+ * row (B15, read whole each time — see `pullUserSettingsPass`).
  *
  * How it finds what changed: each table keeps a bookmark in `sync_state` —
  * the (updated_at, id) of the last row downloaded. A pull asks for rows after
@@ -37,8 +37,10 @@
  *   - Entry and set downloads ask for at most CHILD_CHUNK_SIZE ids per request,
  *     so a large page never builds a request URL the server rejects.
  */
+import { timestampMs } from '@analysis';
+
 import { placeholders, type SqlDriver, type SqlExecutor } from '@/db/driver';
-import { upsertRowsTx, type RowByTable, type SyncedTable } from '@/db/dao';
+import { saveServerAnalysesTx, upsertRowsTx, type MirrorRowByTable, type RowByTable, type SyncedTable } from '@/db/dao';
 import { writeUserSettingsRowTx, type UserSettingsRow } from '@/db/userSettings';
 
 import { dropLinesTx, rowsWithPendingChanges } from './outbox';
@@ -54,11 +56,12 @@ export const PULL_OVERLAP_MS = 5000;
 /** The lowest possible id, used as the tie-breaker when rewinding a bookmark. */
 const MIN_ID = '00000000-0000-0000-0000-000000000000';
 
-/** `sync_state` keys of the three bookmarks. */
+/** `sync_state` keys of the four bookmarks. */
 export const CURSOR_KEYS = {
   workouts: 'pull_cursor:workouts',
   exercises: 'pull_cursor:exercises',
   personal_records: 'pull_cursor:personal_records',
+  workout_analyses: 'pull_cursor:workout_analyses',
 } as const;
 
 type CursorKey = (typeof CURSOR_KEYS)[keyof typeof CURSOR_KEYS];
@@ -132,6 +135,8 @@ export interface PullResult {
   workout_exercises: number;
   sets: number;
   personal_records: number;
+  /** Workout analyses saved on the phone (B18). */
+  workout_analyses: number;
   /** Local slots and sets removed because the server's copy of their workout no longer has them (B14). */
   removed: number;
   /** Tombstones that deleted something on the device (B14). */
@@ -144,11 +149,14 @@ export interface PullResult {
  * Downloads one stand-alone table (no children) page by page, from the
  * rewound bookmark until a short page says there is nothing more. Each page
  * and its bookmark are saved in one transaction.
+ *
+ * Analyses (B18) are saved as they come: they never have outbox lines (the
+ * phone never writes one of its own), so there is no local change to protect.
  */
-async function pullStandalone<T extends 'exercises' | 'personal_records'>(
+async function pullStandalone<T extends 'exercises' | 'personal_records' | 'workout_analyses'>(
   db: SqlDriver,
   tbl: T,
-  fetchPage: (after: PullCursor | null) => Promise<RowByTable[T][]>,
+  fetchPage: (after: PullCursor | null) => Promise<MirrorRowByTable[T][]>,
   result: PullResult,
 ): Promise<void> {
   const key = CURSOR_KEYS[tbl];
@@ -158,7 +166,13 @@ async function pullStandalone<T extends 'exercises' | 'personal_records'>(
     if (page.length === 0) return;
     const next = lastCursor(page);
     await db.withTransactionAsync(async (tx) => {
-      result[tbl] += await applyRows(tx, tbl, page);
+      if (tbl === 'workout_analyses') {
+        await saveServerAnalysesTx(tx, page as readonly MirrorRowByTable['workout_analyses'][]);
+        result.workout_analyses += page.length;
+      } else {
+        const synced = tbl as 'exercises' | 'personal_records';
+        result[synced] += await applyRows(tx, synced, page as readonly RowByTable[typeof synced][]);
+      }
       await writeCursor(tx, key, next);
     });
     if (page.length < PULL_PAGE_SIZE) return;
@@ -313,14 +327,12 @@ async function dropRecordsCitingSets(tx: SqlExecutor, setIds: readonly string[])
 export const TOMBSTONE_CURSOR_KEY = 'pull_cursor:tombstones';
 
 /**
- * A server or device timestamp as milliseconds since 1970 (NaN if unreadable). Postgres sends
- * microseconds (…:00.123456+00:00); not every JavaScript engine parses more than three fraction
- * digits, so they are trimmed to milliseconds first. Comparing as numbers also makes a device
- * stamp ("…Z") and a server stamp ("…+00:00") comparable, which their text is not.
+ * A server or device timestamp as milliseconds since 1970 (NaN if unreadable) — the shared
+ * `timestampMs` (it trims Postgres's microseconds, which not every JavaScript engine parses).
+ * Comparing as numbers also makes a device stamp ("…Z") and a server stamp ("…+00:00")
+ * comparable, which their text is not.
  */
-function toMs(timestamp: string): number {
-  return Date.parse(timestamp.replace(/(\.\d{3})\d+/, '$1'));
-}
+const toMs = timestampMs;
 
 /**
  * Applies one tombstone — "this row was deleted on the server" — inside a transaction.
@@ -352,6 +364,8 @@ async function applyTombstone(tx: SqlExecutor, tombstone: TombstoneRow): Promise
     await dropLinesTx(tx, 'workout_exercises', entryIds);
     await dropLinesTx(tx, 'workouts', [tombstone.row_id]);
     await tx.runAsync('delete from workouts where id = ?', [tombstone.row_id]);
+    // Its analysis too (B18): the server's cascade already removed it there.
+    await tx.runAsync('delete from workout_analyses where id = ?', [tombstone.row_id]);
     return true;
   }
   const record = await tx.getFirstAsync<{ updated_at: string }>('select updated_at from personal_records where id = ?', [
@@ -438,7 +452,8 @@ export interface PullOptions {
 /**
  * Downloads everything new for user `userId`: exercises first (workouts point
  * at them), then workouts with their contents, then the user's personal
- * records (they cite sets), then deletions, then their settings row. Throws
+ * records (they cite sets), then their workout analyses (B18), then
+ * deletions, then their settings row. Throws
  * the transport's error on failure; pages already saved stay saved and their
  * bookmarks stay moved.
  */
@@ -454,6 +469,7 @@ export async function pullChanges(
     workout_exercises: 0,
     sets: 0,
     personal_records: 0,
+    workout_analyses: 0,
     removed: 0,
     tombstones: 0,
     userSettings: 0,
@@ -464,6 +480,13 @@ export async function pullChanges(
     db,
     'personal_records',
     (after) => transport.pullPersonalRecords(userId, after, PULL_PAGE_SIZE),
+    result,
+  );
+  // After the records: an analysis names the records its workout holds, so they land first.
+  await pullStandalone(
+    db,
+    'workout_analyses',
+    (after) => transport.pullWorkoutAnalyses(userId, after, PULL_PAGE_SIZE),
     result,
   );
   await pullTombstonePass(db, transport, userId, result);
