@@ -10,10 +10,11 @@ import { fireEvent, screen } from '@testing-library/react-native';
 
 import type { SqlDriver } from '@/db/driver';
 import { libraryExerciseId } from '@/library/uuidv5';
-import { createPreparedDb, renderSignedIn, SIGNED_IN_USER_ID, steadyOptions } from '@/test-utils/loggerTestKit';
+import { createPreparedDb, lb, renderSignedIn, SIGNED_IN_USER_ID, steadyOptions } from '@/test-utils/loggerTestKit';
 import { OTHER_USER_ID } from '@/test-utils/workoutFixtures';
 import { startActiveWorkout, type SetInput } from '@/workout/activeWorkout';
 import { workoutDateLabel } from '@/workout/format';
+import { EXERCISE_SESSION_LIMIT } from '@/workout/history';
 
 import ExerciseHistoryScreen from '@/app/exercise-history/[exerciseId]';
 
@@ -38,12 +39,6 @@ beforeEach(async () => {
   jest.clearAllMocks();
   db = await createPreparedDb();
   mockOpenDatabase.mockResolvedValue(db);
-});
-
-const lb = (reps: number, weight: number, extra: Partial<SetInput> = {}): SetInput => ({
-  reps,
-  weight: { value: weight, unit: 'lb' },
-  ...extra,
 });
 
 /** Logs one workout of `exerciseId` sets starting at `start`; finished unless told otherwise. */
@@ -100,6 +95,22 @@ describe('Exercise history screen', () => {
     await renderSignedIn(<ExerciseHistoryScreen />);
     expect(await screen.findByText('No PRs yet')).toBeTruthy();
     expect(screen.getByText('No finished sessions of this exercise yet.')).toBeTruthy();
+  });
+
+  it('lists the newest 50 sessions, and "Show older sessions" reaches the rest (B30)', async () => {
+    // 51 sessions, one a day from Sep 1, each a single heavier than the last; the oldest is 100 lb.
+    const start = Date.parse('2026-09-01T12:00:00.000Z');
+    for (let i = 0; i < EXERCISE_SESSION_LIMIT + 1; i++) {
+      await logWorkout(new Date(start + i * 86_400_000).toISOString(), [lb(1, 100 + i)]);
+    }
+    mockParams = { exerciseId: BENCH };
+    await renderSignedIn(<ExerciseHistoryScreen />);
+    expect(await screen.findByText(`1 × ${100 + EXERCISE_SESSION_LIMIT} lb`)).toBeTruthy();
+    expect(screen.queryByText('1 × 100 lb')).toBeNull();
+
+    await fireEvent.press(screen.getByText('Show older sessions'));
+    expect(await screen.findByText('1 × 100 lb')).toBeTruthy();
+    expect(screen.queryByText('Show older sessions')).toBeNull();
   });
 
   it('Back returns to where it was opened from', async () => {
