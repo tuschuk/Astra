@@ -7,7 +7,7 @@ the rules a diagram cannot draw (who can see what, what happens automatically, w
 
 Source migrations: `20261114100000_identity.sql`, `20261114100100_training.sql`,
 `20261114110000_fix_exercise_delete.sql`, `20261114120000_exercises_slug.sql`,
-`20261114120100_library_seed.sql` (generated — see below), `20261114130000_signup_birthdate_gate.sql`
+`20261114120100_library_seed.sql` (generated — see below), `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
 not stamp the birthdate).
@@ -143,7 +143,7 @@ migration, because workout history references these ids).
   drop after it is 1, 2, … (CHECK ≥ 1). Displays group a set with the one before it when its drop
   number is higher than that set's (null counts as 0), so a drop set reads as one set.
 - **Timed or scored work**: `sets.duration_seconds` (CHECK ≥ 0) holds a time; `sets.score` (added
-  by `20261115100000_sets_score.sql`, recorded live as version `20261115024010`; CHECK
+  by `20261115024010_sets_score.sql`; CHECK
   `char_length(score) <= 100`) holds free text such as "7 rounds + 12 reps". Either can sit
   alongside reps and weight, or stand alone. Nothing parses `score`; timed or scored sets without
   reps and weight add no volume and set no PRs.
@@ -157,7 +157,7 @@ migration, because workout history references these ids).
 ## What happens automatically (triggers)
 
 - **Signup creates the identity rows — and enforces 18+.** Inserting into `auth.users` fires
-  `handle_new_user` (migration `20261114130000_signup_birthdate_gate.sql`). It first reads
+  `handle_new_user` (migration `20261114224613_signup_birthdate_gate.sql`). It first reads
   `birthdate` (`YYYY-MM-DD`) from the signup's user metadata (`raw_user_meta_data`) and **refuses
   the signup** (raises, rolling the whole account creation back) if it is missing, not a real date,
   or later than `current_date - 18 years`. Otherwise it inserts a `profiles` row (display name taken

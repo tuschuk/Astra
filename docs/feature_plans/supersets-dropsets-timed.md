@@ -360,8 +360,9 @@ at full severity (B08–B10 precedent). Questions that changed or sharpened the 
    `(prev ?? 0) + 1` but also required that a removed middle drop leave a gap the rule
    tolerates. Exactly +1 would break the chain at the gap. Strictly increasing satisfies both
    the gap rule and isolating a Repeat-copied stray.
-5. **Migration version.** The file is `20261115100000_sets_score.sql`; Supabase recorded the live
-   apply as version `20261115024010` (same mismatch pattern as B05's signup gate). The rename
-   to match was declined by the permission layer; left for Gate 2 / DEFERRED.
+5. **Migration version.** The builder wrote the file as `20261115100000_sets_score.sql`; Supabase
+   recorded the live apply as version `20261115024010` (same mismatch pattern as B05's signup
+   gate). The builder's rename was declined by its permission layer; **renamed at Gate 2** to
+   `20261115024010_sets_score.sql` (and B05's file to `20261114224613_…`), references updated.
 6. **v1 → v2 upgrade test added** to `schema.test.ts`. The plan assumed B07's harness already
    ran an upgrade path; only fresh-file creation was covered.

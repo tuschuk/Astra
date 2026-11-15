@@ -19,7 +19,7 @@
  *   drop_set_position smallint  check (drop_set_position >= 1)     → whole, 1 … 32767
  *   duration_seconds  integer   check (duration_seconds >= 0)      → whole, 0 … 2147483647
  *   score             text      check (char_length(score) <= 100)  → at most 100 characters
- *                     (added by 20261115100000_sets_score.sql)
+ *                     (added by 20261115024010_sets_score.sql)
  *
  * And one rule from the `workout_exercises` table in the same training migration:
  *

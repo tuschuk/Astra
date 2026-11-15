@@ -139,10 +139,10 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   (Warm-up chip + Log set) and the per-set W toggle at phone width; the RPE error copy hard-codes
   "1 to 10" — build it from `limits.ts`'s RPE bounds if they are ever exported or changed.
 - B11 supersets-dropsets-timed follow-ups (`supersets-dropsets-timed`):
-  - **Migration file vs live version:** `backend/supabase/migrations/20261115100000_sets_score.sql`
-    was applied live as version `20261115024010` (rename declined by the permission layer). Rename
-    the file to match, along with B05's `20261114130000_signup_birthdate_gate.sql` (live
-    `20261114224613`), before anyone runs `supabase db push`.
+  - ~~Migration file vs live version~~ — both files renamed at B11's Gate 2 (Nov 14, 2026) to the
+    versions Supabase recorded (`20261114224613_signup_birthdate_gate.sql`,
+    `20261115024010_sets_score.sql`); references updated. The builder prompt now tells builders
+    to rename after `apply_migration` using `list_migrations`, so this should not recur.
   - **Feed display of WOD entries (LOG-13 "and the feed")** waits for B20. The feed must print sets
     through `formatSet` / `formatDropSet` and group with `supersetRuns` / `groupDropSets`.
   - **Device check (Tristen):** the entry card's header now has four icon buttons (link, up, down,
