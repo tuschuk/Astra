@@ -28,40 +28,49 @@ describe('formatWeight / formatSet', () => {
     expect(formatWeight(100, 'lb')).toBe('220.5 lb');
   });
 
+  /** A plain work set with no RPE — the common case. */
+  const work = (reps: number | null, weight_kg: number | null) => ({ reps, weight_kg, rpe: null, is_warmup: false });
+
   it('writes reps × weight, or whichever part was entered', () => {
-    expect(formatSet({ reps: 8, weight_kg: KG_185LB }, 'lb')).toBe('8 × 185 lb');
-    expect(formatSet({ reps: 12, weight_kg: null }, 'lb')).toBe('12 reps');
-    expect(formatSet({ reps: 1, weight_kg: null }, 'lb')).toBe('1 rep');
-    expect(formatSet({ reps: null, weight_kg: 20 }, 'kg')).toBe('20 kg');
-    expect(formatSet({ reps: null, weight_kg: null }, 'kg')).toBe('—');
+    expect(formatSet(work(8, KG_185LB), 'lb')).toBe('8 × 185 lb');
+    expect(formatSet(work(12, null), 'lb')).toBe('12 reps');
+    expect(formatSet(work(1, null), 'lb')).toBe('1 rep');
+    expect(formatSet(work(null, 20), 'kg')).toBe('20 kg');
+    expect(formatSet(work(null, null), 'kg')).toBe('—');
+  });
+
+  it('marks a warm-up with "W · " and appends an RPE', () => {
+    expect(formatSet({ ...work(8, roundWeightKgForStorage(lbToKg(135))), is_warmup: true }, 'lb')).toBe(
+      'W · 8 × 135 lb',
+    );
+    expect(formatSet({ ...work(8, KG_185LB), rpe: 8.5 }, 'lb')).toBe('8 × 185 lb @ RPE 8.5');
+    expect(formatSet({ ...work(10, null), rpe: 9 }, 'kg')).toBe('10 reps @ RPE 9');
+    expect(formatSet({ reps: 5, weight_kg: 60, rpe: 6, is_warmup: true }, 'kg')).toBe('W · 5 × 60 kg @ RPE 6');
   });
 });
 
 describe('formatLastTime', () => {
+  /** A past set: reps at kg, a work set unless `warmup`. */
+  const past = (reps: number | null, weight_kg: number | null, is_warmup = false) => ({ reps, weight_kg, is_warmup });
+
   it('groups runs of identical sets', () => {
-    const sets = [
-      { reps: 8, weight_kg: KG_185LB },
-      { reps: 8, weight_kg: KG_185LB },
-      { reps: 8, weight_kg: KG_185LB },
-      { reps: 6, weight_kg: KG_185LB },
-    ];
+    const sets = [past(8, KG_185LB), past(8, KG_185LB), past(8, KG_185LB), past(6, KG_185LB)];
     expect(formatLastTime(sets, 'lb')).toBe('3 × 8 @ 185 lb, 6 @ 185 lb');
   });
 
   it('only groups neighbours, and handles missing reps or weight', () => {
-    const sets = [
-      { reps: 5, weight_kg: 100 },
-      { reps: 3, weight_kg: 100 },
-      { reps: 5, weight_kg: 100 },
-      { reps: 10, weight_kg: null },
-      { reps: null, weight_kg: 50 },
-      { reps: null, weight_kg: 50 },
-    ];
+    const sets = [past(5, 100), past(3, 100), past(5, 100), past(10, null), past(null, 50), past(null, 50)];
     expect(formatLastTime(sets, 'kg')).toBe('5 @ 100 kg, 3 @ 100 kg, 5 @ 100 kg, 10 reps, 2 × 50 kg');
   });
 
-  it('is empty for no sets', () => {
+  it('leaves warm-up sets out, so work sets around them still group (LOG-14)', () => {
+    const sets = [past(10, 20, true), past(5, 60, true), past(5, 100), past(5, 100), past(5, 100)];
+    expect(formatLastTime(sets, 'kg')).toBe('3 × 5 @ 100 kg');
+  });
+
+  it('is empty for no sets, or only warm-ups', () => {
     expect(formatLastTime([], 'lb')).toBe('');
+    expect(formatLastTime([past(10, 20, true)], 'lb')).toBe('');
   });
 });
 
@@ -124,6 +133,7 @@ describe('setErrorMessage', () => {
     expect(setErrorMessage(new RangeError('weightKg must be at least 0 and below 10000, got 12000'))).toBe(
       'That weight is too big to save.',
     );
+    expect(setErrorMessage(new RangeError('rpe must be from 1 to 10, got 11'))).toBe('RPE goes from 1 to 10.');
     expect(setErrorMessage(new RangeError('position must be…'))).toBe('That set has a value Astra can’t save.');
     expect(setErrorMessage(new Error('disk full'))).toBe('That set couldn’t be saved. Try again.');
   });

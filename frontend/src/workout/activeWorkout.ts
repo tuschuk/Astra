@@ -71,6 +71,26 @@ export interface SetInput {
   durationSeconds?: number | null;
 }
 
+/**
+ * Turns a saved set back into the `SetInput` that would save it again unchanged — so a screen
+ * can change one thing about a set (e.g. flip its warm-up flag) by handing `updateSet` the rest
+ * as it was, without knowing how sets are stored.
+ *
+ * The weight goes back in kilograms. That round-trips exactly: a stored weight is already
+ * rounded to the server column's 2 decimals, and rounding it again changes nothing (the same
+ * holds for RPE's 1 decimal).
+ */
+export function setInputFromRow(set: SetRow): SetInput {
+  return {
+    reps: set.reps,
+    weight: set.weight_kg == null ? null : { value: set.weight_kg, unit: 'kg' },
+    rpe: set.rpe,
+    isWarmup: set.is_warmup,
+    dropSetPosition: set.drop_set_position,
+    durationSeconds: set.duration_seconds,
+  };
+}
+
 /** Where the active workout is in its life. Only an `active` workout can be changed. */
 export type ActiveWorkoutStatus = 'active' | 'finished' | 'discarded';
 

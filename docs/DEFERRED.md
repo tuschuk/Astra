@@ -135,3 +135,6 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     Mermaid was not render-checked.
 - (External blockers from the PRD — Strength Level licence, food database, Denver gym data source,
   video provider, deload rules — are tracked in `docs/BUILD_LIST.md`.)
+- B10 set-types follow-ups (`set-types`): device check of the entry card's new second row
+  (Warm-up chip + Log set) and the per-set W toggle at phone width; the RPE error copy hard-codes
+  "1 to 10" — build it from `limits.ts`'s RPE bounds if they are ever exported or changed.

@@ -12,8 +12,14 @@ import { displayWeight, type WeightUnit } from '@training-math';
 
 import type { SetRow } from '@/db/dao';
 
-/** The two parts of a set the logger shows today (warm-up, RPE etc. arrive with B10/B11). */
+/** The two parts of a set that make up its load: how many reps at what weight. */
 type RepsAndWeight = Pick<SetRow, 'reps' | 'weight_kg'>;
+
+/** The parts of a set the logger prints for one set: its load, plus warm-up flag and RPE (B10). */
+type PrintableSet = Pick<SetRow, 'reps' | 'weight_kg' | 'rpe' | 'is_warmup'>;
+
+/** The parts of a past set the "last time" line reads: its load and whether it was a warm-up. */
+type LastTimeSet = Pick<SetRow, 'reps' | 'weight_kg' | 'is_warmup'>;
 
 /**
  * A stored kg weight as the lifter reads it, e.g. `formatWeight(83.91, 'lb')` → "185 lb".
@@ -24,11 +30,8 @@ export function formatWeight(weightKg: number, unit: WeightUnit): string {
   return `${displayWeight(weightKg, unit)} ${unit}`;
 }
 
-/**
- * One set as a short line: "8 × 185 lb", or "8 reps" with no weight, "185 lb" with no reps,
- * and "—" if neither was entered.
- */
-export function formatSet(set: RepsAndWeight, unit: WeightUnit): string {
+/** A set's load alone: "8 × 185 lb", "8 reps", "185 lb" or "—". */
+function formatLoad(set: RepsAndWeight, unit: WeightUnit): string {
   if (set.reps != null && set.weight_kg != null) return `${set.reps} × ${formatWeight(set.weight_kg, unit)}`;
   if (set.reps != null) return set.reps === 1 ? '1 rep' : `${set.reps} reps`;
   if (set.weight_kg != null) return formatWeight(set.weight_kg, unit);
@@ -36,13 +39,27 @@ export function formatSet(set: RepsAndWeight, unit: WeightUnit): string {
 }
 
 /**
+ * One set as a short line: "8 × 185 lb", or "8 reps" with no weight (a bodyweight pull-up),
+ * "185 lb" with no reps, and "—" if neither was entered. A warm-up set starts with "W · "
+ * ("W · 8 × 135 lb") and a set with an RPE ends with it ("8 × 185 lb @ RPE 8.5"). Every screen
+ * that lists sets — the logger, the saved workout — prints them through this one function.
+ */
+export function formatSet(set: PrintableSet, unit: WeightUnit): string {
+  const warmup = set.is_warmup ? 'W · ' : '';
+  const rpe = set.rpe != null ? ` @ RPE ${set.rpe}` : '';
+  return `${warmup}${formatLoad(set, unit)}${rpe}`;
+}
+
+/**
  * The "last time" summary of a previous session's sets (LOG-5), with runs of identical sets
  * grouped so it stays one line: three sets of 8 at 185 lb then one of 6 →
- * "3 × 8 @ 185 lb, 6 @ 185 lb". Returns "" for no sets.
+ * "3 × 8 @ 185 lb, 6 @ 185 lb". Warm-up sets are left out — the line answers "what did I
+ * work at last time?", and warm-ups aren't work (LOG-14). Returns "" when no work sets remain.
  */
-export function formatLastTime(sets: readonly RepsAndWeight[], unit: WeightUnit): string {
+export function formatLastTime(sets: readonly LastTimeSet[], unit: WeightUnit): string {
   const groups: { set: RepsAndWeight; count: number }[] = [];
   for (const set of sets) {
+    if (set.is_warmup) continue;
     const last = groups[groups.length - 1];
     if (last && last.set.reps === set.reps && last.set.weight_kg === set.weight_kg) last.count += 1;
     else groups.push({ set, count: 1 });
@@ -141,6 +158,7 @@ export function setErrorMessage(error: unknown): string {
   if (error instanceof RangeError) {
     if (error.message.startsWith('reps')) return 'Reps must be a whole number.';
     if (error.message.startsWith('weight')) return 'That weight is too big to save.';
+    if (error.message.startsWith('rpe')) return 'RPE goes from 1 to 10.';
     return 'That set has a value Astra can’t save.';
   }
   return 'That set couldn’t be saved. Try again.';

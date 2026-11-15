@@ -13,7 +13,7 @@ import { createPreparedDb, steadyOptions } from '@/test-utils/loggerTestKit';
 import { OTHER_USER_ID, USER_ID } from '@/test-utils/workoutFixtures';
 
 import { startActiveWorkout } from './activeWorkout';
-import { exerciseName, lastSessionSets, listPastWorkouts, readWorkout } from './history';
+import { exerciseInfo, lastSessionSets, listPastWorkouts, readWorkout } from './history';
 
 const BENCH = libraryExerciseId('bench_press');
 const SQUAT = libraryExerciseId('squat');
@@ -142,10 +142,14 @@ describe('lastSessionSets', () => {
   });
 });
 
-describe('exerciseName', () => {
-  it('names library exercises and returns null for unknown ids', async () => {
+describe('exerciseInfo', () => {
+  it('names library exercises with their equipment and returns null for unknown ids', async () => {
     const db = await createPreparedDb();
-    expect(await exerciseName(db, USER_ID, BENCH)).toBe('Bench Press');
-    expect(await exerciseName(db, USER_ID, '00000000-0000-4000-8000-00000000dead')).toBeNull();
+    expect(await exerciseInfo(db, USER_ID, BENCH)).toEqual({ name: 'Bench Press', equipment: 'Barbell' });
+    expect(await exerciseInfo(db, USER_ID, libraryExerciseId('pullups'))).toEqual({
+      name: 'Pullups',
+      equipment: 'Bodyweight',
+    });
+    expect(await exerciseInfo(db, USER_ID, '00000000-0000-4000-8000-00000000dead')).toBeNull();
   });
 });

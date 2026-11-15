@@ -198,6 +198,25 @@ path. `limits.ts` already mirrors their CHECKs.
    weight by a rounding hair. The helper's test pins the round trip (log in lb → toggle → weight
    unchanged byte-for-byte).
 
+## Deviations during build (builder run)
+
+- **Layout:** the Warm-up chip sits on a second row with the Log set button (Reps | weight | RPE
+  boxes on the first row) rather than in the input row — four boxes plus a chip and a button
+  don't fit one phone-width row. Behavior is as planned.
+- **Parse message** widened from "Enter reps and weight as plain numbers." to "Enter reps,
+  weight and RPE as plain numbers." now that a third box is read.
+- **`setVolumeKg` guards** beyond null: 0 also for a weight that isn't a positive finite number
+  and for reps that aren't a whole number ≥ 1 — the same rule `classifyPrs` uses, so volume and
+  PRs agree on what a countable set is (review finding).
+- **Weight box label** for a Bodyweight exercise reads "Added weight in lb for …" (screen
+  readers hear the same "added load" meaning the "+ lb" placeholder shows).
+- **Plan correction:** §4 says the Workout tab calls `formatSet`; it doesn't (it shows counts
+  only). Only the logger and the saved-workout screen print sets. No code impact.
+- **Review notes not acted on:** `VolumeSet` duplicating `PrCandidateSet` is the grilled
+  decision above; the RPE error copy keeps literal "1 to 10" (the limits aren't exported from
+  `@training-math`'s index and the copy is one line); the Warm-up chip stays tappable while a
+  save runs, since it only affects the *next* set.
+
 ## Grilling decisions (settled before code)
 
 Run via `mattpocock-skills:grilling`; headless pipeline run, so the planner played both sides at
