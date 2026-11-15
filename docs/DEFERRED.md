@@ -111,5 +111,25 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     landed. Nothing is lost (the next read re-syncs). Revisit if it is ever seen in practice.
   - `mmdc` was not available to the headless builder, so the updated `app-flow.md` Mermaid was not
     render-checked.
+- B09 logger-screen follow-ups (`logger-screen`):
+  - **Typed-routes root cause found:** running Jest rewrites the gitignored
+    `.expo/types/router.d.ts` with a route list that lacks the auth routes and any new ones;
+    `expo lint` doesn't touch it. Order for gates and builders: `npx expo start` (~100 s, not
+    30 — 40 s was not enough this run) → `tsc --noEmit` → lint → Jest. Worth folding into the
+    builder prompt / `docs/PIPELINE.md`, or making tsc not depend on the generated file.
+  - **Device check (Tristen):** the whole P0 logging path is now on screen — airplane-mode log
+    of a multi-exercise workout, force-kill mid-workout and relaunch (Workout tab offers
+    Resume), Finish → saved workout, reconnect → appears once in Supabase. None of the screens
+    has run on a device or simulator; layout (keyboard over the entry row, Modal safe areas) is
+    unverified.
+  - **Unit is pinned to lb** (`settings/displayUnit.ts`) until B15 mirrors
+    `user_settings.unit`; a kg user sees and types pounds until then.
+  - **Exercise-name snapshot on `workout_exercises`** moves to B31 (first step that makes an
+    exercise deletable); the saved screen shows "Deleted exercise" for a missing name meanwhile.
+  - Leftover multiple drafts are still not surfaced (Resume takes the newest).
+  - `leave()` / `back()` ("back, or the Workout tab") is duplicated in two screens; extract when
+    a third screen needs it.
+  - `mmdc` was not permitted for the headless builder again, so the updated `app-flow.md`
+    Mermaid was not render-checked.
 - (External blockers from the PRD — Strength Level licence, food database, Denver gym data source,
   video provider, deload rules — are tracked in `docs/BUILD_LIST.md`.)

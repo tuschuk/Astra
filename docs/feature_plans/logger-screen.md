@@ -102,8 +102,10 @@ user-filtered query of the device database.
 - The add-exercise search is an in-screen modal (React Native `Modal` wrapping the search list),
   not a route: no navigation state to hand off, no typed-route churn, and the search component
   (`ExercisePicker`) stays a plain component reusing `searchExercises` over `ALL_EXERCISES`
-  from the catalog. Picking an exercise calls `store.addExercise(id)` — the catalog's ids are
-  the same uuidv5 ids seeded into the local `exercises` table, which the store verifies anyway.
+  from the catalog. Picking an exercise calls `store.addExercise(libraryExerciseId(def.id))` —
+  the catalog's ids are slugs; `libraryExerciseId` turns one into the uuidv5 id seeded into the
+  local `exercises` table, which the store verifies anyway. (Corrected at build: the plan first
+  said the catalog ids *were* the uuidv5 ids.)
 
 ### The entry card (where LOG-2, LOG-5 and NFR-2 live)
 
@@ -279,3 +281,56 @@ full severity (B08 precedent). Questions that changed or sharpened the plan:
 - **"Reorder: why buttons and not drag?"** No new dependency, accessible by default, and the
   store API is position-based either way — a drag UI can replace the buttons without touching
   anything below the components.
+
+## Build deviations (recorded by the builder)
+
+What shipped differs from the plan above in these ways. All are additions or tightenings; none
+changes the data model, the store, or a Rule.
+
+1. **Catalog ids → library ids.** The catalog's `ExerciseDef.id` is the slug (`bench_press`),
+   not the uuidv5 id; the logger converts with `libraryExerciseId()` before `addExercise`
+   (corrected in §Navigation above).
+2. **Session slot contract, as built.** `currentSessionWorkout(userId)` is a pure read — it
+   returns the store only if the slot is this user's, and never mutates (it runs during React
+   render via `useSyncExternalStore`, where changing module state and notifying is unsafe).
+   `startSessionWorkout` / `resumeSessionWorkout` do the clearing of another user's slot.
+   `clearSessionWorkout()` takes no `userId` — emptying the slot is always safe. The guarantee
+   from the grilling ("a store belonging to another user is never handed out") holds.
+3. **Extra modules.** `src/workout/format.ts` (set / last-time / date / duration / details text,
+   reps-and-weight box parsing, friendly messages for the store's `RangeError`s — writing only;
+   all weight math is `@training-math`'s `displayWeight`); `src/db/useAppDatabase.ts` (a hook
+   over `openAppDatabase` shared by the three screens);
+   `src/components/workout/confirmDiscardWorkout.ts` (the one "Discard this workout?" alert, used
+   by the tab and the logger); `src/test-utils/loggerTestKit.tsx` (prepared DB, test clock,
+   signed-in render).
+4. **`exerciseName(db, userId, exerciseId)`** joined §5's three queries: the active workout's
+   snapshot holds only exercise ids, so each entry card looks its name up (user-filtered, like
+   the rest) together with its last-time sets, once on mount.
+5. **"Last time" requires a logged set.** `lastSessionSets` picks the newest finished workout
+   with at least one *set* of the exercise — a workout where it was added but never logged is
+   skipped (it has nothing to show). If the exercise appeared twice in that workout, both
+   entries' sets are returned in workout order.
+6. **Pending state on the entry card too.** The grilling named Start/Finish double-taps; the
+   review found a double-tap on "move down" would reorder twice. Each card now runs one store
+   call at a time (ref guard + disabled buttons). Repeat stays a single tap.
+7. **Discard on the Workout tab asks first** (the same confirmation as the logger's Discard),
+   and the logger header shows "Started <date>". The saved-workout screen names a missing
+   exercise "Deleted exercise" (unreachable until B31 makes customs deletable).
+8. **The Workout smoke test moved** from `screens.test.tsx` to `workout-tab.test.tsx` — the tab
+   now needs a session and a database.
+9. **Typed-routes footgun, root cause:** running Jest rewrites the gitignored
+   `.expo/types/router.d.ts` with a route list missing the auth and new routes; `expo lint` does
+   not. Run `tsc` after regenerating with `expo start` and before Jest (recorded in DEFERRED).
+
+## Review (mattpocock-skills:code-review, Standards + Spec axes)
+
+- **Fixed:** Workout tab kept an old error after a successful refresh; the saved-workout screen
+  could show the previous workout while a new id loaded (now keyed by id, no setState in the
+  effect); entry-card double-taps (deviation 6); the duplicated details line, set count and
+  discard alert (moved to `format.ts` / `confirmDiscardWorkout.ts`); an unused `exercises` prop
+  on `ExercisePicker` (speculative, removed); `seal` renamed `endWorkout`; disabled icon opacity
+  matched to Button's.
+- **Left as is (judgement calls):** `leave()` / `back()` are the same two-line
+  "back, or the Workout tab" in two screens; the 48 px set-number column and 18 px icon size are
+  literals beside the theme tokens; `listPastWorkouts`' `limit` parameter (tests use it); queries
+  that select sets/entries by ids already obtained from a `user_id`-filtered query.

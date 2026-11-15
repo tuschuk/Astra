@@ -25,12 +25,14 @@ builder prompt explains the fix). Statuses: B08 Built; NFR-3 Built; LOG-1, LOG-2
 B06 training-math (the one math module, `@training-math`), B05 auth-and-signup (migration applied
 and probed live). Details in each plan file.
 
-**B09 logger-screen** (planning now): Workout tab starts an empty workout; the active-workout
-screen adds exercises by library search, logs sets in the user's unit, repeats the last set in one
-tap, removes and reorders; finish opens the saved workout; the Workout tab lists past workouts.
-Rules recorded for it by B07/B08: call `loadActiveWorkout` on launch or when opening the tab; offer
-resume-or-discard when `startActiveWorkout` refuses; offer discard instead of finishing an empty
-workout; every query filters by the signed-in `user_id`; write only through the DAO / store.
+**B09 logger-screen (built on branch `logger-screen`, awaiting Gate 2):** the Workout tab starts
+an empty workout or offers Resume/Discard for a draft on the phone, and lists the newest 100
+finished workouts; `app/active-workout.tsx` adds exercises by library search, logs reps/weight in
+lb (`settings/displayUnit.ts`, pinned until B15), one-tap Repeat, remove/reorder, "last time" per
+exercise; Finish opens `app/workout/[id].tsx` (read-only). Session slot
+`workout/activeWorkoutSession.ts`, reads `workout/history.ts` (all user-filtered). No schema
+change. Nine build deviations and the review outcome are in the plan file. Gate 2 note: Jest
+clobbers `.expo/types/router.d.ts` — regenerate (`expo start`, ~100 s) and run tsc **before** Jest.
 
 **Pipeline operations** (all in `docs/PIPELINE.md`): n8n detached with `NODES_EXCLUDE=[]`; board
 `gvu4dg0NPtND4tGG` Active with a POST webhook trigger; `claude` CLI 2.1.325; headless allowlist
