@@ -10,18 +10,30 @@
  * What the user can do: type to search by name; tap a chip to filter by it and tap it again to
  * clear it (one chip per row at a time; the rows combine — e.g. Upper + Chest + Dumbbell). With a
  * muscle chosen, the exercises that train it hardest are listed first. Tapping a card opens that
- * exercise's detail screen (coaching steps, tips, muscles worked). Demo videos (LIB-2) and the
- * lifter's own history on the card (LIB-4) arrive in later steps.
+ * exercise's detail screen (coaching steps, tips, muscles worked, and the lifter's own history).
+ * Demo videos (LIB-2) arrive in a later step.
+ *
+ * "Your exercises" (LIB-5, B31): above the library's count line sits the lifter's own custom
+ * exercises, read from the phone's database (re-read each time the tab comes into focus, so an
+ * exercise deleted on its card is gone on return). They obey the same search box and the muscle
+ * and equipment chips; a region chip hides them (customs have no region). "New exercise" opens a
+ * form to make one — it works with no signal and uploads with the next sync — and tapping a custom
+ * card opens its own card, where it can be edited or deleted. Customs are private: nobody else
+ * ever sees them.
  */
 import React, { useMemo, useState } from 'react';
 import { FlatList, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
+import { CustomExerciseForm } from '@/components/library/CustomExerciseForm';
+import { CustomPill } from '@/components/library/CustomPill';
 import { Screen } from '@/components/Screen';
+import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
+import type { ExerciseRow } from '@/db/dao';
 import {
   ALL_EXERCISES,
   BODY_REGION_LABELS,
@@ -30,8 +42,10 @@ import {
   searchExercises,
   type ExerciseDef,
 } from '@/library/catalog';
+import { filterCustomExercises } from '@/library/customExercises';
 import type { Equipment, MuscleKey } from '@/library/exercises';
-import { MUSCLE_NAMES, MUSCLE_ORDER } from '@/library/muscles';
+import { asMuscleKey, MUSCLE_NAMES, MUSCLE_ORDER } from '@/library/muscles';
+import { useCustomExercises } from '@/library/useCustomExercises';
 import { colors, radii, spacing, type } from '@/theme';
 
 /** The four filter categories and their identity colors (styling guide §1). */
@@ -168,12 +182,63 @@ function ExerciseCard({ exercise, onOpen }: { exercise: ExerciseDef; onOpen: () 
   );
 }
 
+/**
+ * One of the lifter's own exercises as a card (B31): name, a "Custom" pill in place of the region
+ * dot (customs have no region), its equipment if set, and its main muscle if set. Tapping it calls
+ * `onOpen` (the screen opens the custom's card, where it can be edited or deleted).
+ */
+function CustomExerciseCard({ exercise, onOpen }: { exercise: ExerciseRow; onOpen: () => void }) {
+  const muscle = asMuscleKey(exercise.primary_muscle);
+  const muscleName = muscle ? MUSCLE_NAMES[muscle] : null;
+  return (
+    <Pressable
+      onPress={onOpen}
+      accessibilityRole="button"
+      accessibilityLabel={['Custom exercise', exercise.name, exercise.equipment, muscleName].filter(Boolean).join(', ')}
+      accessibilityHint="Opens your exercise, its history, and Edit and Delete"
+      testID="custom-exercise-card"
+      style={({ pressed }) => pressed && styles.chipPressed}
+    >
+      <Card style={styles.card}>
+        <View style={styles.cardHeader}>
+          <View style={styles.cardTitle}>
+            <CustomPill />
+            <Body style={styles.cardName}>{exercise.name}</Body>
+          </View>
+          <View style={styles.cardRight}>
+            {exercise.equipment ? (
+              <View style={styles.equipmentPill}>
+                <SectionLabel size="small">{exercise.equipment}</SectionLabel>
+              </View>
+            ) : null}
+            <Ionicons
+              name="chevron-forward"
+              size={16}
+              color={colors.muted}
+              accessibilityElementsHidden
+              importantForAccessibility="no"
+            />
+          </View>
+        </View>
+        {muscleName ? (
+          <Body variant="small" style={styles.cardMeta}>
+            {muscleName}
+          </Body>
+        ) : null}
+      </Card>
+    </Pressable>
+  );
+}
+
 export default function LibraryScreen() {
   const router = useRouter();
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<CategoryKey | null>(null);
   const [muscle, setMuscle] = useState<MuscleKey | null>(null);
   const [equipment, setEquipment] = useState<Equipment | null>(null);
+  const { customs, reload, db, userId } = useCustomExercises();
+  // Bumped on every opening of the New exercise form, so each opening starts with a blank draft.
+  const [formKey, setFormKey] = useState<number | null>(null);
 
   // Filters first (they may re-order by muscle involvement), then the name search, which keeps
   // that order.
@@ -181,6 +246,17 @@ export default function LibraryScreen() {
     () => searchExercises(query, filterExercises(ALL_EXERCISES, { body: selected, muscle, equipment })),
     [query, selected, muscle, equipment],
   );
+  // The lifter's own exercises obey the same search and chips (a region chip hides them all —
+  // they have no region; see `filterCustomExercises`).
+  const customResults = useMemo(
+    () => filterCustomExercises(customs, { query, body: selected, muscle, equipment }),
+    [customs, query, selected, muscle, equipment],
+  );
+
+  /** Opens a custom exercise's card (the same detail route, keyed by its database id). */
+  function openCustom(id: string): void {
+    router.push({ pathname: '/exercise/[id]', params: { id } });
+  }
 
   const header = (
     <View>
@@ -228,6 +304,19 @@ export default function LibraryScreen() {
       <ChipRow options={MUSCLE_ORDER} labelOf={(key) => MUSCLE_NAMES[key]} value={muscle} onChange={setMuscle} />
       <ChipRow options={EQUIPMENT_ORDER} labelOf={(kind) => kind} value={equipment} onChange={setEquipment} />
 
+      <View style={styles.customHeader}>
+        <SectionLabel>Your exercises</SectionLabel>
+        <Button label="New exercise" variant="ghost" onPress={() => setFormKey((k) => (k ?? 0) + 1)} />
+      </View>
+      {customResults.map((exercise) => (
+        <CustomExerciseCard key={exercise.id} exercise={exercise} onOpen={() => openCustom(exercise.id)} />
+      ))}
+      {customs.length === 0 ? (
+        <Body variant="small" style={styles.customEmpty}>
+          Add a movement the library doesn’t have. It’s private to you.
+        </Body>
+      ) : null}
+
       <SectionLabel size="small" style={styles.count}>
         {results.length === 1 ? '1 exercise' : `${results.length} exercises`}
       </SectionLabel>
@@ -251,13 +340,31 @@ export default function LibraryScreen() {
         ListEmptyComponent={
           <EmptyState
             icon="barbell-outline"
-            message="No exercises match that search. Try another name, or clear the filters."
+            message={
+              customResults.length > 0
+                ? 'No library exercises match that search.'
+                : 'No exercises match that search. Try another name, or clear the filters.'
+            }
           />
         }
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.listContent}
       />
+      {formKey !== null ? (
+        <CustomExerciseForm
+          key={formKey}
+          visible
+          db={db}
+          userId={userId}
+          existing={null}
+          onSaved={() => {
+            setFormKey(null);
+            void reload();
+          }}
+          onClose={() => setFormKey(null)}
+        />
+      ) : null}
     </Screen>
   );
 }
@@ -363,5 +470,15 @@ const styles = StyleSheet.create({
   },
   cardMeta: {
     marginTop: spacing.xs,
+  },
+  customHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing.xl,
+    marginBottom: spacing.sm,
+  },
+  customEmpty: {
+    color: colors.muted,
   },
 });

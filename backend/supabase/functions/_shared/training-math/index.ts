@@ -26,11 +26,13 @@ export { loadBar } from './plates.ts';
 export type { BarLoad, PlateCount, PlateInventoryItem } from './plates.ts';
 export {
   assertValidEntryNotes,
+  assertValidExerciseName,
   assertValidSetFields,
   assertValidSupersetGroup,
   assertValidWorkoutNotes,
   assertValidWorkoutTitle,
   MAX_ENTRY_NOTES_LENGTH,
+  MAX_EXERCISE_NAME_LENGTH,
   MAX_SET_NOTES_LENGTH,
   MAX_SET_SCORE_LENGTH,
   MAX_WORKOUT_NOTES_LENGTH,

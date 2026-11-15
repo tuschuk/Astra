@@ -114,7 +114,14 @@ flowchart TD
 
   Library -->|type a name| Search["Live name search<br/>alias-aware, e.g. Squats finds Back Squat"]
   Library -->|tap a chip| Filter["Filter chips (B29): region row (4) +<br/>muscle row (12) + equipment row (6), each scrolls sideways;<br/>one per row, re-tap clears, rows AND together;<br/>a muscle orders hardest-trained first;<br/>result count + no-results state"]
-  Library -->|tap a card| ExDetail["Exercise detail (app/exercise/[id].tsx), read-only (B29, LIB-3)<br/>name, region, equipment, pattern(s);<br/>Muscles worked (ranked); How to do it (5 coaching steps,<br/>**bold** cue spans); Tips; unknown id → not-found; Back<br/>B30 (LIB-4) 'Your history': the shared ExerciseHistorySection<br/>at libraryExerciseId(slug) — my PRs + every logged session;<br/>a failed read shows one line there, catalog content intact"]
+  Library -->|tap a card| ExDetail["Exercise detail (app/exercise/[id].tsx), read-only (B29, LIB-3)<br/>name, region, equipment, pattern(s);<br/>Muscles worked (ranked); How to do it (5 coaching steps,<br/>**bold** cue spans); Tips; Back<br/>B30 (LIB-4) 'Your history': the shared ExerciseHistorySection<br/>at libraryExerciseId(slug) — my PRs + every logged session;<br/>a failed read shows one line there, catalog content intact"]
+  Library -->|"Your exercises section (B31, LIB-5): my live customs from astra.db<br/>(useCustomExercises, re-read on focus), same search + muscle / equipment chips;<br/>a region chip hides them; 'Custom' pill"| CustomList["Your exercises (above the catalog count)<br/>one card per matching custom; hint at zero customs"]
+  Library -->|"New exercise"| CustomForm["New / Edit exercise form (components/library/CustomExerciseForm.tsx, a Modal)<br/>Name (1–80, checked by @training-math assertValidExerciseName; Save disabled until valid),<br/>optional equipment chip (6 kinds) + main-muscle chip (12), re-tap clears;<br/>Save = create / update in library/customExercises.ts; Cancel saves nothing"]
+  CustomList -->|"tap a custom: /exercise/<uuid>"| CustomCard["Custom exercise card (same route, id not a catalog slug)<br/>getCustomExercise: only MY live customs are found;<br/>name, Custom pill, equipment, muscle; Edit; Delete (asks first);<br/>'Your history' = the same ExerciseHistorySection at its uuid;<br/>no coaching steps or tips (none authored);<br/>someone else's / deleted / unknown id → 'not in the library';<br/>database unreadable → 'couldn't be read from this phone'"]
+  CustomCard -->|Edit| CustomForm
+  CustomCard -->|"Delete exercise: soft delete, then router.back"| CustomMod
+  CustomForm -->|Save| CustomMod["library/customExercises.ts (B31): the one home of custom-exercise reads + writes<br/>create (v4 id, owner_id = me, slug null), update (refused if not mine / deleted),<br/>delete = stamp deleted_at (a SOFT delete: history + PRs keep the name),<br/>listCustomExercises / getCustomExercise hide deleted rows; filterCustomExercises (pure)"]
+  CustomMod -->|"writeLocal('exercises') — saved + queued; works offline"| WriteLocal
 
   subgraph LibData["Exercise library data (frontend/src/library)"]
     Seed[("exercises.ts<br/>founder's library by movement pattern:<br/>22 patterns, equipment, muscle intensities,<br/>5-step coaching cues, name aliases")]
@@ -133,7 +140,7 @@ flowchart TD
 
   subgraph Device["On the device"]
     Store[("expo-sqlite key-value store<br/>the saved Supabase session<br/>(survives killing the app)")]
-    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records, user_settings (B15: user_id, unit; V10, B26: progress_pic_visibility),<br/>workout_analyses (B18, download-only, new_prs as JSON text),<br/>flairs (B21, download-only, replaced whole), posts (B21, my own, upload-only;<br/>B22: kind, nullable workout_id, image_path) (schema V10)<br/>+ outbox (unsent changes; op = upsert or delete, B14) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
+    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records, user_settings (B15: user_id, unit; V10, B26: progress_pic_visibility),<br/>workout_analyses (B18, download-only, new_prs as JSON text),<br/>flairs (B21, download-only, replaced whole), posts (B21, my own, upload-only;<br/>B22: kind, nullable workout_id, image_path); V11 (B31): exercises.deleted_at (schema V11)<br/>+ outbox (unsent changes; op = upsert or delete, B14) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
     LocalSeed["First-launch seed (library/seedLocal.ts)<br/>insert-if-missing all 151 exercises,<br/>id = uuidv5(namespace, slug); never queued"]
     WriteLocal["writeLocal / writeLocalRowsTx / writeLocalTree (db/dao.ts): the queued write paths<br/>rows + outbox lines + re-stamp & queue parent workout,<br/>all-or-nothing (writeLocalTree: a whole workout in one transaction)<br/>deleteLocalRowsTx (B14): delete rows + 'delete' outbox line + touch the root<br/>(a deleted workout also drops its analysis and, B21, its post + the post's unsent lines)"]
     Drafts["writeDraftRows / deleteDraftRowsTx (db/dao.ts): the in-progress path<br/>saved at once, NEVER queued; refused for a finished workout"]
@@ -144,7 +151,7 @@ flowchart TD
 
   subgraph LoggerUI["Logger screens (signed-in stack, above the tab bar)"]
     Logger["Active workout (app/active-workout.tsx)<br/>EntryCard per exercise: sets, reps + weight in the lifter's kg / lb (useDisplayUnit) + optional RPE,<br/>Warm-up chip (next sets are warm-ups), W toggle per logged set (B10),<br/>Bodyweight exercise: weight box = '+ lb' added load, reps alone logs,<br/>Timed chip (B11): reveals Time (s or m:ss) + Score boxes, closing clears them,<br/>Log set (reps, weight, time or score), Drop = next drop of the latest set (B11),<br/>Repeat last set (ONE tap, NFR-2), remove set (a drop set's top row removes all of it),<br/>link toggle (B11): superset with the card above, 'Superset' badge,<br/>drops shown as ↳ rows under one 'Set n' (sets numbered as the lifter counts),<br/>move up / down, remove exercise,<br/>last-time panel (LOG-5): 'Last time' line (work sets only) + 'PRs: 1RM … · e1RM … · 5RM …'<br/>+ History link (B13; PRs read once on mount, they only change at finish)<br/>one store call per card at a time<br/>notes (B12): header Title + Notes boxes; 'Add note' under each exercise;<br/>note icon on every logged set / drop opens its box (one set box per card);<br/>boxes autosave (useAutosaveText) ~750 ms after typing + on close;<br/>Finish flushes every box first (AutosaveRegistry)<br/>empty slot on open: resume from astra.db or go back"]
-    Picker["Add exercise panel (ExercisePicker, a Modal)<br/>alias-aware searchExercises over the catalog;<br/>slug → libraryExerciseId → store.addExercise"]
+    Picker["Add exercise panel (ExercisePicker, a Modal)<br/>alias-aware searchExercises over the catalog, then my live customs<br/>matching the same search ('Custom · Barbell', B31; deleted ones never listed);<br/>reports { deviceId, name }: libraryExerciseId(slug) or the custom's own uuid<br/>→ store.addExercise(deviceId)"]
     EmptyQ{"Finish with zero sets?"}
     Saved["Saved workout (app/workout/[id].tsx); re-read on every focus (B14)<br/>date, duration, every exercise + set in the lifter's unit<br/>superset = ONE card labelled 'Superset' (B11);<br/>drop set = ONE row 'a → b → c'; time and score shown (B11)<br/>title (or date); workout, exercise and set notes as text (B12; drop notes '↳ …')<br/>PR badge under each set that holds a record now: 'PR · 1RM · e1RM' (B13)<br/>Analysis button (B18); Edit button; Delete button (asks first, B14)<br/>(another user's / unfinished id: 'not on this phone')"]
     EditWO_UI["Edit workout (app/edit-workout/[id].tsx, B14, LOG-9)<br/>the logger's surface over a FINISHED workout: Title + Notes boxes,<br/>EntryCard per exercise (log / repeat / remove sets, W, notes, links, move, remove),<br/>Add exercise; each change saved + queued at once, PRs recomputed in the same save<br/>Done = flush note boxes, back; Delete workout (asks first)<br/>(another user's / unfinished id: 'can't be edited on this phone')"]
@@ -329,7 +336,9 @@ flowchart TD
   DB -->|"supabase-js select (RLS-scoped), incl. sync_tombstones"| Pull
   DB -->|"sync_tombstones after id"| PrePass
   PrePass -->|"deletes local rows + their lines"| LocalDB
-  Library -.->|"not wired yet: Library still reads the bundled catalog, not astra.db"| LocalDB
+  Library -.->|"not wired yet: the catalog cards still come from the bundle, not astra.db<br/>(only 'Your exercises' reads astra.db, B31)"| LocalDB
+  CustomMod -->|"select … where owner_id = me and deleted_at is null"| LocalDB
+  CustomMod -->|"my live customs (useCustomExercises, on focus)"| Picker
 
   subgraph Shared["Shared training math (backend/supabase/functions/_shared/training-math)<br/>import name in the app: @training-math"]
     MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification<br/>+ recordBooks fold (which set holds each book), beatsRecord, compareRecordBooks (B13),<br/>session volume (volume.ts: warm-ups and weightless sets add 0),<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store, the logger's<br/>display (displayWeight), the Tool Kit (B16) and the analysis rules (B18)"]
@@ -370,6 +379,15 @@ flowchart TD
    it, with **Show older sessions** revealing 50 more at a time; Back returns. The catalog is
    bundled and the history comes from the phone's database (the card's slug becomes the
    exercise's database id via `libraryExerciseId`), so it all works offline.
+   **Custom exercises (B31, LIB-5).** Above the catalog sits **Your exercises**: the lifter's own
+   movements, read from the phone's database and obeying the same search and muscle / equipment
+   chips (a region chip hides them — customs have no region). **New exercise** opens a form (name,
+   optional equipment and main muscle); Save writes it to the phone at once and queues it, so it
+   works in airplane mode and uploads at the next sync. Tapping a custom opens its own card — name,
+   "Custom", Edit, Delete and the same Your history section (its sessions and PRs collect exactly
+   like a library exercise's). **Delete** asks first, then hides it from the Library and the
+   logger's picker on every phone of theirs; it is a soft delete, so past sessions and PRs still
+   name it. Customs are private: the server's row-level security shows them to their owner only.
 6. **Log a workout (B09), with no signal needed.** On the Workout tab, tap **Start empty
    workout**. The logger opens full-screen: **Add exercise** searches the library; each
    exercise card takes reps and/or weight in pounds (**Log set**), repeats the last set in one
@@ -853,7 +871,7 @@ flowchart TD
   offline. `ChoiceChips` moved to `components/ui/`. The fake social client answers
   `update(…).select()` with the changed rows; the fake server no longer imitates the dropped CHECK.
 - **Still unwired:** follower / following counts don't open lists; another lifter's workout rows
-  on a profile aren't tappable; there is no "remove photo"; the Library reads the bundled catalog, not `astra.db`; posts can't be
+  on a profile aren't tappable; there is no "remove photo"; the Library's catalog cards come from the bundle, not `astra.db` (only Your exercises reads it, B31); a custom can't be created from inside the logger's picker; customs add nothing to the muscle map; posts can't be
   edited, deleted or re-offered from old workouts (photo posts can't be deleted either, so their
   storage objects are never removed); feed cards don't
   open a detail screen; comments can't be deleted from the app (the RLS allows your own) and
@@ -885,6 +903,11 @@ flowchart TD
   notes boxes, shared by the logger and the edit screen), `confirmDiscardWorkout` (the one
   "Discard this workout?" alert) and `confirmDeleteWorkout` (the one "Delete this workout?"
   alert, B14).
+- `components/library/` (B31) holds CustomExerciseForm (the New / Edit exercise modal),
+  CustomPill (the "Custom" label) and `confirmDeleteCustomExercise` (the "Delete this exercise?"
+  alert). `library/customExercises.ts` is the one home of custom-exercise reads and writes (and
+  the only place deleted customs are filtered out); `library/useCustomExercises.ts` is the
+  focus-refreshed read the Library tab and both logging screens share.
 - `components/toolkit/` (B16, B17) holds ToolKitSheet, the four calculators (OneRmCalculator,
   RpeCalculator, IntensityCalculator, PlateLoader), TimerScreen, and their shared pieces:
   ChoiceChips (now in `components/ui/`), NumberField / WeightField (labeled number box + inline error, the

@@ -44,6 +44,7 @@ describe('seedLocalLibrary', () => {
         primary_muscle: 'Chest',
         equipment: 'Barbell',
         slug: 'bench_press',
+        deleted_at: null,
         created_at: '2026-11-14T12:00:00.000Z',
         updated_at: '2026-11-14T12:00:00.000Z',
       },

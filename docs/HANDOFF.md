@@ -41,7 +41,17 @@ workout-notes (LOG-3), B11 supersets-dropsets-timed (LOG-11, LOG-12), B10 set-ty
 LOG-15), B09 logger-screen (LOG-2, NFR-2), B08 active-workout-store (NFR-3), B07
 local-store-and-sync (FND-3), B06 training-math, B05 auth-and-signup. Details in each plan file.
 
-**B31 custom-exercises** (planning now): create, edit and delete a private exercise
+**B31 custom-exercises — BUILT on its branch, awaiting Gate 2** (builder commit `Build B31:
+Custom exercises`). Migration `20261115173827_exercises_soft_delete.sql` is applied live
+(version matches); the step-DoD RLS probe passed live (other user: 0 rows read / updated /
+deleted; library rows refuse `deleted_at`). Delete is a soft delete (`deleted_at`); device V11;
+`library/customExercises.ts` is the one home; Library "Your exercises" section, New/Edit form,
+custom card on `exercise/[id]` by uuid, customs in the logger picker. Checks: tsc, lint clean;
+Jest 120 suites / 1284 tests green. Gate 2 should render both diagrams with `mmdc` (builder
+couldn't) and read the plan's "Build record" for the deviations. The planning brief that follows
+is kept for context.
+
+Original planning brief: create, edit and delete a private exercise
 (`owner_id`, synced; RLS already isolates it); it appears in the library and logger and collects
 history and PRs. Step DoD: another user cannot read it through the API. Covers LIB-5. Standing
 inputs for its planner: the server side mostly exists — `public.exercises` (migration

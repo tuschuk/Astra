@@ -203,8 +203,7 @@ describe('migrate', () => {
 
     await migrate(db);
 
-    expect(SCHEMA_VERSION).toBe(10);
-    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 10 });
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: SCHEMA_VERSION });
     expect(await db.getFirstAsync('select * from user_settings')).toEqual({
       user_id: 'u',
       unit: 'kg',
@@ -212,6 +211,21 @@ describe('migrate', () => {
       progress_pic_visibility: 'private',
     });
     expect(await db.getFirstAsync('select count(*) as n from outbox')).toEqual({ n: 1 });
+  });
+
+  it('B31: upgrades a version-10 phone to version 11, leaving every exercise live', async () => {
+    const db = createNodeSqliteDriver();
+    for (const migration of MIGRATIONS.slice(0, 10)) await db.execAsync(migration);
+    await db.execAsync('pragma user_version = 10');
+    await db.runAsync(
+      "insert into exercises (id, owner_id, name, created_at, updated_at) values ('x', 'u', 'My Curl', 't', 't')",
+    );
+
+    await migrate(db);
+
+    expect(SCHEMA_VERSION).toBe(11);
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 11 });
+    expect(await db.getFirstAsync('select name, deleted_at from exercises')).toEqual({ name: 'My Curl', deleted_at: null });
   });
 
   it('upgrades a version-1 phone through every later version (sets.score), keeping the sets already there', async () => {

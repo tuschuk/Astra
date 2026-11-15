@@ -186,6 +186,15 @@ export const EQUIPMENT_ORDER: readonly Equipment[] = (Object.keys(EQUIPMENT_RANK
   (a, b) => EQUIPMENT_RANK[a] - EQUIPMENT_RANK[b],
 );
 
+/**
+ * A stored equipment value (free text on a custom exercise, B31) as one of the library's six
+ * equipment kinds, or null when it isn't one — so the edit form never pre-selects a chip that
+ * doesn't exist.
+ */
+export function asEquipment(value: string | null): Equipment | null {
+  return EQUIPMENT_ORDER.find((kind) => kind === value) ?? null;
+}
+
 /** The Library tab's active filters. A missing (or null) criterion means "any". */
 export interface ExerciseFilters {
   body?: BodyRegion | null;

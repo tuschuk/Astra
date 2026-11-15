@@ -50,6 +50,15 @@ export const MUSCLE_NAMES: Record<MuscleKey, string> = {
 };
 
 /**
+ * A stored muscle value (free text on a custom exercise's `primary_muscle`, B31) as one of the
+ * twelve muscle keys, or null when it isn't one — a row synced from elsewhere could hold anything,
+ * and an unknown word must never be shown as if it were a muscle or matched by a muscle chip.
+ */
+export function asMuscleKey(value: string | null): MuscleKey | null {
+  return MUSCLE_ORDER.find((key) => key === value) ?? null;
+}
+
+/**
  * Rank a muscle table for reading.
  *
  * Input: any muscle → number table (an exercise's involvement, a workout's total load).

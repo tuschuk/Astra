@@ -21,6 +21,7 @@ import { Alert, type AlertButton } from 'react-native';
 import { fireEvent, screen, waitFor } from '@testing-library/react-native';
 
 import type { SqlDriver } from '@/db/driver';
+import { createCustomExercise, deleteCustomExercise } from '@/library/customExercises';
 import { libraryExerciseId } from '@/library/uuidv5';
 import { createPreparedDb, renderSignedIn, SIGNED_IN_USER_ID } from '@/test-utils/loggerTestKit';
 import { loadActiveWorkout, startActiveWorkout } from '@/workout/activeWorkout';
@@ -80,6 +81,26 @@ async function logSet(name: string, reps: string, weight: string, setNumber: num
   await fireEvent.press(logButtons[cardIndex]);
   await screen.findByLabelText(`Remove set ${setNumber} of ${name}`);
 }
+
+describe('custom exercises in the logger (B31, LIB-5)', () => {
+  it('a live custom is offered by the picker and logs under its own id; a deleted one is not offered', async () => {
+    const mine = await createCustomExercise(db, SIGNED_IN_USER_ID, { name: 'Zercher Carry', equipment: 'Barbell', primaryMuscle: null });
+    const gone = await createCustomExercise(db, SIGNED_IN_USER_ID, { name: 'Zercher Retired', equipment: null, primaryMuscle: null });
+    await deleteCustomExercise(db, SIGNED_IN_USER_ID, gone.id);
+    await startActiveWorkout(db, SIGNED_IN_USER_ID);
+
+    await renderSignedIn(<ActiveWorkoutScreen />);
+    await screen.findByText('No exercises yet. Add the first one to start logging.');
+    await fireEvent.press(screen.getByLabelText('Add exercise'));
+    await fireEvent.changeText(screen.getByLabelText('Search exercises'), 'zercher');
+    expect(screen.queryByLabelText('Add Zercher Retired')).toBeNull();
+    await fireEvent.press(screen.getByLabelText('Add Zercher Carry'));
+    await screen.findByLabelText('Reps for Zercher Carry');
+
+    const loaded = await loadActiveWorkout(db, SIGNED_IN_USER_ID);
+    expect(loaded?.getSnapshot().entries.map((e) => e.exercise_id)).toEqual([mine.id]);
+  });
+});
 
 describe('logger flow (B09 definition of done)', () => {
   it('logs a multi-exercise session, saves it and reopens it with every set intact', async () => {

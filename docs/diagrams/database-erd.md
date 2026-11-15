@@ -25,6 +25,8 @@ and its stamping trigger, mute added to `private.workout_visible`, author-level 
 votes and comments), `20261115154653_reshares.sql` and `20261115160346_reshare_trigger_columns.sql`
 (B28, both applied live — `posts.shared_post_id`, the `reshare` kind, the re-share shape and
 flair-stamp trigger, the both-posts read rule, `post_hot_scores` recreated with the new column),
+`20261115173827_exercises_soft_delete.sql` (B31, applied live — `exercises.deleted_at` and the
+customs-only CHECK; see "Custom exercises"),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -42,7 +44,7 @@ erDiagram
   profiles |o--o{ exercises : "owner_id (null = launch library)"
   profiles ||--o{ workouts : "user_id logs"
   workouts ||--o{ workout_exercises : "contains, in position order"
-  exercises |o--o{ workout_exercises : "exercise_id (null if exercise deleted)"
+  exercises |o--o{ workout_exercises : "exercise_id (null only if the row is hard-deleted)"
   workout_exercises ||--o{ sets : "contains, in position order"
   profiles ||--o{ personal_records : "user_id holds"
   exercises ||--o{ personal_records : "exercise_id (cascade)"
@@ -120,8 +122,9 @@ erDiagram
     uuid owner_id FK "null means shared launch-library exercise"
     text slug UK "library rows only (unique among them); null on customs"
     text name "1-80 chars"
-    text primary_muscle
-    text equipment "free-text until LIB-5 settles the customs vocabulary"
+    text primary_muscle "library: display text; customs: a muscle key (chest, quads...) or null"
+    text equipment "free text; customs use the six library kinds (Barbell...) or null"
+    timestamptz deleted_at "customs only (CHECK); set = soft-deleted by its owner (B31)"
     timestamptz created_at
     timestamptz updated_at
   }
@@ -526,6 +529,25 @@ index (`slug` where `owner_id is null`) makes re-seeding idempotent. Seeds only 
 leaving the catalog never deletes or re-identifies a row (renames are a deliberate content
 migration, because workout history references these ids).
 
+## Custom exercises (B31)
+
+A lifter's own exercise is an `exercises` row with `owner_id` = them and `slug` null (the slug
+CHECK forbids one). It gets a client-generated v4 id, is created and edited on the phone and
+uploaded through the outbox like any training row, and is logged, gets PRs and history exactly
+like a library row — everything downstream keys on the id. RLS keeps it private: only its owner
+can read, insert, update or delete it (live-probed at B31 with two simulated users: the other
+user reads 0 rows by id or unfiltered, and their update and delete affect 0 rows).
+
+**Delete is a soft delete.** The app never sends a `DELETE` for an exercise: it stamps
+`deleted_at` and upserts the row, so the delete syncs like an edit and reaches the owner's other
+phones through the normal download (exercises have no tombstones). The row stays, so
+`workout_exercises.exercise_id` and `personal_records.exercise_id` keep pointing at a live row —
+past sessions and PRs keep the name, and nothing on a phone can dangle. The app hides stamped rows
+from the Library and the logger's picker only; history and PR reads don't filter them.
+CHECK `exercises_deleted_customs_only`: `deleted_at is null or owner_id is not null` — the shared
+library can never be stamped. No policy changed: the owner's update policy already allows the
+stamp, and the select policy already hides every custom (deleted or not) from everyone else.
+
 ## Supersets, drop sets and timed / WOD work (B11)
 
 - **Superset** (`workout_exercises.superset_group`): exercises of one workout that sit next to
@@ -731,8 +753,10 @@ they can see rows the caller's own RLS would hide.
   them), to its `workout_analyses` row and to its post (B20), and leaves tombstones for the workout and each record
   (an analysis gets none: other devices drop it with the workout's tombstone). The app deletes a finished
   workout (B14) by sending only the workout's delete; these cascades do the rest.
-- Deleting an exercise keeps the history: `workout_exercises.exercise_id` becomes null rather than
-  deleting the logged work. Its `personal_records` rows are deleted.
+- The app never hard-deletes an exercise (B31: deleting a custom stamps `deleted_at`). If a row
+  is ever hard-deleted (account deletion, a direct API call), history is still kept:
+  `workout_exercises.exercise_id` becomes null rather than deleting the logged work. Its
+  `personal_records` rows are deleted.
 - Deleting a set (or the workout holding it) deletes any `personal_records` row that cites it.
 
 ## Why client-generated primary keys
@@ -755,7 +779,7 @@ unique, visibility, created_at, updated_at)`, the lifter's own posts, upload-onl
 rebuilt `posts` with `kind`, a nullable `workout_id` (still unique) and `image_path` — the photo
 waiting to upload is a file in the app's documents folder, `post-images/<post_id>.<ext>`, not a
 column; version 10 (B26) added `user_settings.progress_pic_visibility` (default `private`);
-versions are append-only,
+version 11 (B31) added `exercises.deleted_at` (text, null while live); versions are append-only,
 upgraded on launch). There is no device copy of `sync_tombstones` — tombstones are applied as
 they download, and `sync_state` keeps the last applied id (`pull_cursor:tombstones`). It has the same column names, but
 uses text for uuids and timestamps and 0/1 for booleans, and it does not repeat the server's
@@ -774,7 +798,9 @@ and `sync_state`, the download bookmarks. What this means for the server:
   parent workout after its entries or sets land (touch-the-root), so other devices find changed
   entries and sets by watching `workouts` alone.
 - Library rows (`owner_id` null) only ever flow server → device; the device seeds its own copy
-  with the same uuidv5 ids at first launch.
+  with the same uuidv5 ids at first launch. Custom exercises (B31) flow both ways: upserted first
+  in every upload (parents before children), downloaded on `pull_cursor:exercises` with the
+  library; a soft delete travels as an ordinary upsert carrying `deleted_at`.
 - **The server only ever receives finished workouts.** A workout in progress (`ended_at` null)
   lives only in the device mirror and is never queued; finishing it stamps `ended_at` and queues
   the workout with all its entries and sets in one transaction (B08 active-workout store). So

@@ -179,6 +179,7 @@ describe('pullChanges', () => {
         primary_muscle: 'Chest',
         equipment: 'Barbell',
         slug: 'bench_press',
+        deleted_at: null,
         created_at: '2026-11-14T08:00:00.000Z',
       },
     ]);

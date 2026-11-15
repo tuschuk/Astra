@@ -7,6 +7,7 @@
  *     server's training tables (backend/supabase/migrations/…_training.sql and
  *     …_exercises_slug.sql). Column names match the server's exactly, so
  *     syncing a row is a straight copy, not a translation.
+ *     Custom exercises can be soft-deleted (`exercises.deleted_at`, version 11, B31).
  *   - personal_records — the lifter's current PRs per exercise (version 4, B13).
  *   - user_settings — the lifter's kg/lb choice (version 6, B15) and who sees their new progress
  *     pics (version 10, B26).
@@ -266,8 +267,19 @@ const V10 = `
 alter table user_settings add column progress_pic_visibility text not null default 'private';
 `;
 
+/**
+ * Version 11 (B31): `exercises.deleted_at` — when the lifter deleted one of their own custom
+ * exercises (ISO-8601 text; null while it is live). Mirrors the server's
+ * `…_exercises_soft_delete.sql`. A delete only stamps this, so the row stays and the lifter's
+ * logged sessions and PRs keep its name; the Library and the logger's picker hide stamped rows
+ * (`library/customExercises.ts`). Library rows never carry it.
+ */
+const V11 = `
+alter table exercises add column deleted_at text;
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10];
+export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

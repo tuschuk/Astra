@@ -30,6 +30,10 @@
  *   workouts.title          text check (char_length(title) <= 100)      → at most 100 characters
  *   workouts.notes          text check (char_length(notes) <= 2000)     → at most 2000 characters
  *
+ * And the `exercises` table (B31, a lifter's own custom exercises):
+ *
+ *   exercises.name text not null check (char_length(name) between 1 and 80) → 1 … 80 characters
+ *
  * The upper bounds come from the column types (a value bigger than the column holds is refused
  * just like a broken CHECK). Weight and RPE are checked after rounding to their column's
  * decimals — see `roundWeightKgForStorage` / `roundRpeForStorage`.
@@ -57,6 +61,9 @@ export const MAX_ENTRY_NOTES_LENGTH = 1000;
 export const MAX_WORKOUT_TITLE_LENGTH = 100;
 /** Longest note on a whole workout (`workouts.notes`, CHECK ≤ 2000). */
 export const MAX_WORKOUT_NOTES_LENGTH = 2000;
+
+/** Longest name of an exercise (`exercises.name`, CHECK between 1 and 80). */
+export const MAX_EXERCISE_NAME_LENGTH = 80;
 
 /**
  * Rounds a kg weight to the 2 decimals its server column keeps (numeric(6, 2)).
@@ -160,6 +167,20 @@ export function assertValidWorkoutNotes(notes: string | null): void {
  */
 export function assertValidEntryNotes(notes: string | null): void {
   if (notes != null) assertTextLength(notes, MAX_ENTRY_NOTES_LENGTH, 'notes');
+}
+
+/**
+ * Throws a `RangeError` unless `name` is a name the server will store for a custom exercise:
+ * 1 to 80 characters (counted the server's way). Pass the name already trimmed — the phone
+ * stores it trimmed, so a name of only spaces arrives here empty and is refused, which keeps a
+ * blank-looking exercise out of the Library. Call it before saving a custom exercise (B31).
+ */
+export function assertValidExerciseName(name: string): void {
+  const length = textLength(name);
+  if (length < 1) throw new RangeError('name must not be empty');
+  if (length > MAX_EXERCISE_NAME_LENGTH) {
+    throw new RangeError(`name must be at most ${MAX_EXERCISE_NAME_LENGTH} characters, got ${length}`);
+  }
 }
 
 /**

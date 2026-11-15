@@ -124,6 +124,7 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     `user_settings.unit`; a kg user sees and types pounds until then.
   - **Exercise-name snapshot on `workout_exercises`** moves to B31 (first step that makes an
     exercise deletable); the saved screen shows "Deleted exercise" for a missing name meanwhile.
+    (B31: deletion is soft, so names never go missing — returned to the B31 list below.)
   - Leftover multiple drafts are still not surfaced (Resume takes the newest).
   - `leave()` / `back()` ("back, or the Workout tab") is duplicated in two screens; extract when
     a third screen needs it.
@@ -517,3 +518,23 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     attempt; there is no retry other than reopening the screen. Add one if it is ever seen.
   - Mermaid render of `app-flow.md` was not run by the builder (`mmdc` needed approval the
     headless run doesn't have) — Gate 2 should render it once.
+- **B31 custom-exercises:**
+  - **Exercise-name snapshot on `workout_exercises`** — returned here from B14/B09's note: B31
+    made deletion a *soft* delete (`exercises.deleted_at`), so a deleted custom keeps its name on
+    every past session and the snapshot's trigger is gone. Remaining triggers: account deletion
+    (the whole account goes) and a founder retiring a library exercise (a content migration).
+  - **Creating a custom from inside the logger's picker** — valuable mid-workout; needs the form in
+    the logger (plan, Out of scope). Today: Library → New exercise, then back to the logger.
+  - **Muscle-map shading for customs** — a single `primary_muscle` is not an intensity table;
+    customs contribute nothing to the map. A later LIB step can grow the authoring.
+  - **Undelete / permanent purge**; **hiding a deleted custom's PRs** from the profile's PR list
+    (they are real lifts and still show) — product calls for later.
+  - **Library tab still reads the catalog from the bundle**, not `astra.db` (unchanged gap); only
+    the "Your exercises" section reads the device table.
+  - **Device check (Tristen):** airplane mode → Library → New exercise (name + chips) → it appears
+    under "Your exercises" and in the logger's picker → log it → its card shows the session and PR →
+    Edit the name → Delete → gone from Library and picker, past sessions still name it → reconnect →
+    the row in Supabase with `deleted_at` set. Also: the section's height at phone width above the
+    catalog count; the form's chip rows wrapping at phone width.
+  - Mermaid render of the updated diagrams by the builder — see the B31 plan's Deviations; Gate 2
+    should render them once if the builder could not.

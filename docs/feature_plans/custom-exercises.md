@@ -354,3 +354,48 @@ severity per CLAUDE.md "Autonomous sessions"). What changed or was settled:
 - **"How does the Library tab hear about a delete made on the detail screen?"**
   `useFocusEffect` — the pattern 23 screens already use — rather than a shared store or event;
   customs are a tiny read and the tab refocus is the exact moment the list can have changed.
+
+## Build record (builder run) — deviations and review fixes
+
+Migration applied live as `exercises_soft_delete`; Supabase recorded version `20261115173827`,
+and the file carries that prefix. **Step DoD probe run live** (SQL, two simulated users via
+`request.jwt.claims` inside a rolled-back transaction — throwaway `auth.users` rows, nothing
+kept): A inserts a custom and reads it (1), soft-deletes it and still reads it (1); B reads it
+by id → 0 rows, B's unfiltered read of non-library rows not B's own → 0, B's `UPDATE` → 0 rows,
+B's `DELETE` → 0 rows; the row is intact as A wrote it; stamping `deleted_at` on a library row is
+refused by `exercises_deleted_customs_only`.
+
+Deviations from the plan, all deliberate:
+
+- **"Your exercises" sits above the count line**, not between the count and the catalog — the
+  "N exercises" line then labels the catalog cards directly below it instead of separating two
+  kinds of card. When only customs match, the catalog's empty state reads "No library exercises
+  match that search." instead of claiming nothing matched. A one-line hint shows at zero customs.
+- **`ExercisePicker.customExercises` takes `ExerciseRow[]` (required)**, not a `PickerExercise`
+  view type — the picker filters them through `filterCustomExercises` (one filter home), and the
+  prop is required so a logging screen cannot forget it. Custom rows are labelled "Custom ·
+  <equipment>" (or "Custom"), not equipment alone, so a custom is never mistaken for a library row.
+- **New files beyond the table:** `library/useCustomExercises.ts` (the focus-refreshed read the
+  Library tab and both logging screens share), `components/library/confirmDeleteCustomExercise.ts`
+  (the `confirmDeleteWorkout` pattern), `components/library/CustomPill.tsx` (review fix: one pill
+  for the card and the detail screen); `asMuscleKey` (`library/muscles.ts`) and `asEquipment`
+  (`library/catalog.ts`) — review fix for a lookup written three times.
+- **Library tab tests moved** from `screens.test.tsx` to `__tests__/library-tab.test.tsx`: the tab
+  now needs an AuthProvider, a database and `useFocusEffect`, which the placeholder-screen smoke
+  file doesn't set up.
+- **Custom card read failure** (review fix): a database that can't be opened or read shows "This
+  exercise couldn't be read from this phone." — never the "not in the library" state; signed out
+  shows not-found instead of loading forever. The detail branch component is
+  `CustomExerciseDetail` (review fix: it shared a name with the Library's list card).
+- **Form name check** (review fix): the form asks `assertValidExerciseName` (via a non-throwing
+  wrapper) instead of re-counting characters, so form and save path cannot disagree.
+
+- **Form test database** — `CustomExerciseForm.test.tsx` uses a migrated-only database (no
+  library seed): on the first full run its first test hit Jest's 30 s limit under full-suite
+  load; it passes in 7 s alone and the full suite was green on the rerun.
+- **Diagrams not rendered by the builder:** `mmdc` needs approval the headless run doesn't have.
+  Gate 2 should render `app-flow.md` and `database-erd.md` once.
+
+Review findings left as they are: `useCustomExercises` also returns `db` / `userId` (a mild
+Middle Man) — kept so the Library tab doesn't open a second set of hooks just to hand them to the
+form; no standalone hook test (covered through the Library tab, both logging screens' tests).
