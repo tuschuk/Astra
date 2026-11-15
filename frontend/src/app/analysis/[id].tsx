@@ -11,6 +11,12 @@
  * server's copy after a sync without looking any different (see `analysisForScreen`). It re-reads
  * every time it comes into view.
  *
+ * Between the numbers and the PRs sits the **muscle map** (ANA-3): front and back body figures
+ * with the muscles this session trained filled in red (stronger for main movers), and a line
+ * naming them. It is read from the phone's own sets and the bundled exercise library, so it is
+ * always offline and always matches the workout as it stands now; it is left out entirely when no
+ * logged exercise has library muscle data (an empty finish, or custom exercises only).
+ *
  * Opened by Finish (in place of the logger) and by the saved workout's **Analysis** button —
  * including for workouts finished before analyses existed.
  *
@@ -23,19 +29,36 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { NOT_MEDICAL_ADVICE } from '@analysis';
 
 import { analysisForScreen, type ScreenAnalysis } from '@/analysis/analysis';
+import { sessionMuscleLoads, type SessionMuscleLoads } from '@/analysis/muscles';
 import { useAuth } from '@/auth/AuthProvider';
+import { MuscleMap, trainedMuscleNames } from '@/components/MuscleMap';
 import { Screen } from '@/components/Screen';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
+import type { SqlExecutor } from '@/db/driver';
 import { useAppDatabase } from '@/db/useAppDatabase';
 import { useDisplayUnit } from '@/settings/displayUnit';
 import { countLabel, formatDuration, formatWeight, prBookLabel, workoutDateLabel } from '@/workout/format';
 import { colors, spacing, type } from '@/theme';
 
-/** Where the screen is: reading, found, or not this user's finished workout on this phone. */
-type LoadState = { status: 'loading' } | { status: 'found'; view: ScreenAnalysis } | { status: 'missing' };
+/**
+ * Where the screen is: reading, found, or not this user's finished workout on this phone. A found
+ * workout carries its analysis and its muscle map together, read in one go, so the two can never
+ * belong to different workouts.
+ */
+type LoadState =
+  | { status: 'loading' }
+  | { status: 'found'; view: ScreenAnalysis; muscles: SessionMuscleLoads }
+  | { status: 'missing' };
+
+/** Reads everything the screen shows for one workout: the analysis, then (if found) its muscle map. */
+async function readScreen(db: SqlExecutor, userId: string, id: string): Promise<LoadState> {
+  const view = await analysisForScreen(db, userId, id);
+  if (!view) return { status: 'missing' };
+  return { status: 'found', view, muscles: await sessionMuscleLoads(db, userId, id) };
+}
 
 export default function AnalysisScreen() {
   const router = useRouter();
@@ -53,9 +76,9 @@ export default function AnalysisScreen() {
     useCallback(() => {
       if (!db || !userId || typeof id !== 'string') return;
       let cancelled = false;
-      analysisForScreen(db, userId, id)
-        .then((view) => {
-          if (!cancelled) setLoaded({ forId: id, state: view ? { status: 'found', view } : { status: 'missing' } });
+      readScreen(db, userId, id)
+        .then((next) => {
+          if (!cancelled) setLoaded({ forId: id, state: next });
         })
         .catch((caught: unknown) => {
           console.warn('Analysis: could not read it from the phone', caught);
@@ -95,6 +118,7 @@ export default function AnalysisScreen() {
   }
 
   const { analysis, workout } = state.view;
+  const muscleList = trainedMuscleNames(state.muscles);
   const warmups = analysis.total_sets - analysis.working_sets;
   const setsText =
     warmups > 0 ? `${countLabel(analysis.total_sets, 'set')} · ${warmups} warm-up` : countLabel(analysis.total_sets, 'set');
@@ -114,9 +138,21 @@ export default function AnalysisScreen() {
         <Stat label="Duration" value={formatDuration(analysis.duration_seconds)} />
       </Card>
 
+      {muscleList !== '' ? (
+        <Card style={styles.card}>
+          <SectionLabel size="small" style={styles.sectionLabel}>
+            Muscles trained
+          </SectionLabel>
+          <MuscleMap loads={state.muscles} />
+          <Body variant="small" style={styles.legend}>
+            {muscleList}
+          </Body>
+        </Card>
+      ) : null}
+
       {analysis.new_prs.length > 0 ? (
         <Card style={styles.card}>
-          <SectionLabel size="small" style={styles.prLabel}>
+          <SectionLabel size="small" style={styles.sectionLabel}>
             New PRs
           </SectionLabel>
           {analysis.new_prs.map((pr) => (
@@ -179,8 +215,12 @@ const styles = StyleSheet.create({
     ...type.cardTitle,
     flex: 1,
   },
-  prLabel: {
+  sectionLabel: {
     color: colors.accent,
+  },
+  legend: {
+    color: colors.muted,
+    textAlign: 'center',
   },
   view: {
     marginTop: spacing.md,

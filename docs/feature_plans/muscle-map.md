@@ -285,3 +285,42 @@ checkable claim verified in the repo; Gate 1 is where Tristen overrules).
 - **Scope verdict:** right as written. No migration, no sync change, no new dependency; the one
   borderline call (rule in `_shared/analysis` rather than beside the screen) is the handoff's
   explicit standing instruction, not widening.
+
+## Build notes (builder run — deviations and additions)
+
+- **Test helper file added:** `frontend/src/test-utils/muscleMapQueries.ts` (`muscleShapes`,
+  `isShaded`), shared by the component test and the route test so the "shaded / not shaded"
+  check has one definition. Not in the plan's file table; test-only.
+- **How Jest sees the shading:** under RNTL 14 the SVG `Path`s are host `RNSVGPath` views with
+  `testID`, `fill` (a processed colour `{type, payload}`) and `fillOpacity`; the figures are
+  hidden from accessibility, so queries pass `includeHiddenElements: true` and compare `fill`
+  against `processColor(colors.accent)`. No mocking of react-native-svg, no
+  `transformIgnorePatterns` change (G8d held).
+- **Calves are drawn on both figures** (the plan left the front calves optional) so a calf-only
+  session is visible whichever figure the eye lands on. Shoulders and forearms also appear on
+  both, as planned.
+- **`combineMuscleLoads` ignores non-positive / non-finite values** (a 0 in the data never shows
+  as trained). Not in the plan; a guard, no behaviour change for today's catalog.
+- **`trainedMuscles` / `trainedMuscleNames` / `shadeOpacity` live in `MuscleMap.tsx`** (exported
+  for the screen's legend and the tests); the canonical tie-break order is `MUSCLE_ORDER` in
+  `muscleMapPaths.ts`, as planned.
+- **The reader also filters exercise visibility** (`e.owner_id is null or e.owner_id = ?`), the
+  same guard every neighbouring reader in `analysis.ts` uses. No effect today (slugged rows are
+  library rows); it keeps a future slugged custom row from another account out.
+- **`sessionMuscleLoads` does not check `ended_at`.** On the analysis screen it runs only after
+  `analysisForScreen` has confirmed a finished workout; a future caller (B20/B21) that needs the
+  finished-only guarantee must check it itself.
+
+### Review (mattpocock-skills:code-review, builder run)
+
+Standards: no hard violations. Judgement calls, not acted on: the muscle-table type is spelled
+out in several places (a shared `MuscleIntensities` alias would touch the catalog — out of
+scope); `MUSCLE_ORDER` / `MUSCLE_NAMES` could live beside `MuscleKey` in the library (kept in
+the paths file per G9, the plan of record); `combineMuscleLoads` is generic and server-side with
+no server caller yet (settled by G1). Fixed: the duplicated "is it trained?" check in
+`MuscleMap.tsx`.
+
+Spec: no blocking defects. Fixed: added a screen test that a custom-exercise-only session hides
+the card; renamed the misnamed "union" screen test (the real multi-exercise case is the edit
+test). The "pre-B19 workout" case needs no separate test: the map is a pure read of any finished
+workout on the phone, which every screen test already exercises.

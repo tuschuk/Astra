@@ -10,6 +10,8 @@
 export { ANALYSIS_ENGINE_VERSION, buildAnalysis } from './analysis.ts';
 export type { WorkoutAnalysis } from './analysis.ts';
 export { copyState, NOT_MEDICAL_ADVICE, pickCopy } from './copy.ts';
+export { combineMuscleLoads } from './muscles.ts';
+export type { MuscleLoads } from './muscles.ts';
 export type { AnalysisCopy, CopyState } from './copy.ts';
 export { buildSummary, timestampMs } from './summary.ts';
 export type {

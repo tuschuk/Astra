@@ -87,7 +87,7 @@ flowchart TD
     ToolKit -->|"Close / system back: logger still mounted underneath, exactly as left"| Logger
     Logger -->|Finish| EmptyQ
     EmptyQ -->|"yes: 'Nothing logged yet'<br/>Discard workout / Keep lifting"| Logger
-    AnalysisScr["Workout analysis (app/analysis/[id].tsx, B18: ANA-1/2/4, NFR-9)<br/>workout title or date; encouraging headline + message (rule-picked, no AI);<br/>Volume (lifter's unit), Sets ('n sets · k warm-up'), Duration (m:ss);<br/>'New PRs': exercise · book · weight; View workout; Back;<br/>not-medical-advice statement in EVERY state (incl. loading / missing);<br/>re-read on every focus; works offline<br/>(another user's / unfinished id: 'not on this phone')"]
+    AnalysisScr["Workout analysis (app/analysis/[id].tsx, B18: ANA-1/2/4, NFR-9)<br/>workout title or date; encouraging headline + message (rule-picked, no AI);<br/>Volume (lifter's unit), Sets ('n sets · k warm-up'), Duration (m:ss);<br/>B19 'Muscles trained' card (ANA-3): front + back body figures (MuscleMap),<br/>trained muscles filled red, opacity 0.25 + 0.75 × intensity, the rest plain;<br/>legend 'Chest, Shoulders, Triceps' (most direct first); hidden when nothing maps;<br/>'New PRs': exercise · book · weight; View workout; Back;<br/>not-medical-advice statement in EVERY state (incl. loading / missing);<br/>re-read on every focus; works offline<br/>(another user's / unfinished id: 'not on this phone')"]
     EmptyQ -->|"no: finish, clear slot,<br/>router.replace"| AnalysisScr
     AnalysisScr -->|"View workout: router.push"| Saved
     Saved -->|"Analysis: router.push"| AnalysisScr
@@ -152,8 +152,11 @@ flowchart TD
     ReqPass["analysisRequestPass: finished workouts with no / stale analysis<br/>and no unsent lines, newest first, max 10 per sync;<br/>requestAnalysis each; save the reply (saveServerAnalysesTx);<br/>a failure is logged, retried next sync"]
     ForScreen --> LocalA
     ForScreen --> StoredA
+    MuscleRead["sessionMuscleLoads (src/analysis/muscles.ts, B19):<br/>distinct exercises.slug of the user's workout's slots with ≥ 1 set<br/>(warm-ups count; custom / unknown slug → nothing) → catalog muscles<br/>→ combineMuscleLoads; read in the SAME keyed load as analysisForScreen"]
   end
   LocalDB --> ForScreen --> AnalysisScr
+  LocalDB --> MuscleRead -->|"muscle map"| AnalysisScr
+  Catalog -->|"muscle intensities by slug"| MuscleRead
   DispUnit -->|"unit"| AnalysisScr
 
   subgraph ActiveWO["Active-workout store (src/workout/activeWorkout.ts)<br/>driven by the logger screens through the session slot + useActiveWorkout hooks"]
@@ -236,12 +239,13 @@ flowchart TD
 
   subgraph Shared["Shared training math (backend/supabase/functions/_shared/training-math)<br/>import name in the app: @training-math"]
     MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification<br/>+ recordBooks fold (which set holds each book), beatsRecord, compareRecordBooks (B13),<br/>session volume (volume.ts: warm-ups and weightless sets add 0),<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store, the logger's<br/>display (displayWeight), the Tool Kit (B16) and the analysis rules (B18)"]
-    AnaRules["Analysis rules (_shared/analysis, B18), import name @analysis:<br/>buildSummary (sessionVolumeKg, set counts, duration, PRs citing the sets),<br/>pickCopy (4 states: pr / weighted / unloaded / empty), NOT_MEDICAL_ADVICE,<br/>buildAnalysis + ANALYSIS_ENGINE_VERSION = 1; pure, deterministic"]
+    AnaRules["Analysis rules (_shared/analysis, B18), import name @analysis:<br/>buildSummary (sessionVolumeKg, set counts, duration, PRs citing the sets),<br/>pickCopy (4 states: pr / weighted / unloaded / empty), NOT_MEDICAL_ADVICE,<br/>buildAnalysis + ANALYSIS_ENGINE_VERSION = 1; pure, deterministic;<br/>B19 combineMuscleLoads: per-muscle MAX across a session's exercises (phone only so far)"]
     MathMod --> AnaRules
   end
   AnaRules -->|"buildAnalysis (Deno, relative import)"| AnalyzeFn
   AnaRules -->|"buildAnalysis (offline view)"| LocalA
   AnaRules -->|"NOT_MEDICAL_ADVICE"| AnalysisScr
+  AnaRules -->|"combineMuscleLoads"| MuscleRead
   MathMod -->|"lbToKg, assertValidSetFields (incl. score + set-note length),<br/>assertValidSupersetGroup, title / workout-note / entry-note caps (B12),<br/>round weight / RPE for storage"| MutWO
   MathMod -->|"displayWeight (format.ts) in the unit from useDisplayUnit"| Logger
   MathMod -->|"recordBooks, beatsRecord, roundToIncrement (B13)"| FinishWO
@@ -360,6 +364,12 @@ flowchart TD
    With no signal it is computed on the phone with the very rules the server uses; after the
    next sync the server's stored copy (identical unless the data differs) takes over. Editing
    the workout recomputes it.
+   Since B19 (ANA-3) it also shows a **Muscles trained** card: front and back body figures with
+   every muscle group the session's library exercises worked filled red — strongest for the main
+   movers — and a line naming them ("Chest, Shoulders, Triceps" for a bench-only day). Any
+   exercise with a logged set counts, warm-ups included; an exercise added but never done, or a
+   custom exercise (no library muscle data), adds nothing. The card is left out when nothing maps.
+   It is always read from the phone, never stored, so it is offline and follows edits at once.
 14. Everything else is a placeholder that renders its final layout with inert controls (Start
    from a program, Home, Marketplace, Communities).
 
@@ -537,8 +547,18 @@ flowchart TD
   queue an upload of it). Pull's fourth bookmark (`pull_cursor:workout_analyses`) follows the
   records; a workout tombstone or a local `deleteLocalRowsTx('workouts')` also drops the
   analysis row. Device schema V7.
+- **Muscle map (B19).** The combining rule is `combineMuscleLoads` in
+  `_shared/analysis/muscles.ts` (per-muscle maximum, generic string keys, no catalog import).
+  `src/analysis/muscles.ts` `sessionMuscleLoads` runs one parameterized query (the user's
+  workout ⋈ slots with at least one set ⋈ visible exercises with a slug), looks each slug up in
+  the bundled catalog (`ALL_EXERCISES`, id = slug), and combines their `muscles`. The analysis
+  screen reads it in the same keyed load as `analysisForScreen`, so the map and the numbers are
+  always the same workout's. `components/MuscleMap.tsx` draws two `react-native-svg` figures from
+  the shape data in `components/muscleMapPaths.ts` (hand-authored art, replaceable as data;
+  `MUSCLE_ORDER` is the tie-break order, `MUSCLE_NAMES` the display names). Nothing is stored and
+  nothing syncs.
 - **Still unwired:** the Library reads the bundled catalog, not `astra.db`; posts linking to an
-  analysis (B21) and the muscle map (B19) don't exist yet; Settings has no Notifications (B47) or
+  analysis (B21) don't exist yet; the muscle map appears only on the analysis screen; Settings has no Notifications (B47) or
   Privacy (B26) section; nothing feeds the social feed.
 
 ## Shared pieces every screen uses
