@@ -19,6 +19,11 @@
  *     the trigger's code, P0001;
  *   - a comment insert gets a server id and time and comes back with its author nested in.
  *
+ * B24 adds the `post_hot_scores` view: every post with a hot score computed by the same formula
+ * as the migration, so a "Hot" read ranks as the server would. Comparisons and ordering treat
+ * number cells as numbers (a hot score is a float). The view also refuses an un-hinted
+ * `profiles(` embed, as the live server does (see `FEED_SELECT`).
+ *
  * What it does NOT do: row-level security or general embedding. Posts are seeded already shaped
  * the way the server's embed returns them (author, flair and workout nested in), and the follow
  * insert imitates the one RLS refusal the app handles (a block in either direction). Server-side
@@ -45,8 +50,25 @@ export interface FakeSocialTables {
   comments: Row[];
 }
 
-/** What a request can name: the tables, plus the computed `post_scores` view. */
-type FakeSource = keyof FakeSocialTables | 'post_scores';
+/** What a request can name: the tables, plus the computed `post_scores` and (B24) `post_hot_scores` views. */
+type FakeSource = keyof FakeSocialTables | 'post_scores' | 'post_hot_scores';
+
+/**
+ * The server's hot score (the `post_hot_scores` view, B24), imitated so the fake ranks the way
+ * the server does: Reddit's formula over a post's net votes and its age. TEST USE ONLY — the app
+ * never computes this; the migration is its one home and this copy must follow it if it changes.
+ */
+function fakeHotScore(netVotes: number, createdAt: string): number {
+  const order = Math.log10(Math.max(Math.abs(netVotes), 1));
+  return Math.sign(netVotes) * order + (Date.parse(createdAt) / 1000 - 1134028003) / 45000;
+}
+
+/** Compares a stored cell with a filter value: as numbers when the cell is a number, else as text. */
+function compareCell(cell: unknown, value: string): number {
+  if (typeof cell === 'number') return cell - Number(value);
+  const s = String(cell);
+  return s === value ? 0 : s < value ? -1 : 1;
+}
 
 /** Splits a PostgREST filter list at top-level commas (not inside parentheses or quotes). */
 function splitTopLevel(text: string): string[] {
@@ -110,11 +132,10 @@ function parseCondition(text: string): Predicate {
   return (row) => {
     const cell = row[column];
     if (cell == null) return false;
-    const s = String(cell);
-    if (op === 'eq') return s === value;
-    if (op === 'lt') return s < value;
-    if (op === 'gt') return s > value;
-    return likeToRegExp(value).test(s);
+    if (op === 'eq') return compareCell(cell, value) === 0;
+    if (op === 'lt') return compareCell(cell, value) < 0;
+    if (op === 'gt') return compareCell(cell, value) > 0;
+    return likeToRegExp(value).test(String(cell));
   };
 }
 
@@ -154,6 +175,14 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       score: tables.votes.filter((v) => v.post_id === p.id).reduce((sum, v) => sum + Number(v.value), 0),
       comment_count: tables.comments.filter((c) => c.post_id === p.id).length,
     }));
+  }
+
+  /** The `post_hot_scores` view, computed now (B24): each post's own columns plus its hot score. */
+  function hotRows(): Row[] {
+    return (tables.posts as Row[]).map((p) => {
+      const net = tables.votes.filter((v) => v.post_id === p.id).reduce((sum, v) => sum + Number(v.value), 0);
+      return { ...p, hot_score: fakeHotScore(net, String(p.created_at)) };
+    });
   }
 
   /** The upvote-only trigger: refuses a downvote on a post whose flair takes upvotes only. */
@@ -211,7 +240,16 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       const matching = postScores().filter((r) => filters.every((f) => f(r)));
       return { data: matching, error: null };
     }
-    const rows = tables[table] as Row[];
+    if (table === 'post_hot_scores') {
+      // The live server's refusal (probed at B24): through the view, `profiles` is reachable
+      // both as the author and through `votes`, so an un-hinted embed is ambiguous (PGRST201).
+      const select = calls.find(([m]) => m === 'select')?.[1];
+      if (typeof select === 'string' && /(^|[,:(])profiles\(/.test(select)) {
+        return { data: null, error: { code: 'PGRST201', message: "Could not embed because more than one relationship was found for 'post_hot_scores' and 'profiles'" } };
+      }
+    }
+    // The hot view: every post with its hot score beside it, read-only like the real view.
+    const rows = table === 'post_hot_scores' ? hotRows() : (tables[table] as Row[]);
     if (upsert) {
       const { row, onConflict } = upsert;
       if (table === 'votes') {
@@ -259,19 +297,19 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     }
     const matching = rows.filter((r) => filters.every((f) => f(r)));
     if (isDelete) {
+      if (table === 'post_hot_scores') throw new Error('fake: a view cannot be deleted from');
       tables[table] = rows.filter((r) => !matching.includes(r));
       return { data: null, error: null };
     }
     const sorted = [...matching].sort((x, y) => {
       for (const { column, ascending } of orders) {
-        const a = String(x[column]);
-        const b = String(y[column]);
-        if (a !== b) return (a < b ? -1 : 1) * (ascending ? 1 : -1);
+        const diff = compareCell(x[column], String(y[column]));
+        if (diff !== 0) return (diff < 0 ? -1 : 1) * (ascending ? 1 : -1);
       }
       return 0;
     });
     let out: Row[] = sorted.slice(0, limit);
-    if (table === 'posts') {
+    if (table === 'posts' || table === 'post_hot_scores') {
       // Nest each post's votes under `my_vote`, then narrow by any alias filter — PostgREST's embed.
       out = out.map((post) => {
         let votes = tables.votes.filter((v) => v.post_id === post.id);

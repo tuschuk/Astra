@@ -7,15 +7,28 @@
  */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
-import { act, fireEvent, screen } from '@testing-library/react-native';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react-native';
 
+import KeyValueStore from 'expo-sqlite/kv-store';
+
+import type { SqlDriver } from '@/db/driver';
+import { replaceFlairsTx } from '@/db/flairs';
 import { createFakeSocialClient } from '@/test-utils/fakeSocialClient';
+import { FakeServer } from '@/test-utils/fakeTransport';
 import { profile, rawImagePost, rawPost } from '@/test-utils/feedFixtures';
-import { renderSignedIn, SIGNED_IN_USER_ID } from '@/test-utils/loggerTestKit';
-import type { FeedPost } from '@/social/feed';
+import { createPreparedDb, renderSignedIn, SIGNED_IN_USER_ID } from '@/test-utils/loggerTestKit';
+import { HOT_SOURCE, type FeedPost } from '@/social/feed';
+import { feedPrefsKey, resetFeedPrefsCache, serializeFeedPrefs } from '@/social/feedPrefs';
 import { ONLY_YOU_LINE } from '@/components/social/PostCard';
 
 import HomeScreen from '@/app/(tabs)/index';
+
+// B24: the phone's database, for the flair chips — a fresh one per test, holding the four flairs.
+const mockOpenDatabase = jest.fn<() => Promise<SqlDriver>>();
+jest.mock('@/db/database', () => ({
+  ...jest.requireActual<typeof import('@/db/database')>('@/db/database'),
+  openAppDatabase: () => mockOpenDatabase(),
+}));
 
 let mockSocial = createFakeSocialClient();
 jest.mock('@/lib/supabase', () => ({
@@ -37,9 +50,30 @@ const me = profile(ME, 'me_lifts', 'Me');
 const friend = profile('friend', 'friend_lifts', 'Friendly');
 const stranger = profile('stranger', 'stranger_lifts', 'Stranger');
 
-beforeEach(() => {
+beforeEach(async () => {
   jest.clearAllMocks();
+  const db = await createPreparedDb();
+  await db.withTransactionAsync((tx) => replaceFlairsTx(tx, new FakeServer().flairs));
+  mockOpenDatabase.mockResolvedValue(db);
+  // A fresh install: no remembered feed settings, in memory or on the phone.
+  resetFeedPrefsCache();
+  await KeyValueStore.removeItem(feedPrefsKey(ME));
 });
+
+/** The feed reads (Latest from posts, Hot from the view) in the order they were sent. */
+function feedReads() {
+  return mockSocial.requests.filter((r) => r[0][1] === 'posts' || r[0][1] === HOT_SOURCE);
+}
+
+/** Whether the chip with this spoken label is the lit one. */
+function isSelected(label: string): boolean {
+  return screen.getByLabelText(label).props.accessibilityState?.selected === true;
+}
+
+const HOT = 'Hot posts first, ranked by votes';
+const LATEST = 'Latest posts first';
+const FORM_CHECK = 'Show only Form Check posts';
+const ALL = 'Show posts of every flair';
 
 /** The posts the feed list currently holds, in order (virtualization-proof). */
 function listedPosts(): FeedPost[] {
@@ -221,5 +255,163 @@ describe('Home feed', () => {
     expect(await screen.findByLabelText('Flair: Physique Check')).toBeTruthy();
     expect(screen.getByText(ONLY_YOU_LINE)).toBeTruthy();
     expect(screen.getByText('Bench Press')).toBeTruthy();
+  });
+});
+
+describe('Home feed — order and flair (B24)', () => {
+  const FORM = { id: 'form-check', name: 'Form Check' };
+  // An older post with ten net upvotes, and two newer ones without — vote sums invert age order.
+  function seedRanked() {
+    mockSocial = createFakeSocialClient({
+      follows: [{ follower_id: ME, followee_id: 'friend' }],
+      posts: [
+        rawPost({ id: 'popular', author: friend, createdAt: '2026-11-14T08:00:00.000Z' }),
+        rawPost({ id: 'fresh', author: friend, createdAt: '2026-11-14T14:00:00.000Z' }),
+        rawPost({ id: 'form', author: friend, createdAt: '2026-11-14T13:00:00.000Z', flair: FORM }),
+      ],
+      votes: Array.from({ length: 10 }, (_, i) => ({ post_id: 'popular', user_id: `fan${i}`, value: 1 })),
+    });
+  }
+
+  it('starts on Latest with every flair; the chips come from the phone’s flair list', async () => {
+    seedRanked();
+    await renderSignedIn(<HomeScreen />);
+    await screen.findByText('Workout fresh');
+    expect(isSelected(LATEST)).toBe(true);
+    expect(isSelected(ALL)).toBe(true);
+    for (const name of ['WOD', 'Physique Check', 'New PR', 'Form Check']) {
+      expect(screen.getByLabelText(`Show only ${name} posts`)).toBeTruthy();
+    }
+    expect(listedPosts().map((p) => p.id)).toEqual(['fresh', 'form', 'popular']);
+    expect(feedReads()).toHaveLength(1);
+  });
+
+  it('the toggle switches to the ranked order, read from the hot view (SOC-11)', async () => {
+    seedRanked();
+    await renderSignedIn(<HomeScreen />);
+    await screen.findByText('Workout fresh');
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText(HOT));
+    });
+    await screen.findByText('Workout popular');
+    expect(listedPosts().map((p) => p.id)).toEqual(['popular', 'fresh', 'form']);
+    expect(isSelected(HOT)).toBe(true);
+    const last = feedReads().at(-1)!;
+    expect(last[0]).toEqual(['from', HOT_SOURCE]);
+    expect(last).toContainEqual(['order', 'hot_score', { ascending: false }]);
+    // And back again.
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText(LATEST));
+    });
+    expect(listedPosts().map((p) => p.id)).toEqual(['fresh', 'form', 'popular']);
+  });
+
+  it('selecting a flair shows only matching posts; All brings the rest back (SOC-9)', async () => {
+    seedRanked();
+    await renderSignedIn(<HomeScreen />);
+    await screen.findByText('Workout fresh');
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText(FORM_CHECK));
+    });
+    expect(listedPosts().map((p) => p.id)).toEqual(['form']);
+    expect(listedPosts().every((p) => p.flair.id === 'form-check')).toBe(true);
+    expect(feedReads().at(-1)).toContainEqual(['eq', 'flair_id', 'form-check']);
+    expect(isSelected(FORM_CHECK)).toBe(true);
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText(ALL));
+    });
+    expect(listedPosts()).toHaveLength(3);
+    expect(feedReads().at(-1)!.some(([m, col]) => m === 'eq' && col === 'flair_id')).toBe(false);
+  });
+
+  it('the order and flair survive a relaunch: the first read after reopening already uses them (step DoD)', async () => {
+    seedRanked();
+    const first = await renderSignedIn(<HomeScreen />);
+    await screen.findByText('Workout fresh');
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText(HOT));
+    });
+    await screen.findByText('Workout popular');
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText(FORM_CHECK));
+    });
+    await waitFor(() => expect(listedPosts().map((p) => p.id)).toEqual(['form']));
+    await first.unmount();
+    // Relaunch: the app's memory is gone; only what the phone saved remains.
+    resetFeedPrefsCache();
+    mockSocial.requests.length = 0;
+    await renderSignedIn(<HomeScreen />);
+    await screen.findByText('Workout form');
+    expect(feedReads()).toHaveLength(1);
+    expect(feedReads()[0][0]).toEqual(['from', HOT_SOURCE]);
+    expect(feedReads()[0]).toContainEqual(['eq', 'flair_id', 'form-check']);
+    expect(isSelected(HOT)).toBe(true);
+    expect(isSelected(FORM_CHECK)).toBe(true);
+  });
+
+  it('Hot and a flair compose, and the next page keeps both', async () => {
+    const posts = Array.from({ length: 25 }, (_, i) => {
+      const n = String(i).padStart(2, '0');
+      return rawPost({ id: `f${n}`, author: friend, createdAt: `2026-11-14T${n}:00:00.000Z`, flair: FORM });
+    });
+    posts.push(rawPost({ id: 'wod', author: friend, createdAt: '2026-11-15T09:00:00.000Z' }));
+    mockSocial = createFakeSocialClient({ follows: [{ follower_id: ME, followee_id: 'friend' }], posts });
+    await KeyValueStore.setItem(feedPrefsKey(ME), serializeFeedPrefs({ sort: 'hot', flairId: 'form-check' }));
+    await renderSignedIn(<HomeScreen />);
+    await screen.findByText('Workout f24');
+    expect(listedPosts()).toHaveLength(20);
+    await act(async () => {
+      fireEvent(screen.getByTestId('home-feed'), 'onEndReached');
+    });
+    expect(listedPosts()).toHaveLength(25);
+    expect(listedPosts().map((p) => p.id)).not.toContain('wod');
+    const pageTwo = feedReads().at(-1)!;
+    expect(pageTwo[0]).toEqual(['from', HOT_SOURCE]);
+    expect(pageTwo).toContainEqual(['eq', 'flair_id', 'form-check']);
+    expect(pageTwo.some(([m, f]) => m === 'or' && String(f).startsWith('hot_score.lt.'))).toBe(true);
+  });
+
+  it('an empty filtered feed names the flair and offers the whole feed back', async () => {
+    seedRanked();
+    await KeyValueStore.setItem(feedPrefsKey(ME), serializeFeedPrefs({ sort: 'latest', flairId: 'new-pr' }));
+    await renderSignedIn(<HomeScreen />);
+    expect(await screen.findByText('No New PR posts yet.')).toBeTruthy();
+    expect(screen.queryByText(/Nobody you follow has posted yet/)).toBeNull();
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Show all posts'));
+    });
+    expect(listedPosts()).toHaveLength(3);
+    expect(isSelected(ALL)).toBe(true);
+  });
+
+  it('a remembered flair the phone no longer lists reads as All — never an invisible filter', async () => {
+    seedRanked();
+    await KeyValueStore.setItem(feedPrefsKey(ME), serializeFeedPrefs({ sort: 'latest', flairId: 'retired-flair' }));
+    await renderSignedIn(<HomeScreen />);
+    await screen.findByText('Workout fresh');
+    expect(listedPosts()).toHaveLength(3);
+    expect(isSelected(ALL)).toBe(true);
+    expect(feedReads()[0].some(([m, col]) => m === 'eq' && col === 'flair_id')).toBe(false);
+  });
+
+  it('tapping the already-lit chip while a stale flair is remembered keeps the feed showing', async () => {
+    seedRanked();
+    await KeyValueStore.setItem(feedPrefsKey(ME), serializeFeedPrefs({ sort: 'latest', flairId: 'retired-flair' }));
+    await renderSignedIn(<HomeScreen />);
+    await screen.findByText('Workout fresh');
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText(LATEST));
+    });
+    expect(screen.queryByText('Loading your feed…')).toBeNull();
+    expect(listedPosts()).toHaveLength(3);
+  });
+
+  it('another account on the same phone does not inherit this one’s choice', async () => {
+    seedRanked();
+    await KeyValueStore.setItem(feedPrefsKey('someone-else'), serializeFeedPrefs({ sort: 'hot', flairId: 'form-check' }));
+    await renderSignedIn(<HomeScreen />);
+    await screen.findByText('Workout fresh');
+    expect(isSelected(LATEST)).toBe(true);
+    expect(feedReads()[0][0]).toEqual(['from', 'posts']);
   });
 });

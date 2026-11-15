@@ -230,6 +230,45 @@ standard one anyway (`npx expo start --offline` ~150 s → `tsc --noEmit` → li
    recorded rewrite (lateral per-post sums) changes only the view body. Launch scale makes this
    a measurement, not a blocker.
 
+## Build deviations (recorded by the builder)
+
+- **D1 — the author embed names its foreign key.** Risk 1's primary strategy held: embedding
+  through `post_hot_scores` resolves the flair, workout and votes relationships. But the live
+  server refused the bare `author:profiles(...)` on the view with `PGRST201` — through the view,
+  `profiles` is reachable both by `posts_user_id_fkey` and many-to-many through `votes`
+  (`votes.post_id` → view, `votes.user_id` → profiles). Fix: `FEED_SELECT` now says
+  `author:profiles!posts_user_id_fkey(...)`, the relationship the server's own hint named. Probed
+  live with the full select, the alias filter, `user_id` in-list, the flair clause, the hot keyset
+  `or()` and the hot ordering: `post_hot_scores` 200, `posts` 200 (anon key, so empty bodies — the
+  point was that the request parses and the embeds resolve). One select string still serves both
+  orders. The fallback (ids from the view, then a posts read) was **not** used. The fake social
+  client reproduces the refusal so a regression to the bare name fails a test.
+- **D2 — a list is shown only under the chips it was loaded for.** The plan said a tap "saves it
+  and reloads page one (bumping the existing `generation` ref)". The build keeps that (the reload
+  follows from `refresh` depending on the order and flair; each refresh takes a new generation)
+  and adds: a ready list records the order and flair it was loaded with, and while that differs
+  from the current choice Home shows "Loading your feed…" instead of the list. That covers a chip
+  tap *and* a remembered flair that only becomes active when a fresh flair list arrives, and
+  "load more" always continues the list it belongs to (the screen can never offer the tagged
+  cursor to the wrong order). Review caught that the first build forced the loading state from
+  the tap handler, which stuck on "Loading" when the lit chip was re-tapped with a stale flair
+  stored — fixed by deriving it instead; regression test added. A failed reload of a list the
+  lifter has switched away from shows the connection error (not the old list).
+- **D4 — the first feed request waits for the flair list too, not only the kv-store read.** G6
+  needs the phone's flair list to decide whether the remembered flair is real, so the first read
+  waits for `useAppDatabase` + `readFlairs` (a local read; a database that fails to open reads as
+  an empty list → "All"). The flair row is hidden until both are read, so no chip is ever lit
+  wrongly.
+- **D5 — `grant select on post_hot_scores to authenticated`** added to the migration, mirroring
+  `post_scores` (Supabase's default privileges grant it anyway; stated explicitly as B23 did).
+- **D3 — the filtered-empty state carries a "Show all posts" action** (sets the flair back to
+  All). The plan's message wording is kept: "No *Form Check* posts yet." EmptyState's pattern is
+  that every empty state offers the action that fills it.
+- **Live probe done in the build:** in a rolled-back transaction as an authenticated user, three
+  zero-vote posts came back from the view newest first with hot scores ≈ 14682 (five digits, as
+  risk 2 predicted). The multi-voter ranking probe and `explain analyze` need several real
+  accounts with votes and are left to Gate 2 as the plan already assigns.
+
 ## Grilling decisions (settled)
 
 Run via `mattpocock-skills:grilling` in the planner session; checkable claims verified against
