@@ -10,7 +10,15 @@ import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { ENTRIES, makeSet, SETS, USER_ID, WORKOUT } from '@/test-utils/workoutFixtures';
 
 import { prepareDatabase } from './database';
-import { getRowsByIds, onLocalWrite, upsertRows, writeLocal } from './dao';
+import {
+  deleteDraftRowsTx,
+  getRowsByIds,
+  onLocalWrite,
+  upsertRows,
+  writeDraftRows,
+  writeLocal,
+  writeLocalTree,
+} from './dao';
 
 const LATER = '2026-11-14T11:00:00.000Z';
 
@@ -133,6 +141,94 @@ describe('writeLocal', () => {
   it('does nothing for an empty list', async () => {
     const db = await freshDb();
     await writeLocal(db, 'sets', []);
+    expect(await outboxSize(db)).toBe(0);
+  });
+});
+
+const DRAFT = { ...WORKOUT, ended_at: null };
+
+describe('writeDraftRows / deleteDraftRowsTx (the in-progress workout)', () => {
+  it('saves draft rows with updated_at stamped, and queues nothing', async () => {
+    const db = await freshDb();
+    await writeDraftRows(db, 'workouts', [DRAFT], { now: LATER });
+    await writeDraftRows(db, 'workout_exercises', ENTRIES, { now: LATER });
+    await writeDraftRows(db, 'sets', SETS, { now: LATER });
+    expect(await getRowsByIds(db, 'sets', [SETS[1].id])).toEqual([{ ...SETS[1], updated_at: LATER }]);
+    expect(await outboxSize(db)).toBe(0);
+  });
+
+  it('does not tell local-write listeners (there is nothing to push)', async () => {
+    const db = await freshDb();
+    const listener = jest.fn();
+    onLocalWrite(db, listener);
+    await writeDraftRows(db, 'workouts', [DRAFT]);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('refuses a finished workout, and rows inside a finished workout', async () => {
+    const db = await freshDb();
+    await expect(writeDraftRows(db, 'workouts', [WORKOUT])).rejects.toThrow('finished');
+    await upsertRows(db, 'workouts', [WORKOUT]);
+    await expect(writeDraftRows(db, 'workout_exercises', ENTRIES)).rejects.toThrow('finished');
+    await upsertRows(db, 'workout_exercises', ENTRIES);
+    await expect(writeDraftRows(db, 'sets', SETS)).rejects.toThrow('finished');
+    expect(await getRowsByIds(db, 'sets', [SETS[0].id])).toEqual([]);
+    await expect(
+      db.withTransactionAsync((tx) => deleteDraftRowsTx(tx, 'workout_exercises', [ENTRIES[0].id])),
+    ).rejects.toThrow('finished');
+    expect(await getRowsByIds(db, 'workout_exercises', [ENTRIES[0].id])).toHaveLength(1);
+  });
+
+  it('deletes draft rows, cascading to the rows inside them', async () => {
+    const db = await freshDb();
+    await writeDraftRows(db, 'workouts', [DRAFT]);
+    await writeDraftRows(db, 'workout_exercises', ENTRIES);
+    await writeDraftRows(db, 'sets', SETS);
+    await db.withTransactionAsync((tx) => deleteDraftRowsTx(tx, 'sets', [SETS[0].id]));
+    expect(await getRowsByIds(db, 'sets', [SETS[0].id])).toEqual([]);
+    await db.withTransactionAsync((tx) => deleteDraftRowsTx(tx, 'workout_exercises', [ENTRIES[1].id]));
+    expect(await getRowsByIds(db, 'sets', [SETS[3].id, SETS[4].id])).toEqual([]);
+    await db.withTransactionAsync((tx) => deleteDraftRowsTx(tx, 'workouts', [DRAFT.id]));
+    expect(await db.getAllAsync('select id from sets')).toEqual([]);
+    expect(await outboxSize(db)).toBe(0);
+  });
+});
+
+describe('writeLocalTree', () => {
+  it('saves and queues a whole workout in one go, and tells listeners per table', async () => {
+    const db = await freshDb();
+    const listener = jest.fn();
+    onLocalWrite(db, listener);
+    await writeLocalTree(db, { workouts: [WORKOUT], workout_exercises: ENTRIES, sets: SETS }, { now: LATER });
+    expect((await pendingRows(db, 'workouts')).map((p) => p.rowId)).toEqual([WORKOUT.id]);
+    expect(await pendingRows(db, 'workout_exercises')).toHaveLength(2);
+    expect(await pendingRows(db, 'sets')).toHaveLength(5);
+    expect((await getRowsByIds(db, 'sets', [SETS[2].id]))[0].updated_at).toBe(LATER);
+    expect(listener.mock.calls).toEqual([['workouts'], ['workout_exercises'], ['sets']]);
+  });
+
+  it('touches the root when the workout itself is not in the tree', async () => {
+    const db = await freshDb();
+    await upsertRows(db, 'workouts', [WORKOUT]);
+    await upsertRows(db, 'workout_exercises', ENTRIES);
+    await writeLocalTree(db, { sets: [SETS[0]] }, { now: LATER });
+    expect((await getRowsByIds(db, 'workouts', [WORKOUT.id]))[0].updated_at).toBe(LATER);
+    expect((await pendingRows(db, 'workouts')).map((p) => p.rowId)).toEqual([WORKOUT.id]);
+  });
+
+  it('is all-or-nothing: a bad set at the end leaves no rows and no outbox lines', async () => {
+    const db = await freshDb();
+    const orphan = { ...makeSet(0, 7), workout_exercise_id: 'ffffffff-ffff-4fff-8fff-ffffffffffff' };
+    await expect(
+      writeLocalTree(db, { workouts: [WORKOUT], workout_exercises: ENTRIES, sets: [...SETS, orphan] }),
+    ).rejects.toThrow();
+    expect(await getRowsByIds(db, 'workouts', [WORKOUT.id])).toEqual([]);
+    expect(await outboxSize(db)).toBe(0);
+  });
+
+  it('does nothing for an empty tree', async () => {
+    const db = await freshDb();
+    await writeLocalTree(db, {});
     expect(await outboxSize(db)).toBe(0);
   });
 });

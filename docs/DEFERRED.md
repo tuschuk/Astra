@@ -93,5 +93,23 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     session have not been exercised on a device or simulator.
   - The `.expo/types/router.d.ts` staleness hit again at B07. Running `npx expo start` once
     regenerated it, and tsc then passed.
+- B08 active-workout-store follow-ups (`active-workout-store`):
+  - **B09 must wire it:** call `loadActiveWorkout` on launch (or on opening the Workout tab).
+    When `startActiveWorkout` refuses, offer resume-or-discard. Offer discard instead of finishing
+    an empty workout. Bind `repeatLastSet` to one tap (NFR-2). Every call passes the signed-in
+    `user_id`.
+  - **Leftover unfinished workouts.** If more than one unfinished workout ever exists, resume
+    picks the newest and leaves the others untouched. No UI surfaces them yet.
+  - **Title/notes setters** (LOG-3, B12) add their length limits to `@training-math`
+    `limits.ts` (title ≤ 100, notes ≤ 2000 / entry notes ≤ 1000).
+  - **`limits.ts` mirrors the migration by hand.** Any future migration that changes a `sets`
+    CHECK or column type must update `limits.ts` in the same commit. No test spans the SQL and
+    the TS.
+  - **Device check for NFR-3:** force-kill the real app mid-workout and relaunch. This needs
+    B09's screen. Until then the guarantee is proven in Jest on a file-backed database.
+  - A failed snapshot re-read after a committed write reports an error although the write
+    landed. Nothing is lost (the next read re-syncs). Revisit if it is ever seen in practice.
+  - `mmdc` was not available to the headless builder, so the updated `app-flow.md` Mermaid was not
+    render-checked.
 - (External blockers from the PRD — Strength Level licence, food database, Denver gym data source,
   video provider, deload rules — are tracked in `docs/BUILD_LIST.md`.)

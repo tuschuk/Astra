@@ -23,3 +23,10 @@ jest.mock('expo-sqlite/kv-store', () => {
   };
   return { __esModule: true, default: store, Storage: store, AsyncStorage: store };
 });
+
+// `expo-crypto` (new row ids, src/lib/ids.ts) is native too. Node's own
+// crypto makes the same kind of random v4 UUID, so it stands in under Jest.
+jest.mock('expo-crypto', () => {
+  const { randomUUID } = require('crypto');
+  return { __esModule: true, randomUUID: () => randomUUID() };
+});

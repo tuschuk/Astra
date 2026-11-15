@@ -24,5 +24,7 @@ export {
 export { MAX_PERCENT, workingWeightFromPercent } from './intensity.ts';
 export { loadBar } from './plates.ts';
 export type { BarLoad, PlateCount, PlateInventoryItem } from './plates.ts';
+export { assertValidSetFields, roundRpeForStorage, roundWeightKgForStorage } from './limits.ts';
+export type { SetFieldsToCheck } from './limits.ts';
 export { classifyPrs, recordsFromSets } from './prs.ts';
 export type { PrCandidateSet, PrEvent, PrKind, PrRecords } from './prs.ts';

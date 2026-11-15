@@ -194,7 +194,8 @@ the rows as they are, with no id remapping.
 This diagram draws the server. The phone keeps its own SQLite copy (`frontend/src/db/schema.ts`)
 of `exercises`, `workouts`, `workout_exercises` and `sets`. It has the same column names, but
 uses text for uuids and timestamps and 0/1 for booleans, and it does not repeat the server's
-CHECK rules. It also has two tables of its own: `outbox`, the local changes waiting to upload,
+CHECK rules as SQL (instead the app checks every set against them before saving, through the
+shared `@training-math` `limits.ts`). It also has two tables of its own: `outbox`, the local changes waiting to upload,
 and `sync_state`, the download bookmarks. What this means for the server:
 
 - **Uploads are upserts on `id`** (`INSERT … ON CONFLICT (id) DO UPDATE` through PostgREST), run
@@ -208,3 +209,9 @@ and `sync_state`, the download bookmarks. What this means for the server:
   entries and sets by watching `workouts` alone.
 - Library rows (`owner_id` null) only ever flow server → device; the device seeds its own copy
   with the same uuidv5 ids at first launch.
+- **The server only ever receives finished workouts.** A workout in progress (`ended_at` null)
+  lives only in the device mirror and is never queued; finishing it stamps `ended_at` and queues
+  the workout with all its entries and sets in one transaction (B08 active-workout store). So
+  every workout the app uploads has an `ended_at`, though the column stays nullable.
+- **Weights and RPE arrive already rounded** to their column's decimals (`weight_kg` 2, `rpe` 1),
+  so the server's numeric rounding changes nothing and a download matches the device exactly.
