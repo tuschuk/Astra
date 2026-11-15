@@ -29,9 +29,17 @@ interface ChoiceChipsProps<T> {
   onSelect: (value: T) => void;
   /** Stretch the chips to share the row evenly (a switcher) instead of wrapping (a picker). */
   fill?: boolean;
+  /** Greys the chips out and ignores taps (the timer's mode chips while a timer is running). */
+  disabled?: boolean;
 }
 
-export function ChoiceChips<T extends string | number>({ options, selected, onSelect, fill = false }: ChoiceChipsProps<T>) {
+export function ChoiceChips<T extends string | number>({
+  options,
+  selected,
+  onSelect,
+  fill = false,
+  disabled = false,
+}: ChoiceChipsProps<T>) {
   return (
     <View style={[styles.row, fill && styles.rowFill]} accessibilityRole="radiogroup">
       {options.map((option) => {
@@ -40,14 +48,16 @@ export function ChoiceChips<T extends string | number>({ options, selected, onSe
           <Pressable
             key={String(option.value)}
             onPress={() => onSelect(option.value)}
+            disabled={disabled}
             accessibilityRole="radio"
             accessibilityLabel={option.spoken}
-            accessibilityState={{ selected: active, checked: active }}
+            accessibilityState={{ selected: active, checked: active, disabled }}
             style={({ pressed }) => [
               styles.chip,
               fill && styles.chipFill,
               active && styles.chipActive,
               pressed && styles.pressed,
+              disabled && styles.disabled,
             ]}
           >
             <SectionLabel style={active ? styles.labelActive : undefined}>{option.label}</SectionLabel>
@@ -91,5 +101,8 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.7,
+  },
+  disabled: {
+    opacity: 0.4,
   },
 });

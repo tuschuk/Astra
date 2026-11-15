@@ -11,9 +11,26 @@ import {
   readPercent,
   readPositiveNumber,
   readWeightKg,
+  readMinSec,
   readWholeNumber,
   readZeroOrMore,
 } from './inputs';
+
+describe('readMinSec', () => {
+  it('reads minutes and seconds into milliseconds, an empty box counting as 0', () => {
+    expect(readMinSec('1', '30')).toEqual({ kind: 'ok', value: 90_000 });
+    expect(readMinSec('2', '')).toEqual({ kind: 'ok', value: 120_000 });
+    expect(readMinSec('', '45')).toEqual({ kind: 'ok', value: 45_000 });
+    expect(readMinSec(' ', '')).toEqual({ kind: 'empty' });
+  });
+
+  it('refuses out-of-range boxes and a zero time', () => {
+    expect(readMinSec('100', '0')).toEqual({ kind: 'invalid', message: 'Enter minutes from 0 to 99.' });
+    expect(readMinSec('1', '60')).toEqual({ kind: 'invalid', message: 'Enter seconds from 0 to 59.' });
+    expect(readMinSec('1.5', '0')).toEqual({ kind: 'invalid', message: 'Enter minutes as a whole number.' });
+    expect(readMinSec('0', '0')).toEqual({ kind: 'invalid', message: 'Enter a time above 0:00.' });
+  });
+});
 
 describe('readPositiveNumber', () => {
   it('tells empty, unusable and good apart', () => {

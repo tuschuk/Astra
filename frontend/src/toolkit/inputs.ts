@@ -2,8 +2,8 @@
  * Reading what the lifter typed into a Tool Kit calculator, and the loadable step its answers
  * snap to.
  *
- * Why this exists: all four calculators take typed numbers, and each one has to tell three
- * cases apart — nothing typed yet (show no answer, no complaint), something that isn't a usable
+ * Why this exists: all four calculators (and the timer's set-up boxes) take typed numbers, and
+ * each one has to tell three cases apart — nothing typed yet (show no answer, no complaint), something that isn't a usable
  * number (say why, inline), and a good value. Doing that here, once, keeps every calculator's
  * error wording the same and keeps the screens free of parsing rules. It also means the training
  * math (`@training-math`) only ever sees numbers inside its own allowed range — its RangeError
@@ -75,6 +75,28 @@ export function readWholeNumber(text: string, min: number, max: number, what: st
   const value = Number(trimmed);
   if (value < min || value > max) return { kind: 'invalid', message: `Enter ${what} from ${min} to ${max}.` };
   return { kind: 'ok', value };
+}
+
+/** The most minutes a timer box takes (99 — a 99:59 countdown is far past any rest or WOD). */
+export const MAX_TIMER_MINUTES = 99;
+
+/**
+ * Reads a time typed as a minutes box and a seconds box (the timer's set-up) and hands it back in
+ * **milliseconds**. An empty box counts as 0 as long as the other one has something in it, so
+ * "1" + "" is 1:00 and "" + "45" is 0:45. Minutes run 0–99, seconds 0–59, and the time must be
+ * above 0:00. Example: "1" and "30" → 90000.
+ */
+export function readMinSec(minutesText: string, secondsText: string): FieldReading {
+  if (minutesText.trim() === '' && secondsText.trim() === '') return { kind: 'empty' };
+  const minutes = readWholeNumber(minutesText, 0, MAX_TIMER_MINUTES, 'minutes');
+  if (minutes.kind === 'invalid') return minutes;
+  const seconds = readWholeNumber(secondsText, 0, 59, 'seconds');
+  if (seconds.kind === 'invalid') return seconds;
+  // An empty box reads as 'empty' here, and counts as 0.
+  const value = (reading: FieldReading) => (reading.kind === 'ok' ? reading.value : 0);
+  const total = (value(minutes) * 60 + value(seconds)) * 1000;
+  if (total <= 0) return { kind: 'invalid', message: 'Enter a time above 0:00.' };
+  return { kind: 'ok', value: total };
 }
 
 /**

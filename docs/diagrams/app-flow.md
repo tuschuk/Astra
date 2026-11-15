@@ -32,7 +32,7 @@ flowchart TD
 
   Tabs --> Home["Home<br/>social feed (SOC-1)<br/>today: brand + empty state pointing to Workout"]
   Tabs --> Market["Marketplace<br/>programs (MKT-1..5)<br/>today: featured-section skeleton, placeholder cards"]
-  Tabs --> Workout["Workout tab (on focus: re-read astra.db)<br/>no draft: Start empty workout (program start disabled, B35)<br/>draft on phone: Resume workout / Discard (asks first)<br/>Tool Kit tiles: 1RM / RPE / %1RM / Plates open the Tool Kit at that tool (B16);<br/>Timer tile still a placeholder (TK-5, B17)<br/>Past workouts: newest 100 finished, date + duration + counts"]
+  Tabs --> Workout["Workout tab (on focus: re-read astra.db)<br/>no draft: Start empty workout (program start disabled, B35)<br/>draft on phone: Resume workout / Discard (asks first)<br/>Tool Kit tiles: 1RM / RPE / %1RM / Plates / Timer open the Tool Kit at that tool (B16, B17)<br/>Past workouts: newest 100 finished, date + duration + counts"]
   Tabs --> Communities["Communities<br/>Teams and Gyms<br/>today: two sections, each an empty state"]
   Tabs --> Library["Library<br/>browse every launch exercise as a card"]
   Tabs -->|profile button| You["You<br/>profile skeleton: avatar ring, follow counts, PRs label (empty values)<br/>gear button → Settings"]
@@ -91,10 +91,21 @@ flowchart TD
   end
   Workout -->|"Start / Resume: store into the session slot<br/>(activeWorkoutSession.ts, keyed by user id)"| Logger
   Workout -->|tap a past workout| Saved
-  Workout -->|"tap a Tool Kit tile: initialTool = that calculator"| ToolKit
+  Workout -->|"tap a Tool Kit tile: initialTool = that tool"| ToolKit
 
-  subgraph ToolKitG["Tool Kit (B16, TK-1..4): a Modal panel, NOT a route; no network anywhere"]
-    ToolKit["ToolKitSheet (components/toolkit): header + Close,<br/>switcher 1RM | RPE | %1RM | Plates (radio chips);<br/>contents rebuilt on every open (Modal unmounts them)"]
+  subgraph ToolKitG["Tool Kit (B16 + B17, TK-1..5): a Modal panel, NOT a route; no network anywhere"]
+    ToolKit["ToolKitSheet (components/toolkit): header + Close,<br/>switcher 1RM | RPE | %1RM | Plates | Timer (radio chips);<br/>contents rebuilt on every open (Modal unmounts them)"]
+    TimerC["Timer (TimerScreen): mode chips Stopwatch | Countdown | EMOM | AMRAP | Tabata<br/>(locked once started — Reset unlocks); huge m:ss digits + caption / round;<br/>idle: set-up boxes (countdown rest presets 0:30–5:00, min+sec; EMOM every + rounds;<br/>AMRAP cap; Tabata work s / rest s / rounds); Start / Pause / Resume / Reset / Go again;<br/>redraws every 250 ms only while running AND on screen; screen-reader round/phase/end announcements"]
+    TimerMath["toolkit/timer.ts: pure clock math — a run is startedAt + pausedAt + pausedTotalMs;<br/>every frame = snapshot(run, Date.now()): elapsed / remaining, EMOM round, Tabata phase;<br/>endsAtMs = the wall-clock zero; readTimerConfig reads the set-up boxes"]
+    TimerStoreN["toolkit/timerStore.ts: the ONE timer, module-level (outlives the Modal),<br/>in memory only (not saved; gone if the app is killed);<br/>start / resume → book alert at endsAtMs; pause / reset → cancel; stopwatch never books"]
+    TimerAlertsN["toolkit/timerAlerts.ts: the only expo-notifications user, lazy guarded require<br/>(missing/broken module → 'unavailable', never a crash); Android channel 'timer' first;<br/>permission asked on first booking; past moment or superseded request → nothing booked;<br/>one fixed id 'astra-timer-zero' so re-booking replaces and cancel works after relaunch"]
+    OSNotif[("Phone's notification scheduler (local, on device):<br/>date trigger fires at zero even with Astra backgrounded or killed;<br/>foreground: banner + sound (library default handler)")]
+    ToolKit --> TimerC
+    TimerC <-->|"useSyncExternalStore; actions"| TimerStoreN
+    TimerC & TimerStoreN --> TimerMath
+    TimerStoreN -->|"schedule(at, title, body) / cancel()"| TimerAlertsN
+    TimerAlertsN -->|"scheduleNotificationAsync / cancelScheduledNotificationAsync"| OSNotif
+    TimerAlertsN -.->|"'unavailable' → alertsOff → 'Notifications are off' line"| TimerStoreN
     OneRmC["1RM: weight (display unit) + reps 1–30 → epleyE1rm;<br/>a single = its own 1RM; table: weightForReps for 2–10 reps;<br/>Epley (1985) citation on the answer"]
     RpeC["RPE: 1RM + rep chips 1–12 + RPE chips 6–10 (½ steps)<br/>→ workingWeightFromRpe; 'Load …' snapped to 2.5 kg / 5 lb<br/>(roundToIncrement) + % of 1RM (percentOfOneRm)"]
     PctC["%1RM: 1RM + percent (0, 150] → workingWeightFromPercent;<br/>out of range refused inline; same 'Load …' line"]
@@ -302,8 +313,20 @@ flowchart TD
    weight → what to put on each side, the total that loads, and whether it is exact, short (the
    rack can't make it) or under the bar; the rack (kg or lb plates, each unit its own) is edited
    right there and remembered on this phone. Typed numbers are remembered until the app restarts.
-12. Everything else is a placeholder that renders its final layout with inert controls (Start
-   from a program, the Timer tile, Home, Marketplace, Communities).
+12. **Run a timer (B17, TK-5), with no signal needed.** The Tool Kit's **Timer** (also a Workout
+   tab tile) is a gym wall clock: pick **Stopwatch** (counts up), **Countdown** (a rest timer —
+   one-tap 0:30 … 5:00 presets or minutes + seconds), **EMOM** (an interval, default 1:00, for
+   N rounds — the time left in each round with "Round 3 of 10"), **AMRAP** (counts up to a time
+   cap, with the time left under it) or **Tabata** (work / rest seconds × rounds, default
+   20 / 10 × 8, showing Work or Rest and the round). **Start**, **Pause**, **Resume**, **Reset**;
+   a finished timer shows its "time's up" words and **Go again**. The mode chips lock once a
+   timer starts. The timer keeps running when the panel is closed, the phone is locked or
+   another app is open — the time is right on return because it is worked out from timestamps.
+   A finite timer books a local notification for its zero, so the alert arrives with Astra in
+   the background (or closed). The first start asks notification permission; if it is refused,
+   a line says alerts are off and the timer works the same.
+13. Everything else is a placeholder that renders its final layout with inert controls (Start
+   from a program, Home, Marketplace, Communities).
 
 ## Data path today
 
@@ -409,6 +432,22 @@ flowchart TD
   logged and ignored, and an in-memory cache makes reopening instant. Limits there (≤ 20 per
   side, ≤ 12 sizes, plates and bar ≤ 100, target ≤ 2000, in the rack's unit) bound the solver's
   work.
+- **Tool Kit timer (B17).** `components/toolkit/TimerScreen.tsx` only draws; the one timer lives
+  in `toolkit/timerStore.ts`, a module-level store (read with `useSyncExternalStore`), so it
+  keeps running while the Modal is closed. Its state is the per-mode set-up text plus a run of
+  three timestamps — `startedAt`, `pausedAt`, `pausedTotalMs` — and `toolkit/timer.ts` derives
+  every frame from `Date.now()` (`snapshot`: elapsed or remaining, EMOM round = elapsed ÷
+  interval + 1, Tabata work/rest and round). Nothing counts, so a JS runtime frozen in the
+  background loses no time; the 250 ms redraw interval runs only while a timer is running and the
+  screen is mounted. Start/resume of a finite mode books one local notification at `endsAtMs`
+  through `toolkit/timerAlerts.ts` (the only `expo-notifications` import, required lazily and
+  guarded; Android channel `timer`; permission asked on first booking; a booking superseded
+  while the permission dialog was open, or for a moment already past, books nothing; fixed
+  identifier `astra-timer-zero`). Pause and reset cancel it. Nothing cancels at zero: the alert
+  firing *is* the at-zero cue, shown in the foreground too by the library's default handler. The
+  timer isn't saved anywhere (an app kill loses the run, but the booked alert still fires). It
+  makes no network call and isn't synced. Set-up limits: 0–99 min, 0–59 s, above 0:00; rounds
+  1–99; Tabata work 1–600 s, rest 0–600 s.
 - **On-device store and sync (B07).**
   `src/sync/useSync.ts` runs in the root layout. On launch it opens `astra.db`
   (`src/db/database.ts`: foreign keys on, WAL, migrations by `PRAGMA user_version`). It then seeds
@@ -462,9 +501,9 @@ flowchart TD
   notes boxes, shared by the logger and the edit screen), `confirmDiscardWorkout` (the one
   "Discard this workout?" alert) and `confirmDeleteWorkout` (the one "Delete this workout?"
   alert, B14).
-- `components/toolkit/` (B16) holds ToolKitSheet, the four calculators (OneRmCalculator,
-  RpeCalculator, IntensityCalculator, PlateLoader) and their shared pieces: ChoiceChips (a
-  radio-group chip row), NumberField / WeightField (labeled number box + inline error, the
+- `components/toolkit/` (B16, B17) holds ToolKitSheet, the four calculators (OneRmCalculator,
+  RpeCalculator, IntensityCalculator, PlateLoader), TimerScreen, and their shared pieces:
+  ChoiceChips (a radio-group chip row, can be locked with `disabled`), NumberField / WeightField (labeled number box + inline error, the
   weight one naming its unit) and ResultCard (the big answer + second line).
 - **Training math** (`backend/supabase/functions/_shared/training-math/`, imported in the app as
   `@training-math`) is the only place e1RM, RPE and %1RM working weights, plate breakdowns, kg/lb

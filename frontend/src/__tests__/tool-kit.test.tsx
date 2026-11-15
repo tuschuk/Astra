@@ -6,7 +6,10 @@
  *     logged sets and a half-typed reps box untouched;
  *   - reopening finds the calculator's numbers restored (the panel's contents are rebuilt on
  *     every open, so this is `toolkit/session.ts` at work, not luck);
- *   - a Workout tab tile opens the Tool Kit straight at its calculator.
+ *   - a Workout tab tile opens the Tool Kit straight at its calculator (or the timer).
+ *
+ * And the B17 timer's: a countdown started in the panel keeps running after the panel is closed
+ * (the panel's contents are thrown away), so reopening it a minute later shows a minute less.
  *
  * No transport, no network stand-in, no Supabase client anywhere in this file: the Tool Kit
  * has nothing to reach, which is the offline proof. Real SQLite comes in through a mocked
@@ -24,6 +27,8 @@ import { libraryExerciseId } from '@/library/uuidv5';
 import { createPreparedDb, renderSignedIn, SIGNED_IN_USER_ID } from '@/test-utils/loggerTestKit';
 import { PLATE_RACK_KEY, resetPlateRackCache } from '@/toolkit/plateRack';
 import { resetToolKitSession } from '@/toolkit/session';
+import type { TimerAlertsPort } from '@/toolkit/timerAlerts';
+import { resetTimerStore } from '@/toolkit/timerStore';
 import { startActiveWorkout } from '@/workout/activeWorkout';
 import { clearSessionWorkout } from '@/workout/activeWorkoutSession';
 import { formatWeight } from '@/workout/format';
@@ -47,14 +52,22 @@ jest.mock('expo-router', () => {
 });
 
 let db: SqlDriver;
+let alerts: { schedule: jest.Mock<TimerAlertsPort['schedule']>; cancel: jest.Mock<TimerAlertsPort['cancel']> };
 
 beforeEach(async () => {
   jest.clearAllMocks();
   db = await createPreparedDb();
   mockOpenDatabase.mockResolvedValue(db);
+  // The timer's notifications go to a fake: no real phone feature under Jest.
+  alerts = {
+    schedule: jest.fn<TimerAlertsPort['schedule']>(async () => 'scheduled'),
+    cancel: jest.fn<TimerAlertsPort['cancel']>(async () => undefined),
+  };
+  resetTimerStore(alerts);
 });
 
 afterEach(async () => {
+  resetTimerStore();
   clearSessionWorkout();
   resetToolKitSession();
   resetPlateRackCache();
@@ -98,12 +111,14 @@ describe('Tool Kit (B16 definition of done)', () => {
     expect(screen.getByLabelText(`Estimated 1RM: ${answer}`)).toBeTruthy();
   });
 
-  it('a Workout tab tile opens the Tool Kit at its calculator; the Timer stays a placeholder', async () => {
+  it('a Workout tab tile opens the Tool Kit at its tool, the Timer included', async () => {
     await renderSignedIn(<WorkoutScreen />);
     await screen.findByText('Finished workouts show up here.');
-    // The Timer tile (B17) does nothing yet: pressing it opens no panel.
-    await fireEvent.press(screen.getByText('Timer'));
-    expect(screen.queryByLabelText('Close')).toBeNull();
+    // The Timer tile (B17) opens the panel straight at the timer.
+    await fireEvent.press(screen.getByLabelText('Open Timer'));
+    expect(screen.getByLabelText('Timer').props.accessibilityState).toMatchObject({ selected: true });
+    expect(screen.getByLabelText('Time left: 2:00')).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Close'));
 
     await fireEvent.press(screen.getByLabelText('Open Plate loader'));
     expect(screen.getByLabelText('Plate loader').props.accessibilityState).toMatchObject({ selected: true });
@@ -113,5 +128,32 @@ describe('Tool Kit (B16 definition of done)', () => {
     await fireEvent.press(screen.getByLabelText('Close'));
     await fireEvent.press(screen.getByLabelText('Open RPE calculator'));
     expect(screen.getByText('Target reps')).toBeTruthy();
+  });
+});
+
+describe('Tool Kit timer (B17 definition of done)', () => {
+  it('keeps running while the panel is closed: reopened later, it shows the right time', async () => {
+    const T = 1_700_000_000_000;
+    const clock = jest.spyOn(Date, 'now').mockReturnValue(T);
+    await startActiveWorkout(db, SIGNED_IN_USER_ID);
+    await renderSignedIn(<ActiveWorkoutScreen />);
+
+    await fireEvent.press(await screen.findByLabelText('Open Tool Kit'));
+    await fireEvent.press(screen.getByLabelText('Timer'));
+    await fireEvent.press(screen.getByLabelText('1:30 rest'));
+    await fireEvent.press(screen.getByLabelText('Start'));
+    expect(alerts.schedule).toHaveBeenCalledWith(T + 90_000, expect.any(String), expect.any(String));
+
+    // Close the panel to log a set: everything in it is thrown away…
+    await fireEvent.press(screen.getByLabelText('Close'));
+    expect(screen.queryByLabelText(/^Time left/)).toBeNull();
+    // …a minute passes (or the phone sat locked for a minute)…
+    clock.mockReturnValue(T + 60_000);
+    // …and the reopened panel is back on the timer with 30 seconds left.
+    await fireEvent.press(screen.getByLabelText('Open Tool Kit'));
+    expect(screen.getByLabelText('Time left: 0:30')).toBeTruthy();
+
+    await fireEvent.press(screen.getByLabelText('Reset'));
+    expect(alerts.cancel).toHaveBeenCalled();
   });
 });

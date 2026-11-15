@@ -184,6 +184,16 @@ export const type = {
     lineHeight: 26,
     color: colors.text,
   },
+  /**
+   * The Tool Kit timer's wall-clock digits — Space Grotesk bold, huge, readable from across a
+   * gym. (The timer screen adds equal-width numerals so the time doesn't jiggle as it changes.)
+   */
+  timer: {
+    fontFamily: fonts.subBold,
+    fontSize: 88,
+    lineHeight: 96,
+    color: colors.text,
+  },
   /** Default body copy — Manrope. */
   body: {
     fontFamily: fonts.body,

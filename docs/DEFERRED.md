@@ -236,3 +236,21 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     if a low-end device lags, debounce the target box or lower `MAX_TARGET_WEIGHT`.
   - Prefill from the exercise in progress and stored PRs (TK-6) is B43; Timer (TK-5) is B17.
   - `mmdc` was not permitted for the headless builder; `app-flow.md` was not render-checked.
+- B17 tool-kit-timer follow-ups (`tool-kit-timer`):
+  - **Device check (Tristen), iOS and Android:** each of the five modes started, the app
+    backgrounded (or the phone locked) ≥ 2 min, then reopened → correct time, round and phase;
+    a countdown left running with the app backgrounded → the "Time's up" notification arrives
+    at zero; one finishing with the app open and the panel closed → banner and sound (the
+    expo-notifications default handler); first use → the permission prompt, and refusing it
+    shows the "Notifications are off" line while the timer keeps time. Plan risk 1: if Expo Go
+    on Android crashes or no-ops on expo-notifications, the timer must still run (guarded
+    require); the alert check then needs a development build.
+  - **Android alert timing** (plan risk 2): date triggers use best-effort delivery, so the alert
+    may arrive seconds late on some OEMs. Revisit with exact alarms only on device evidence.
+  - **Per-interval cues for EMOM / Tabata** (plan risk 3): only the final zero notifies;
+    per-round notifications or in-app sounds would slot into the same alerts port.
+  - **A running timer doesn't survive the app being killed** (by design). The alert booked
+    with the phone still fires, and the next Start replaces it (fixed alert name). Persist the
+    run in kv-store only if lifters ask.
+  - **Timer isn't reset on sign-out**, like the calculators' session above (nothing sensitive).
+  - `mmdc` was not permitted for the headless builder; `app-flow.md` was not render-checked.

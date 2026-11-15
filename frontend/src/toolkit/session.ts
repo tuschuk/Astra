@@ -17,8 +17,12 @@
  * calculators read them in whatever unit is in force when they draw.
  */
 
-/** The four calculators the sheet can show, in the order its switcher lists them. */
-export type ToolId = 'oneRm' | 'rpe' | 'percent' | 'plates';
+/**
+ * The five tools the sheet can show, in the order its switcher lists them: four calculators and
+ * the timer. (The timer's own memory — its set-up and the running clock — is `timerStore.ts`,
+ * not this record, because it has to keep running, not just remember text.)
+ */
+export type ToolId = 'oneRm' | 'rpe' | 'percent' | 'plates' | 'timer';
 
 /** Everything the Tool Kit remembers between opens. */
 export interface ToolKitSession {
