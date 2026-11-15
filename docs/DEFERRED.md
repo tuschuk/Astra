@@ -209,9 +209,10 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     `user_settings.unit` is `kg` in Supabase; change it in the dashboard → the next sync shows
     it on the phone; Sign out from Settings. Gear-button placement beside the floating profile
     button at phone width is unverified.
-  - **Live probe (Gate 2):** no migration in this step, but the update-only push has only been
-    exercised against the fake server and a recording client — confirm one real toggle updates
-    the row under RLS.
+  - **Live probe:** Gate 2 (Nov 14, 2026) confirmed the live `user_settings` policies the
+    update-only push relies on (owner `select` + `update`, no insert; `unit` CHECK in
+    (`kg`,`lb`), default `lb`). A real signed-in toggle reaching the row is part of the device
+    check above.
   - **Pre-hydration flash** (plan risk 2): a kg lifter may see pounds for a frame on a cold
     start until the one-row read lands. If visible, hold the splash on `unitStore.hydrate`.
   - **Settings sync is bundled behind the training push:** the settings phase runs after the
