@@ -3,7 +3,7 @@
  *
  * Why this file exists: one place builds the Supabase client with the
  * settings a phone app needs — the signed-in session is saved on the device
- * (AsyncStorage) so the user stays signed in after the app is killed, and the
+ * (expo-sqlite's key-value store) so the user stays signed in after the app is killed, and the
  * access token is refreshed only while the app is in the foreground.
  *
  * Configuration comes from two environment variables baked in at build time
@@ -15,7 +15,9 @@
  * Tests never call `getSupabase()`; they hand a fake client to AuthProvider.
  */
 import 'react-native-url-polyfill/auto';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+// expo-sqlite's key-value store, a drop-in for AsyncStorage: the session lives
+// in SQLite like the rest of the app's device data — one storage engine.
+import SessionStorage from 'expo-sqlite/kv-store';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { AppState, type AppStateStatus } from 'react-native';
 
@@ -56,13 +58,13 @@ export function readSupabaseConfig(
 
 /**
  * Builds a Supabase client with the phone-app auth settings:
- * session saved in AsyncStorage, tokens auto-refreshed, and no attempt to
+ * session saved in the SQLite key-value store, tokens auto-refreshed, and no attempt to
  * read a session out of a web URL (there are no web sign-in links here).
  */
 export function createSupabaseClient(config: SupabaseConfig): SupabaseClient {
   return createClient(config.url, config.anonKey, {
     auth: {
-      storage: AsyncStorage,
+      storage: SessionStorage,
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: false,

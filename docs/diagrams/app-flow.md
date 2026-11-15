@@ -50,8 +50,26 @@ flowchart TD
   Catalog --> Filter
 
   subgraph Device["On the device"]
-    Store[("AsyncStorage<br/>the saved Supabase session<br/>(survives killing the app)")]
+    Store[("expo-sqlite key-value store<br/>the saved Supabase session<br/>(survives killing the app)")]
+    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets<br/>+ outbox (unsent changes) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
+    LocalSeed["First-launch seed (library/seedLocal.ts)<br/>insert-if-missing all 151 exercises,<br/>id = uuidv5(namespace, slug); never queued"]
+    WriteLocal["writeLocal (db/dao.ts): the one write path<br/>row + outbox line + re-stamp & queue parent workout,<br/>all-or-nothing<br/>SCAFFOLDING: no screen calls it yet (B08/B09)"]
+    LocalSeed --> LocalDB
+    WriteLocal --> LocalDB
   end
+
+  subgraph SyncEng["Sync engine (src/sync), mounted by useSync in the root layout"]
+    Triggers{{"Triggers, debounced 750 ms, one run at a time:<br/>start with a session, app back to foreground,<br/>network reconnects, a local write"}}
+    Push["Push: outbox → server, parents first,<br/>batches of 500 upserts on id (no updated_at),<br/>then workouts again to re-touch roots;<br/>clear lines up to each row's watermark; stop on failure"]
+    Pull["Pull: exercises, then own workouts by (updated_at, id)<br/>bookmark minus 5 s; fetch their entries and sets;<br/>save page + bookmark in one transaction;<br/>skip rows with unsent local edits"]
+    Triggers --> Push --> Pull
+  end
+  Catalog --> LocalSeed
+  Root -->|"useSync: opens astra.db (seeds) always;<br/>engine only while signed in"| LocalDB
+  Root --> Triggers
+  LocalDB -->|outbox rows| Push
+  Pull -->|saved rows| LocalDB
+  WriteLocal -.->|"notifies"| Triggers
 
   subgraph Backend["Supabase project (live)"]
     AuthAPI["Supabase Auth<br/>email + password accounts"]
@@ -69,7 +87,9 @@ flowchart TD
   Guard --> SignIn
   You -->|"Sign out (local scope:<br/>clears this device first, works offline)"| Store
 
-  Tabs -.->|"not wired yet: workouts, feed and library still don't read or write<br/>Supabase; no on-device SQLite or sync (FND-3, B07)"| DB
+  Push -->|"supabase-js upsert as the signed-in user (RLS)"| DB
+  DB -->|"supabase-js select (RLS-scoped)"| Pull
+  Tabs -.->|"not wired yet: no screen reads or writes astra.db;<br/>Library still reads the bundled catalog (logger: B08/B09)"| LocalDB
 
   subgraph Shared["Shared training math (backend/supabase/functions/_shared/training-math)<br/>import name in the app: @training-math"]
     MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification<br/>SCAFFOLDING: built and tested, not yet called by any screen<br/>or server function"]
@@ -77,8 +97,8 @@ flowchart TD
   MathMod -.->|"not wired yet: Tool Kit calculators (B16),<br/>logger PR badges (B13), unit setting (B15)"| Workout
   MathMod -.->|"not wired yet: post-workout analysis<br/>server function (B18)"| Backend
 
-  class Home,Market,Workout,Communities,MathMod scaffold
-  class Seed,Catalog,DB,Store data
+  class Home,Market,Workout,Communities,MathMod,WriteLocal scaffold
+  class Seed,Catalog,DB,Store,LocalDB data
 ```
 
 ## What a user can do today
@@ -101,15 +121,36 @@ flowchart TD
 - **Accounts:** `src/lib/supabase.ts` builds the one supabase-js client from
   `EXPO_PUBLIC_SUPABASE_URL` / `EXPO_PUBLIC_SUPABASE_ANON_KEY` in `frontend/.env` (template:
   `.env.example`). If either is missing it throws a message naming it, and the root
-  `ErrorBoundary` hides the splash so that message shows. The session is saved in AsyncStorage,
-  and the access token refreshes only while the app is in the foreground (AppState listener).
+  `ErrorBoundary` hides the splash so that message shows. The session is saved in expo-sqlite's
+  key-value store (`expo-sqlite/kv-store`, the app's one storage engine). The access token
+  refreshes only while the app is in the foreground (AppState listener).
 - `src/auth/AuthProvider.tsx` owns auth state (`restoring` / `signedIn` / `signedOut`) and the
   sign-in, sign-up and sign-out actions. Screens call `useAuth()` and never touch Supabase
   directly. The route guard, not the screens, does all signed-in/out navigation.
 - Sign-up sends the checked birthdate as user metadata. The signup trigger stores it in
   `user_body_data` (owner-only under RLS) alongside the new profile and settings rows.
-- **Everything else** is still on the device and read-only: the Library reads the bundled catalog.
-  No workout, feed or library data goes to or comes from Supabase yet.
+- **On-device store and sync (B07; the engine is live, but no screen uses it yet).**
+  `src/sync/useSync.ts` runs in the root layout. On launch it opens `astra.db`
+  (`src/db/database.ts`: foreign keys on, WAL, migrations by `PRAGMA user_version`). It then seeds
+  the 151 library exercises if they are missing, under the same uuidv5 ids as the server
+  (`src/library/uuidv5.ts`, the repo's one implementation, which the seed generator imports).
+  While someone is signed in, a `SyncEngine` pushes and then pulls on start, on foreground, on
+  reconnect (expo-network) and after each local write.
+  - **Writes:** every user change must go through `writeLocal`. It saves the row, adds an outbox
+    line, and re-stamps and queues the parent workout, all in one transaction.
+  - **Push:** sends the queued rows' current state as upserts on `id`, parents first, with
+    `updated_at` left for the server to stamp. It then re-sends the parent workouts so the server
+    stamps them after their contents. Outbox lines are cleared only up to the watermark read
+    before sending, so an edit made mid-upload is kept for the next push. A retry can't
+    duplicate anything, because the id is the key.
+  - **Pull:** fetches the user's own workouts changed after the stored `(updated_at, id)`
+    bookmark (rewound 5 s), plus every entry and set inside them. It also fetches exercises,
+    scoped by RLS. Each page is saved with its bookmark in one transaction. A row with an unsent
+    local edit is never overwritten.
+  - **Failures:** they are logged, and whatever didn't upload stays queued. There is no retry
+    timer.
+- **Still unwired:** the Library reads the bundled catalog, not `astra.db`; no screen logs a
+  workout yet (B08/B09); nothing feeds the social feed.
 
 ## Shared pieces every screen uses
 
@@ -127,5 +168,8 @@ flowchart TD
   Weights go in and come out in kg (the plate loader alone works in the rack's own unit); rounded
   display numbers are never stored. Nothing calls it yet — it is scaffolding for the calculators,
   logger and analysis.
-- Test-only helpers live in `src/test-utils/`: a fake Supabase auth client and fake AppState, plus
-  `renderWithAuth`. The app never imports them.
+- Test-only helpers live in `src/test-utils/`: a fake Supabase auth client and fake AppState,
+  `renderWithAuth`, a real-SQLite driver over Node's `node:sqlite` (`nodeSqliteDriver.ts`), an
+  in-memory fake server for sync (`fakeTransport.ts`: upsert-by-id, server-stamped `updated_at`,
+  foreign-key refusals, offline and lost-reply modes), and workout fixtures. The app never
+  imports them.

@@ -188,3 +188,23 @@ they can see rows the caller's own RLS would hide.
 `workouts`, `workout_exercises` and `sets` get their UUIDs on the device, so a workout logged with
 no signal is complete and internally linked before it ever reaches the server. Sync then inserts
 the rows as they are, with no id remapping.
+
+## The device mirror (not part of this database)
+
+This diagram draws the server. The phone keeps its own SQLite copy (`frontend/src/db/schema.ts`)
+of `exercises`, `workouts`, `workout_exercises` and `sets`. It has the same column names, but
+uses text for uuids and timestamps and 0/1 for booleans, and it does not repeat the server's
+CHECK rules. It also has two tables of its own: `outbox`, the local changes waiting to upload,
+and `sync_state`, the download bookmarks. What this means for the server:
+
+- **Uploads are upserts on `id`** (`INSERT … ON CONFLICT (id) DO UPDATE` through PostgREST), run
+  as the signed-in user, so the RLS rules above decide what is accepted. A retried upload updates
+  the same row and never duplicates it.
+- **Uploads never send `updated_at`.** The column default stamps it on insert and the
+  `moddatetime` trigger stamps it on update, so it is always server time. That lets devices
+  download "changed since my bookmark" by `(updated_at, id)` without trusting phone clocks.
+- **A workout's `updated_at` moves whenever anything inside it changes.** The app re-sends the
+  parent workout after its entries or sets land (touch-the-root), so other devices find changed
+  entries and sets by watching `workouts` alone.
+- Library rows (`owner_id` null) only ever flow server → device; the device seeds its own copy
+  with the same uuidv5 ids at first launch.

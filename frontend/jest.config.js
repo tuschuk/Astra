@@ -35,6 +35,6 @@ module.exports = {
   // this project's node_modules as a module directory fixes resolution for files
   // outside the project root without affecting anything inside it.
   moduleDirectories: ['node_modules', path.join(__dirname, 'node_modules')],
-  // Native-module mocks (AsyncStorage) — see jest.setup.js.
+  // Native-module mocks (expo-sqlite's key-value store) — see jest.setup.js.
   setupFiles: ['<rootDir>/jest.setup.js'],
 };

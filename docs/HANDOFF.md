@@ -32,11 +32,22 @@ start). Session helper for the API: `automation/state/pipe.mjs` (gitignored; `la
 <id>`, `retry <id>`, `trigger`). Executions so far: 4 (B05, builder failed on old CLI), 5 (retry,
 success), 6 (B06, success); B07 is the next one.
 
-**B07 local-store-and-sync** — expo-sqlite device store + sync engine (FND-3). Planner must MOVE
-`uuidv5` out of `automation/scripts/generate-library-seed.ts` into the frontend (expo-crypto or
-pure-TS SHA-1, RFC 4122 vector test) and make the generator import it — never a second copy.
-Consider `expo-sqlite/kv-store` for the auth session store (DEFERRED). Plan file:
-`docs/feature_plans/local-store-and-sync.md`.
+**B07 local-store-and-sync — built on its branch, waiting for Gate 2.** The builder committed
+`Build B07: local store and sync` on `local-store-and-sync`; it is not merged.
+- **What it built:** the expo-sqlite device store (`frontend/src/db/`), the outbox push/pull sync
+  engine (`frontend/src/sync/`), and `useSync`, mounted in the root layout.
+- **Moves and swaps:** `uuidv5` moved into `frontend/src/library/uuidv5.ts`; the regenerated seed
+  is byte-identical to the committed migration. The session store moved to
+  `expo-sqlite/kv-store`, and AsyncStorage was removed.
+- **Checks run:** Jest 34 suites / 266 tests, tsc and lint are all clean.
+- **Deviations:** eight, recorded in the plan file's "Deviations during the build". The two that
+  matter most: push omits `updated_at`, and push re-touches root workouts after their children
+  land.
+- **Gate 2 should check:**
+  - There is no server migration, so there is nothing to apply live.
+  - The Mermaid edits were not rendered (`mmdc` was declined headless). Render
+    `docs/diagrams/app-flow.md` once.
+  - The new known limits (poison rows, account switch) are in DEFERRED.
 
 **Tristen's hands-on list:** (1) device runs — sign up under 18 → refused, sign up 18+, kill app,
 reopen still signed in, sign out, sign in — flips B05 / FND-2 / NFR-8 and FND-1 / FND-4 to Done;
