@@ -1,0 +1,80 @@
+/**
+ * Tests for the saved-workout screen: a finished workout shows every exercise and every set in
+ * the lifter's unit; a workout that isn't this user's (or isn't on the phone) shows nothing of
+ * it. Real SQLite through a mocked `openAppDatabase`; the router is a stub.
+ */
+import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import React from 'react';
+import { fireEvent, screen } from '@testing-library/react-native';
+
+import type { SqlDriver } from '@/db/driver';
+import { libraryExerciseId } from '@/library/uuidv5';
+import { createPreparedDb, renderSignedIn, SIGNED_IN_USER_ID, steadyOptions } from '@/test-utils/loggerTestKit';
+import { OTHER_USER_ID } from '@/test-utils/workoutFixtures';
+import { startActiveWorkout } from '@/workout/activeWorkout';
+import { workoutDateLabel } from '@/workout/format';
+
+import SavedWorkoutScreen from '@/app/workout/[id]';
+
+const mockOpenDatabase = jest.fn<() => Promise<SqlDriver>>();
+jest.mock('@/db/database', () => ({
+  ...jest.requireActual<typeof import('@/db/database')>('@/db/database'),
+  openAppDatabase: () => mockOpenDatabase(),
+}));
+
+const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: jest.fn(() => false) };
+let mockParams: { id?: string } = {};
+jest.mock('expo-router', () => ({
+  useRouter: () => mockRouter,
+  useLocalSearchParams: () => mockParams,
+}));
+
+const START = '2026-11-12T12:00:00.000Z';
+let db: SqlDriver;
+
+beforeEach(async () => {
+  jest.clearAllMocks();
+  db = await createPreparedDb();
+  mockOpenDatabase.mockResolvedValue(db);
+});
+
+/** A finished two-exercise workout for `userId`; returns its id. */
+async function seedWorkout(userId: string): Promise<string> {
+  const store = await startActiveWorkout(db, userId, steadyOptions(START));
+  const squat = await store.addExercise(libraryExerciseId('squat'));
+  await store.logSet(squat.id, { reps: 5, weight: { value: 315, unit: 'lb' } });
+  await store.logSet(squat.id, { reps: 3, weight: { value: 335, unit: 'lb' } });
+  const bench = await store.addExercise(libraryExerciseId('bench_press'));
+  await store.logSet(bench.id, { reps: 10 });
+  await store.finish();
+  return store.getSnapshot().workout.id;
+}
+
+describe('Saved workout screen', () => {
+  it('shows every exercise and every set, in order, in the lifter’s unit', async () => {
+    mockParams = { id: await seedWorkout(SIGNED_IN_USER_ID) };
+    await renderSignedIn(<SavedWorkoutScreen />);
+    expect(await screen.findByText(workoutDateLabel(START))).toBeTruthy();
+    expect(screen.getByText('6 min · 2 exercises · 3 sets')).toBeTruthy();
+    expect(screen.getByText('Squat')).toBeTruthy();
+    expect(screen.getByText('5 × 315 lb')).toBeTruthy();
+    expect(screen.getByText('3 × 335 lb')).toBeTruthy();
+    expect(screen.getByText('Bench Press')).toBeTruthy();
+    expect(screen.getByText('10 reps')).toBeTruthy();
+  });
+
+  it('never shows another user’s workout', async () => {
+    mockParams = { id: await seedWorkout(OTHER_USER_ID) };
+    await renderSignedIn(<SavedWorkoutScreen />);
+    expect(await screen.findByText('This workout isn’t on this phone.')).toBeTruthy();
+    expect(screen.queryByText('Squat')).toBeNull();
+  });
+
+  it('Back goes to the Workout tab when there is nothing to go back to', async () => {
+    mockParams = { id: 'missing' };
+    await renderSignedIn(<SavedWorkoutScreen />);
+    await screen.findByText('This workout isn’t on this phone.');
+    await fireEvent.press(screen.getByLabelText('Back'));
+    expect(mockRouter.replace).toHaveBeenCalledWith('/workout');
+  });
+});

@@ -1,5 +1,5 @@
 /**
- * Screen smoke tests — each of the six tab screens renders its heading and
+ * Screen smoke tests — the tab screens (Workout aside: workout-tab.test.tsx) render their heading and
  * primary content. These live outside src/app because expo-router would
  * otherwise register *.test.tsx files as routes.
  */
@@ -15,7 +15,6 @@ import { ALL_EXERCISES } from '@/library/catalog';
 
 import HomeScreen from '@/app/(tabs)/index';
 import MarketplaceScreen from '@/app/(tabs)/marketplace';
-import WorkoutScreen from '@/app/(tabs)/workout';
 import CommunitiesScreen from '@/app/(tabs)/communities';
 import LibraryScreen from '@/app/(tabs)/library';
 import YouScreen from '@/app/(tabs)/you';
@@ -36,14 +35,8 @@ describe('tab screens', () => {
     expect(screen.getByText('Log a workout')).toBeTruthy();
   });
 
-  it('Workout renders the start actions and all five Tool Kit utilities', async () => {
-    const screen = await renderScreen(<WorkoutScreen />);
-    expect(screen.getByText('Start empty workout')).toBeTruthy();
-    expect(screen.getByText('Start from a program')).toBeTruthy();
-    for (const tool of ['1RM', 'RPE', '%1RM', 'Plates', 'Timer']) {
-      expect(screen.getByText(tool)).toBeTruthy();
-    }
-  });
+  // The Workout tab reads the database and the session since B09; its tests live in
+  // workout-tab.test.tsx.
 
   it('Marketplace renders the featured section', async () => {
     const screen = await renderScreen(<MarketplaceScreen />);

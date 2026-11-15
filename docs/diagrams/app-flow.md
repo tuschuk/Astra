@@ -32,7 +32,7 @@ flowchart TD
 
   Tabs --> Home["Home<br/>social feed (SOC-1)<br/>today: brand + empty state pointing to Workout"]
   Tabs --> Market["Marketplace<br/>programs (MKT-1..5)<br/>today: featured-section skeleton, placeholder cards"]
-  Tabs --> Workout["Workout<br/>logger front door (LOG-1) + Tool Kit preview (TK-1..5)<br/>today: final visual design, buttons inert"]
+  Tabs --> Workout["Workout tab (on focus: re-read astra.db)<br/>no draft: Start empty workout (program start disabled, B35)<br/>draft on phone: Resume workout / Discard (asks first)<br/>Tool Kit tiles (placeholders, TK-1..5)<br/>Past workouts: newest 100 finished, date + duration + counts"]
   Tabs --> Communities["Communities<br/>Teams and Gyms<br/>today: two sections, each an empty state"]
   Tabs --> Library["Library<br/>browse every launch exercise as a card"]
   Tabs -->|profile button| You["You<br/>signed-in email + Sign out button<br/>profile skeleton: avatar ring, follow counts, PRs label (empty values)"]
@@ -60,7 +60,31 @@ flowchart TD
     Drafts --> LocalDB
   end
 
-  subgraph ActiveWO["Active-workout store (src/workout/activeWorkout.ts)<br/>SCAFFOLDING: live and tested, no screen calls it yet (B09)"]
+  subgraph LoggerUI["Logger screens (signed-in stack, above the tab bar)"]
+    Logger["Active workout (app/active-workout.tsx)<br/>EntryCard per exercise: sets, reps + weight in lb (displayUnit.ts),<br/>Log set, Repeat last set (ONE tap, NFR-2), remove set,<br/>move up / down, remove exercise, 'Last time' line (LOG-5)<br/>one store call per card at a time<br/>empty slot on open: resume from astra.db or go back"]
+    Picker["Add exercise panel (ExercisePicker, a Modal)<br/>alias-aware searchExercises over the catalog;<br/>slug → libraryExerciseId → store.addExercise"]
+    EmptyQ{"Finish with zero sets?"}
+    Saved["Saved workout (app/workout/[id].tsx), read-only<br/>date, duration, every exercise + set in lb<br/>(another user's / unfinished id: 'not on this phone')"]
+    Logger -->|Add exercise| Picker
+    Picker -->|tap an exercise| Logger
+    Logger -->|Finish| EmptyQ
+    EmptyQ -->|"yes: 'Nothing logged yet'<br/>Discard workout / Keep lifting"| Logger
+    EmptyQ -->|"no: finish, clear slot,<br/>router.replace"| Saved
+  end
+  Workout -->|"Start / Resume: store into the session slot<br/>(activeWorkoutSession.ts, keyed by user id)"| Logger
+  Workout -->|tap a past workout| Saved
+  Logger -->|"Discard (asks first) / back"| Workout
+
+  subgraph Reads["History read-model (src/workout/history.ts), read only, every query filtered by user_id"]
+    ListQ["listPastWorkouts: finished only, newest first, limit 100, counts"]
+    ReadQ["readWorkout: one finished workout, entries joined to exercise names, sets"]
+    LastQ["lastSessionSets: newest finished workout with a logged set of<br/>this exercise, never the current draft; + exerciseName"]
+  end
+  LocalDB --> ListQ --> Workout
+  LocalDB --> ReadQ --> Saved
+  LocalDB --> LastQ --> Logger
+
+  subgraph ActiveWO["Active-workout store (src/workout/activeWorkout.ts)<br/>driven by the logger screens through the session slot + useActiveWorkout hooks"]
     StartWO["startActiveWorkout: blank public workout<br/>(refused while one is in progress)"]
     ResumeWO["loadActiveWorkout: on launch, rebuild the<br/>signed-in user's unfinished workout from astra.db"]
     MutWO["add / remove / reorder exercise; log / fix / remove set;<br/>repeat last set: check server limits, convert lb→kg,<br/>commit to SQLite, then re-read the snapshot"]
@@ -72,6 +96,11 @@ flowchart TD
   DiscardWO --> Drafts
   LocalDB --> ResumeWO
   FinishWO --> WriteLocal
+  Workout --> StartWO
+  Workout --> ResumeWO
+  Logger --> MutWO
+  Logger --> FinishWO
+  Logger --> DiscardWO
 
   subgraph SyncEng["Sync engine (src/sync), mounted by useSync in the root layout"]
     Triggers{{"Triggers, debounced 750 ms, one run at a time:<br/>start with a session, app back to foreground,<br/>network reconnects, a local write"}}
@@ -104,18 +133,17 @@ flowchart TD
 
   Push -->|"supabase-js upsert as the signed-in user (RLS)"| DB
   DB -->|"supabase-js select (RLS-scoped)"| Pull
-  Tabs -.->|"not wired yet: no screen reads or writes astra.db;<br/>Library still reads the bundled catalog (logger screen: B09)"| LocalDB
-  Workout -.->|"not wired yet: the logger screen (B09)"| StartWO
+  Library -.->|"not wired yet: Library still reads the bundled catalog, not astra.db"| LocalDB
 
   subgraph Shared["Shared training math (backend/supabase/functions/_shared/training-math)<br/>import name in the app: @training-math"]
-    MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification,<br/>server limits on a set + storage rounding (limits.ts)<br/>called today only by the active-workout store;<br/>no screen or server function yet"]
+    MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification,<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store and the logger's<br/>display (displayWeight); no server function yet"]
   end
   MathMod -->|"lbToKg, assertValidSetFields,<br/>round weight / RPE for storage"| MutWO
+  MathMod -->|"displayWeight (format.ts)"| Logger
   MathMod -.->|"not wired yet: Tool Kit calculators (B16),<br/>logger PR badges (B13), unit setting (B15)"| Workout
   MathMod -.->|"not wired yet: post-workout analysis<br/>server function (B18)"| Backend
 
-  class Home,Market,Workout,Communities,MathMod scaffold
-  style ActiveWO stroke-dasharray: 5 5
+  class Home,Market,Communities scaffold
   class Seed,Catalog,DB,Store,LocalDB data
 ```
 
@@ -132,7 +160,19 @@ flowchart TD
 4. **Sign out** from the You screen. The guard returns the user to sign-in.
 5. Move between the five tabs and the You screen. On Library, scroll, search and filter every
    launch exercise from the bundled, read-only catalog.
-6. Everything else is a placeholder that renders its final layout with inert controls.
+6. **Log a workout (B09), with no signal needed.** On the Workout tab, tap **Start empty
+   workout**. The logger opens full-screen: **Add exercise** searches the library; each
+   exercise card takes reps and/or weight in pounds (**Log set**), repeats the last set in one
+   tap (**Repeat last set**), removes a set, moves the exercise up or down, or removes it, and
+   shows "Last time: 3 × 8 @ 185 lb" from the previous finished session of that exercise.
+   **Finish** saves it and opens the read-only saved workout (finishing with no sets offers only
+   "Discard workout" or "Keep lifting"). **Discard** asks, then deletes the draft. Leaving the
+   logger or killing the app loses nothing: the Workout tab then offers **Resume workout** /
+   **Discard workout** instead of Start.
+7. **See past workouts.** The Workout tab lists the newest 100 finished workouts (date,
+   duration, exercise and set counts); tapping one opens it with every set.
+8. Everything else is a placeholder that renders its final layout with inert controls (Start
+   from a program, the Tool Kit tiles, Home, Marketplace, Communities).
 
 ## Data path today
 
@@ -147,7 +187,20 @@ flowchart TD
   directly. The route guard, not the screens, does all signed-in/out navigation.
 - Sign-up sends the checked birthdate as user metadata. The signup trigger stores it in
   `user_body_data` (owner-only under RLS) alongside the new profile and settings rows.
-- **On-device store and sync (B07; the engine is live, but no screen uses it yet).**
+- **Logger screens (B09).** `app/(tabs)/workout.tsx`, `app/active-workout.tsx` and
+  `app/workout/[id].tsx` get the database from `db/useAppDatabase.ts` and the signed-in user
+  from `useAuth()`. The one live store sits in a module-level session slot
+  (`workout/activeWorkoutSession.ts`), keyed by user id so another account's store is never
+  handed out; `workout/useActiveWorkout.ts` subscribes screens to the slot and to the store's
+  snapshot (`useSyncExternalStore`). The slot is only a cache: the Workout tab calls
+  `resumeSessionWorkout` (→ `loadActiveWorkout`) every time it comes into view, and the logger
+  does the same if opened with an empty slot. Every write goes through the store; every read is
+  `workout/history.ts` (`listPastWorkouts`, `readWorkout`, `lastSessionSets`, `exerciseName`),
+  each filtered by the signed-in `user_id`. Weights are shown and typed in the unit from
+  `settings/displayUnit.ts` — pinned to `lb` (the `user_settings.unit` default) until B15 wires
+  the real setting; text formatting and box parsing are `workout/format.ts`, conversion is
+  `@training-math`. The two new routes are declared in the root layout's signed-in guard.
+- **On-device store and sync (B07).**
   `src/sync/useSync.ts` runs in the root layout. On launch it opens `astra.db`
   (`src/db/database.ts`: foreign keys on, WAL, migrations by `PRAGMA user_version`). It then seeds
   the 151 library exercises if they are missing, under the same uuidv5 ids as the server
@@ -159,7 +212,7 @@ flowchart TD
     and re-stamps and queues the parent workout, all in one transaction. The workout still in
     progress uses `writeDraftRows` / `deleteDraftRowsTx` instead: saved immediately, never
     queued, and refused for any finished workout.
-  - **Active-workout store (B08; no screen yet, B09 adds it):** `src/workout/activeWorkout.ts`.
+  - **Active-workout store (B08; driven by the logger screens since B09):** `src/workout/activeWorkout.ts`.
     `startActiveWorkout` saves a blank public workout (refused while another is unfinished);
     `loadActiveWorkout` rebuilds the signed-in user's unfinished workout from `astra.db` — the
     resume-after-kill path. Each operation (add / remove / reorder exercise, log / fix / remove
@@ -182,8 +235,9 @@ flowchart TD
     local edit is never overwritten.
   - **Failures:** they are logged, and whatever didn't upload stays queued. There is no retry
     timer.
-- **Still unwired:** the Library reads the bundled catalog, not `astra.db`; no screen logs a
-  workout yet (the store exists, the logger screen is B09); nothing feeds the social feed.
+- **Still unwired:** the Library reads the bundled catalog, not `astra.db`; the unit toggle
+  (B15), PR badges (B13), editing a finished workout (B14) and post-workout analysis (B18/B21)
+  don't exist yet; nothing feeds the social feed.
 
 ## Shared pieces every screen uses
 
@@ -194,16 +248,21 @@ flowchart TD
   (red alert line), all styled from `theme/tokens.ts`.
 - `components/auth/` holds SignInForm, SignUpForm, BirthdateInput and their shared layout styles.
   The route files in `app/(auth)/` only wire them to the router.
+- `components/workout/` holds EntryCard (one exercise in the logger), ExercisePicker (the
+  Add-exercise modal), WorkoutListItem (a past-workout row) and `confirmDiscardWorkout` (the
+  one "Discard this workout?" alert).
 - **Training math** (`backend/supabase/functions/_shared/training-math/`, imported in the app as
   `@training-math`) is the only place e1RM, RPE and %1RM working weights, plate breakdowns, kg/lb
   conversion and PR detection are computed. It lives beside the server functions so Supabase can
   bundle it; `frontend/metro.config.js`, `tsconfig.json` and `jest.config.js` map the alias.
   Weights go in and come out in kg (the plate loader alone works in the rack's own unit); rounded
   display numbers are never stored. `limits.ts` holds the server's rules on a set and the
-  storage rounding that matches the server's column decimals. Its only caller today is the
-  active-workout store; the calculators and analysis are still to come.
+  storage rounding that matches the server's column decimals. Its callers today are the
+  active-workout store and the logger's display (`displayWeight` via `workout/format.ts`); the
+  calculators and analysis are still to come.
 - Test-only helpers live in `src/test-utils/`: a fake Supabase auth client and fake AppState,
   `renderWithAuth`, a real-SQLite driver over Node's `node:sqlite` (`nodeSqliteDriver.ts`), an
   in-memory fake server for sync (`fakeTransport.ts`: upsert-by-id, server-stamped `updated_at`,
-  foreign-key refusals, offline and lost-reply modes), and workout fixtures. The app never
+  foreign-key refusals, offline and lost-reply modes), workout fixtures, and the logger kit
+  (`loggerTestKit.tsx`: prepared database, test clock, signed-in render). The app never
   imports them.

@@ -75,7 +75,8 @@ export default function RootLayout() {
 
 /**
  * The router stack, split into the two guarded halves of the app:
- * - (tabs): the five-tab app — only with a session.
+ * - (tabs), active-workout (the logger) and workout/[id] (a saved
+ *   workout): the signed-in app — only with a session.
  * - (auth): sign-in / sign-up — only without one.
  * When the session appears or disappears, expo-router moves the user to
  * whichever half is now allowed, so screens never navigate on sign-in/out.
@@ -115,6 +116,9 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
       >
         <Stack.Protected guard={signedIn}>
           <Stack.Screen name="(tabs)" />
+          {/* The logger and the saved-workout view fill the screen, above the tab bar. */}
+          <Stack.Screen name="active-workout" />
+          <Stack.Screen name="workout/[id]" />
         </Stack.Protected>
         <Stack.Protected guard={!signedIn}>
           <Stack.Screen name="(auth)" />
