@@ -261,3 +261,49 @@ plus the two function nodes. ERD: untouched (no schema change). `config.toml`: t
   share sheet: both added by the grilling (readability without the app; body data shouldn't
   linger in cache).
 - **The delete screen names the signed-in email**, so the typed gate confirms *which* account.
+
+## Build notes and deviations (builder, Nov 15, 2026)
+
+- **Paging moved into the export handler.** The plan put `selectIn`-style paging in the wiring;
+  the handler now owns paging (500-row pages) and id-chunking (100 ids) over a one-page
+  `readPage` dependency, so the Jest fake — which caps replies at 1000 rows like the API — proves
+  nothing is cut off (1,260 sets / 600 PRs across pages and chunks). `index.ts` is one request
+  per call. Every owner read is filtered by the caller's id on top of RLS: RLS alone lets a
+  lifter read other people's *public* workouts.
+- **`account/functionCalls.ts` added** (not in the plan): `callFunction` sorts an invoke result
+  into ok / offline (`FunctionsFetchError` or a throw) / failed-with-status, shared by the export
+  and delete flows. The delete flow maps 409 to "A moderator account can't be deleted here."
+- **`closeAppDatabase()` became `deleteAppDatabase()`, on a testable holder.** Review found that
+  `useSync` opens the database even when signed out, so the sign-out (wipe step 1) can make it
+  ask for `astra.db` between the close and the file delete. `db/database.ts` now builds its
+  singleton with `createDatabaseHolder(opener)`; `close(afterClose)` runs "delete the file" after
+  closing and makes any `open()` asked for meanwhile wait, then open a fresh empty database. The
+  wipe's close + delete are therefore one step. `SqlDriver` gained an optional `closeAsync`
+  (queued behind pending work in `createSerializedDriver`); `expoDriver.ts` gained
+  `deleteExpoDatabase`. (Dynamic `import()` doesn't run under this Jest, which is also why the
+  holder is a factory.)
+- **Sign-out failure is detected.** `AuthProvider.signOut` reports `{ ok: false }` instead of
+  throwing; `wipeDeviceData` now treats that as a failed step and returns `{ signedOut }`. If the
+  server deleted the account but the phone couldn't sign out, the screen says "Your account was
+  deleted. Close Astra and open it again." and stays locked.
+- **Export checks `Sharing.isAvailableAsync` first** (a local capability check, not a network
+  pre-flight) and says "This phone can't share files from Astra." instead of calling the server.
+- **UI:** Export and Delete sit in the Account card (outline buttons — the outline variant is the
+  brand-red border; the screen's Delete my account is the solid-red primary). The delete screen's
+  "link back" is an **Export your data first** button that returns to Settings.
+- **`social/postImages.ts` exports `localPostImagesFolder`** so the wipe reuses the one path.
+- **500 wording** of `delete-account` says "It is still here — try again" (a partial sweep may
+  have removed photos, so "nothing was lost" was untrue); redeployed as v2.
+- **Deployed:** `export-data` v1 and `delete-account` v2, both `verify_jwt: true`, via the
+  Supabase MCP (comments trimmed in the deployed copies; the repo files are the source of record).
+- **Live verification done by the builder:** a rolled-back SQL transaction with two throwaway
+  users and a row in every user-owned table (profiles, settings, body data, custom exercise,
+  workout, entry, set, PR, analysis, post, the other user's re-share, votes, comments both ways,
+  mute, block, report, tombstone): after `delete from auth.users` every count is 0 and the other
+  user's profile remains. Not done: the HTTP probe (outbound `curl` declined) — in DEFERRED for
+  Gate 2. No migration; the ERD is unchanged.
+- **Review (two-axis, `mattpocock-skills:code-review`):** fixed the two real bugs above, the
+  placement, the export link, the duplicated folder path and the 500 wording; left as judgement
+  calls (recorded in DEFERRED): the four-way duplication of the functions' HTTP helpers, the
+  repeated ok-or-message result type, `CONFIRMATION_WORD` defined on both sides (the app would
+  otherwise import from the backend handler), and the optional `closeAsync`.

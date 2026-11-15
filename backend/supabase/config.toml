@@ -409,6 +409,16 @@ verify_jwt = true
 [functions.moderate]
 verify_jwt = true
 
+# B32: the lifter's own data export. JWT verification on: it reads only as the caller (no server
+# key in the function), so the database's security rules scope every row.
+[functions.export-data]
+verify_jwt = true
+
+# B32: self-service account deletion. JWT verification on: the only account it can delete is the
+# one the verified login belongs to, and only with { confirm: "DELETE" } in the body.
+[functions.delete-account]
+verify_jwt = true
+
 [analytics]
 enabled = true
 port = 54327

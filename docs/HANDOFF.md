@@ -10,6 +10,13 @@ filters, a detail card, the lifter's history on it, and private custom exercises
 is running **B32 export-and-delete-account**. Gates are delegated to the session (CLAUDE.md,
 "Autonomous sessions"). Tristen's hands-on list is at the end.
 
+**B32 export-and-delete-account (built on its branch, awaiting Gate 2):** edge functions
+`export-data` (v1, caller token only, paged, owner-filtered) and `delete-account` (v2, service
+role after `getUser`, sweep `post-images` + `avatars` then `auth.admin.deleteUser`) deployed with
+`verify_jwt` on; Settings → Account gained Export your data and Delete account; new screen
+`app/delete-account.tsx`; device wipe `db/wipeDevice.ts`. Cascade proven in a rolled-back SQL
+probe; the HTTP probe is for Gate 2 (see the plan's Build notes and DEFERRED). No migration.
+
 **B31 custom-exercises (merged, Gate 2 record):** migration
 `20261115173827_exercises_soft_delete.sql` (applied live, confirmed at Gate 2): `exercises.
 deleted_at timestamptz` + CHECK `exercises_deleted_customs_only` (`deleted_at is null or owner_id
