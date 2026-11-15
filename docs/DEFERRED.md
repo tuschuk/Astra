@@ -270,3 +270,23 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - Small duplications kept: `ANALYSIS_COLUMNS` in the Deno entry vs `TABLE_COLUMNS` in `dao.ts`
     (Deno can't import app code); `is_warmup === 1` by hand in `readAnalysisInput`.
   - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.
+- B19 muscle-map follow-ups (`muscle-map`):
+  - **Device check (Tristen):** finish a bench-only session (also in airplane mode) and confirm
+    chest, shoulders and triceps are red on the figures and nothing else is; check the two
+    figures are legible at phone width (the region shapes in `components/muscleMapPaths.ts` were
+    hand-authored blind and are built to be replaced wholesale as data); confirm the lightest
+    involvement (0.12 → 34% opacity) is visible on the dark background.
+  - **Custom exercises shade nothing** until custom-exercise authoring grows a muscle picker (a
+    LIB step); the reader will consume that data through the same path.
+  - **Weighting:** shading is the per-muscle maximum (ten chest sets shade like one). Revisit
+    only with a product reason, inside `combineMuscleLoads`.
+  - **Elsewhere:** the map is only on the analysis screen; saved workout / feed / trends wiring
+    belongs to B20 / B21 / B42. `sessionMuscleLoads` does not check `ended_at` — a caller that
+    needs finished-only must check it.
+  - Judgement calls from review left as-is: the muscle-table type is written out in several
+    places (a `MuscleIntensities` alias in `library/exercises.ts` would tidy it);
+    `MUSCLE_ORDER` / `MUSCLE_NAMES` could move beside `MuscleKey`.
+  - `mmdc` was not permitted for the headless builder; `app-flow.md` was not render-checked.
+  - **Flaky test seen:** `src/workout/useAutosaveText.test.ts` (saves once, with the final text,
+    after typing settles) failed once in a full run, passed alone twice and in the next full
+    run. Timing under load; untouched by B19. Worth making its timers deterministic.
