@@ -10,11 +10,14 @@
  * Uploads use Supabase's upsert — "insert, or update the row with this id" —
  * which is what makes a retried upload harmless; deletes (B14) delete by id,
  * equally harmless to retry. Downloads read in (updated_at, id) order after a
- * bookmark, and tombstones in id order (see transport.ts, pull.ts).
+ * bookmark, and tombstones in id order (see transport.ts, pull.ts). The
+ * settings row (B15) is the exception to both: it is read whole every time
+ * and saved with a plain update (see `pushUserSettings`).
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { TABLE_COLUMNS, type RowByTable, type SyncedTable } from '@/db/dao';
+import { parseUnit } from '@/db/userSettings';
 
 import type { PullCursor, SyncTransport, TombstoneRow } from './transport';
 
@@ -95,6 +98,25 @@ export function createSupabaseTransport(client: SupabaseClient): SyncTransport {
         .limit(limit);
       throwIfError(error, 'Download of deletions failed');
       return (data ?? []) as unknown as TombstoneRow[];
+    },
+
+    async pullUserSettings(userId) {
+      const { data, error } = await client
+        .from('user_settings')
+        .select('user_id,unit,updated_at')
+        .eq('user_id', userId)
+        .maybeSingle();
+      throwIfError(error, 'Download of settings failed');
+      if (!data) return null;
+      const row = data as { user_id: string; unit: unknown; updated_at: string };
+      return { user_id: row.user_id, unit: parseUnit(row.unit), updated_at: row.updated_at };
+    },
+
+    async pushUserSettings(userId, unit) {
+      // An update, never an upsert: the row exists from signup and the phone may not insert.
+      // No updated_at — the server's moddatetime trigger stamps it.
+      const { error } = await client.from('user_settings').update({ unit }).eq('user_id', userId);
+      throwIfError(error, 'Upload of settings failed');
     },
   };
 

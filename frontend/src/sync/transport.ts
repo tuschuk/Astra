@@ -1,5 +1,5 @@
 /**
- * The sync engine's view of the server: eight operations, nothing more.
+ * The sync engine's view of the server: ten operations, nothing more.
  *
  * Why an interface: the real implementation (`supabaseTransport.ts`) talks to
  * Supabase over the network; tests use an in-memory fake server
@@ -13,6 +13,8 @@
  * Every method throws on failure (no signal, server error, refused by
  * security rules). The engine treats any throw as "try again later".
  */
+import type { WeightUnit } from '@training-math';
+
 import type {
   ExerciseRow,
   PersonalRecordRow,
@@ -22,6 +24,7 @@ import type {
   WorkoutExerciseRow,
   WorkoutRow,
 } from '@/db/dao';
+import type { UserSettingsRow } from '@/db/userSettings';
 
 /**
  * A bookmark in a download: "everything after this row". Rows are read in
@@ -92,6 +95,21 @@ export interface SyncTransport {
    * records — with an id greater than `afterId` (0 = from the beginning), ordered by id.
    */
   pullTombstones(userId: string, afterId: number, limit: number): Promise<TombstoneRow[]>;
+
+  /**
+   * The user's settings row (B15), or null if the server has none to show. One row per user:
+   * no bookmark, no paging — it is simply read again on every download.
+   */
+  pullUserSettings(userId: string): Promise<UserSettingsRow | null>;
+
+  /**
+   * Saves the user's kg/lb choice on the server (B15). An UPDATE of their existing row, never
+   * an insert: the row is created with the account, and the server's security rules allow the
+   * phone no inserts. The server stamps `updated_at` itself, as on every upload. If no row
+   * matches (only possible for a line left over from a previous account on this phone) the
+   * update changes nothing and still counts as done, so it can't block the queue.
+   */
+  pushUserSettings(userId: string, unit: WeightUnit): Promise<void>;
 }
 
 /**

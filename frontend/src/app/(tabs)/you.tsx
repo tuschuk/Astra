@@ -2,21 +2,21 @@
  * You — the profile (YOU-1..YOU-7): photo, name, bio, follower counts,
  * posts, history, PRs and settings. This foundation renders the profile
  * skeleton — avatar ring, counts row, and the PRs section label — in its
- * final layout with empty values, shows which email is signed in, and has
- * the Sign out button (FND-2). Signing out needs no navigation here: the
- * root guard sends the user to sign-in once the session is gone.
+ * final layout with empty values.
+ *
+ * The gear button in the header opens Settings (B15), where the lifter picks
+ * kg or lb, sees which email is signed in, and signs out — the email and
+ * sign-out moved there from this screen, so the account has one home.
  */
-import React, { useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import React from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
-import { useAuth } from '@/auth/AuthProvider';
 import { Screen } from '@/components/Screen';
-import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
-import { FormError } from '@/components/ui/FormError';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
-import { colors, radii, spacing, type } from '@/theme';
+import { colors, layout, radii, spacing, type } from '@/theme';
 
 /** The two follow counts shown on every profile (YOU-1). */
 const COUNTS = [
@@ -24,19 +24,11 @@ const COUNTS = [
   { label: 'Following', value: 0 },
 ] as const;
 
-export default function YouScreen() {
-  const { session, signOut } = useAuth();
-  const [signOutError, setSignOutError] = useState<string | null>(null);
-  const [signingOut, setSigningOut] = useState(false);
+/** Size of the round gear button: the platform's minimum touch target. */
+const GEAR_SIZE = layout.minTouchTarget;
 
-  /** Signs out of this device; shows an error only if that somehow fails. */
-  const handleSignOut = async () => {
-    setSigningOut(true);
-    setSignOutError(null);
-    const result = await signOut();
-    setSigningOut(false);
-    if (!result.ok) setSignOutError(result.message);
-  };
+export default function YouScreen() {
+  const router = useRouter();
 
   return (
     <Screen>
@@ -53,8 +45,15 @@ export default function YouScreen() {
         </View>
         <View style={styles.identity}>
           <Heading size="section">Your profile</Heading>
-          <Body variant="small">{session?.user.email ?? 'Signed in'}</Body>
         </View>
+        <Pressable
+          onPress={() => router.push('/settings')}
+          accessibilityRole="button"
+          accessibilityLabel="Settings"
+          style={({ pressed }) => [styles.gear, pressed && styles.pressed]}
+        >
+          <Ionicons name="settings-outline" size={20} color={colors.muted} />
+        </Pressable>
       </View>
 
       <View style={styles.counts}>
@@ -71,15 +70,6 @@ export default function YouScreen() {
         icon="trophy-outline"
         message="PRs are caught automatically while you log — true 1RMs, rep maxes and estimated 1RMs, each listed here by exercise."
       />
-
-      <Button
-        label="Sign out"
-        variant="ghost"
-        onPress={handleSignOut}
-        disabled={signingOut}
-        style={styles.signOut}
-      />
-      <FormError message={signOutError} style={styles.error} />
     </Screen>
   );
 }
@@ -89,6 +79,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.lg,
+    // Leaves room on the right for the floating profile button every tab screen shows.
+    paddingRight: GEAR_SIZE + spacing.sm,
   },
   avatar: {
     width: 72,
@@ -103,6 +95,19 @@ const styles = StyleSheet.create({
   identity: {
     flex: 1,
     gap: spacing.xs,
+  },
+  gear: {
+    width: GEAR_SIZE,
+    height: GEAR_SIZE,
+    borderRadius: radii.round,
+    backgroundColor: colors.surfaceDeep,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  pressed: {
+    opacity: 0.7,
   },
   counts: {
     flexDirection: 'row',
@@ -125,11 +130,5 @@ const styles = StyleSheet.create({
   sectionLabel: {
     marginTop: spacing.xxl,
     marginBottom: spacing.sm,
-  },
-  signOut: {
-    marginTop: spacing.xxl,
-  },
-  error: {
-    marginTop: spacing.sm,
   },
 });

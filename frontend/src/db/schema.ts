@@ -8,6 +8,7 @@
  *     …_exercises_slug.sql). Column names match the server's exactly, so
  *     syncing a row is a straight copy, not a translation.
  *   - personal_records — the lifter's current PRs per exercise (version 4, B13).
+ *   - user_settings — the lifter's kg/lb choice (version 6, B15).
  *   - outbox — the list of local changes (uploads and, from version 5,
  *     deletions) not yet sent to the server (see `sync/outbox.ts`).
  *   - sync_state — small bookkeeping values, such as how far the last
@@ -145,8 +146,24 @@ const V5 = `
 alter table outbox add column op text not null default 'upsert';
 `;
 
+/**
+ * Version 6 (B15): `user_settings` — the signed-in lifter's preferences, one row per user,
+ * mirroring the server table of the same name (…_identity.sql). Only the columns the phone
+ * syncs today: the kg/lb `unit` (and its `updated_at`). `default_workout_visibility` joins when
+ * B26 gives it a reader. Synced by its own small push and pull phases (see
+ * `db/userSettings.ts`), not the five-table machinery: this table is keyed by `user_id`, and
+ * the server only lets the phone update it, never insert.
+ */
+const V6 = `
+create table user_settings (
+  user_id    text primary key not null,
+  unit       text not null,
+  updated_at text not null
+);
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5];
+export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

@@ -8,6 +8,8 @@ import { renderHook, waitFor } from '@testing-library/react-native';
 import { prepareDatabase } from '@/db/database';
 import type { SqlDriver } from '@/db/driver';
 import { writeLocal } from '@/db/dao';
+import { writeUserSettingsRowTx } from '@/db/userSettings';
+import { createUnitStore } from '@/settings/unitStore';
 import { FakeServer } from '@/test-utils/fakeTransport';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { USER_ID, WORKOUT } from '@/test-utils/workoutFixtures';
@@ -50,5 +52,33 @@ describe('useSync', () => {
 
     await rerender({ userId: null });
     expect(removeNetwork).toHaveBeenCalled();
+  });
+
+  it('B15: loads the signed-in lifter’s unit, and a unit changed on another device reaches the store', async () => {
+    const db = await prepareDatabase(createNodeSqliteDriver());
+    await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, { user_id: USER_ID, unit: 'kg', updated_at: 't' }));
+    const server = new FakeServer();
+    const store = createUnitStore();
+    const { deps } = makeDeps(db, server);
+    const hydrate = jest.fn(store.hydrate);
+    deps.settings = { hydrate, applyPulled: store.applyPulled, reset: store.reset };
+
+    // Loaded from the phone at sign-in.
+    const view = await renderHook(() => useSync(USER_ID, deps));
+    await waitFor(() => expect(store.getSnapshot()).toBe('kg'));
+    expect(hydrate).toHaveBeenCalledWith(db, USER_ID);
+    await view.unmount();
+
+    // Another device switched to pounds; the next session's sync brings it down.
+    server.seedUserSettings(USER_ID, 'lb');
+    const second = await renderHook(({ userId }: { userId: string | null }) => useSync(userId, deps), {
+      initialProps: { userId: USER_ID as string | null },
+    });
+    await waitFor(() => expect(store.getSnapshot()).toBe('lb'), { timeout: 5000 });
+
+    // Signing out forgets the unit (back to the default) — checked from kg.
+    await store.setUnit(db, USER_ID, 'kg');
+    await second.rerender({ userId: null });
+    expect(store.getSnapshot()).toBe('lb');
   });
 });

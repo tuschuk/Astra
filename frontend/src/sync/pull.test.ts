@@ -6,7 +6,9 @@ import { describe, expect, it } from '@jest/globals';
 
 import { prepareDatabase } from '@/db/database';
 import { getRowsByIds, writeLocal, type PersonalRecordRow, type WorkoutRow } from '@/db/dao';
+import { readUserSettingsRow, type UserSettingsRow } from '@/db/userSettings';
 import { libraryExerciseId } from '@/library/uuidv5';
+import { createUnitStore } from '@/settings/unitStore';
 import { FakeServer } from '@/test-utils/fakeTransport';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { ENTRIES, OTHER_USER_ID, SETS, USER_ID, WORKOUT } from '@/test-utils/workoutFixtures';
@@ -358,5 +360,48 @@ describe('pullChanges — deletions arriving from other devices (B14)', () => {
     server.seed('workouts', [workoutN(7, OTHER_USER_ID)]);
     await server.deleteRows('workouts', [workoutN(7, OTHER_USER_ID).id]);
     expect((await pullChanges(db, server, USER_ID)).tombstones).toBe(0);
+  });
+});
+
+describe('B15: the settings row', () => {
+  it('a unit changed on another device lands in the local row and is handed to the callback', async () => {
+    const { db, server } = await setup();
+    server.seedUserSettings(USER_ID, 'kg');
+    const pulled: UserSettingsRow[] = [];
+
+    const result = await pullChanges(db, server, USER_ID, { onUserSettingsPulled: (row) => pulled.push(row) });
+
+    expect(result.userSettings).toBe(1);
+    const local = await readUserSettingsRow(db, USER_ID);
+    expect(local).toEqual(server.userSettings.get(USER_ID));
+    expect(pulled).toEqual([local]);
+  });
+
+  it('never overwrites an unsent local toggle, and doesn’t report it', async () => {
+    const { db, server } = await setup();
+    server.seedUserSettings(USER_ID, 'lb');
+    await createUnitStore().setUnit(db, USER_ID, 'kg', { now: '2026-11-15T00:00:00.000Z' });
+    const pulled: UserSettingsRow[] = [];
+
+    const result = await pullChanges(db, server, USER_ID, { onUserSettingsPulled: (row) => pulled.push(row) });
+
+    expect(result.userSettings).toBe(0);
+    expect((await readUserSettingsRow(db, USER_ID))?.unit).toBe('kg');
+    expect(pulled).toEqual([]);
+  });
+
+  it('saves nothing when the server shows no settings row', async () => {
+    const { db, server } = await setup();
+    expect((await pullChanges(db, server, USER_ID)).userSettings).toBe(0);
+    expect(await readUserSettingsRow(db, USER_ID)).toBeNull();
+  });
+
+  it('round trip: toggle offline → push → the server copy flows back and the local row matches', async () => {
+    const { db, server } = await setup();
+    server.seedUserSettings(USER_ID, 'lb');
+    await createUnitStore().setUnit(db, USER_ID, 'kg');
+    await pushOutbox(db, server);
+    await pullChanges(db, server, USER_ID);
+    expect(await readUserSettingsRow(db, USER_ID)).toEqual(server.userSettings.get(USER_ID));
   });
 });

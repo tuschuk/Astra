@@ -1,18 +1,20 @@
 /**
  * B07's definition of done, proven with a fake server and a real on-device
  * SQLite database: a workout logged offline lands on the server exactly once
- * after reconnecting, and a retried upload creates no duplicates.
+ * after reconnecting, and a retried upload creates no duplicates. Plus the
+ * deletes phase (B14) and the settings phase (B15).
  */
 import { describe, expect, it } from '@jest/globals';
 
 import { prepareDatabase } from '@/db/database';
 import { deleteLocalRowsTx, writeLocal, type SetRow } from '@/db/dao';
+import { createUnitStore } from '@/settings/unitStore';
 import { FakeServer } from '@/test-utils/fakeTransport';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { ENTRIES, makeSet, SETS, USER_ID, WORKOUT } from '@/test-utils/workoutFixtures';
 
 import { SyncEngine } from './engine';
-import { outboxSize } from './outbox';
+import { enqueueTx, outboxSize } from './outbox';
 import { PUSH_BATCH_SIZE, pushOutbox, withoutUpdatedAt } from './push';
 
 const quiet = () => undefined;
@@ -245,6 +247,83 @@ describe('pushOutbox — the delete phase (B14)', () => {
     server.healUpserts();
     await pushOutbox(db, server);
     expect(server.tables.workout_exercises.has(ENTRIES[1].id)).toBe(false);
+    expect(await outboxSize(db)).toBe(0);
+  });
+});
+
+describe('B15: the settings phase', () => {
+  /** A device and server where the user's settings row exists (the signup trigger's doing). */
+  async function deviceWithAccount() {
+    const db = await prepareDatabase(createNodeSqliteDriver());
+    const server = new FakeServer();
+    server.seedUserSettings(USER_ID, 'lb');
+    return { db, server, store: createUnitStore() };
+  }
+
+  it('a toggle made offline reaches the server exactly once after reconnecting', async () => {
+    const { db, server, store } = await deviceWithAccount();
+    server.offline = true;
+    await store.setUnit(db, USER_ID, 'kg');
+    await expect(pushOutbox(db, server)).rejects.toThrow('Network request failed');
+    expect(server.userSettings.get(USER_ID)?.unit).toBe('lb');
+    expect(await outboxSize(db)).toBe(1);
+
+    server.offline = false;
+    const result = await pushOutbox(db, server);
+    expect(result.userSettings).toBe(1);
+    expect(server.userSettings.get(USER_ID)?.unit).toBe('kg');
+    expect(await outboxSize(db)).toBe(0);
+    // Exactly one successful upload (the offline attempt is recorded, then refused).
+    expect(server.userSettingsPushes).toEqual([
+      { userId: USER_ID, unit: 'kg' },
+      { userId: USER_ID, unit: 'kg' },
+    ]);
+    expect((await pushOutbox(db, server)).userSettings).toBe(0);
+  });
+
+  it('sends the latest choice once, however many times it was flipped', async () => {
+    const { db, server, store } = await deviceWithAccount();
+    await store.setUnit(db, USER_ID, 'kg');
+    await store.setUnit(db, USER_ID, 'lb');
+    await store.setUnit(db, USER_ID, 'kg');
+    expect((await pushOutbox(db, server)).userSettings).toBe(1);
+    expect(server.userSettingsPushes).toEqual([{ userId: USER_ID, unit: 'kg' }]);
+  });
+
+  it('a toggle flipped while the upload is in flight is sent next time, not lost', async () => {
+    const { db, server, store } = await deviceWithAccount();
+    await store.setUnit(db, USER_ID, 'kg');
+    const realPush = server.pushUserSettings.bind(server);
+    server.pushUserSettings = async (userId, unit) => {
+      await store.setUnit(db, USER_ID, 'lb'); // flipped back mid-upload
+      return realPush(userId, unit);
+    };
+    await pushOutbox(db, server);
+    expect(server.userSettings.get(USER_ID)?.unit).toBe('kg');
+    expect(await outboxSize(db)).toBe(1); // the mid-flight flip survived the acknowledgement
+
+    server.pushUserSettings = realPush;
+    await pushOutbox(db, server);
+    expect(server.userSettings.get(USER_ID)?.unit).toBe('lb');
+    expect(await outboxSize(db)).toBe(0);
+  });
+
+  it('a leftover line whose row the server won’t match changes nothing there and is cleared (no wedge)', async () => {
+    const { db, server, store } = await deviceWithAccount();
+    // A previous account's choice, on a server where that account has no row visible.
+    await store.setUnit(db, 'previous-account', 'kg');
+    const result = await pushOutbox(db, server);
+    expect(result.userSettings).toBe(1);
+    expect(server.userSettings.has('previous-account')).toBe(false);
+    expect(server.userSettings.get(USER_ID)?.unit).toBe('lb');
+    expect(await outboxSize(db)).toBe(0);
+  });
+
+  it('a waiting line whose local row is gone uploads nothing and is cleared', async () => {
+    const { db, server } = await deviceWithAccount();
+    await db.withTransactionAsync((tx) => enqueueTx(tx, 'user_settings', USER_ID, '2026-11-15T00:00:00.000Z'));
+    expect((await pushOutbox(db, server)).userSettings).toBe(0);
+    expect(server.userSettingsPushes).toEqual([]);
     expect(await outboxSize(db)).toBe(0);
   });
 });

@@ -31,6 +31,14 @@
 import { placeholders, type SqlDriver, type SqlExecutor } from '@/db/driver';
 import type { SyncedTable } from '@/db/dao';
 
+/**
+ * Every table the outbox can hold lines for: the five training tables, plus the lifter's
+ * settings row (B15). A `user_settings` line's row id is the user's id — that table's key —
+ * and it is only ever an upload (the row can't be deleted from the phone). The outbox stores
+ * the table name as plain text, so adding a table here changes no stored data.
+ */
+export type OutboxTable = SyncedTable | 'user_settings';
+
 /** What an outbox line asks the server to do with its row. */
 export type OutboxOp = 'upsert' | 'delete';
 
@@ -48,7 +56,7 @@ export interface PendingRow {
  */
 export async function pendingRows(
   db: SqlExecutor,
-  tbl: SyncedTable,
+  tbl: OutboxTable,
   op: OutboxOp = 'upsert',
 ): Promise<PendingRow[]> {
   const rows = await db.getAllAsync<{ row_id: string; mark: number }>(
@@ -65,7 +73,7 @@ export async function pendingRows(
  */
 export async function enqueueTx(
   tx: SqlExecutor,
-  tbl: SyncedTable,
+  tbl: OutboxTable,
   rowId: string,
   now: string,
   op: OutboxOp = 'upsert',
@@ -86,7 +94,7 @@ export async function enqueueTx(
  */
 export async function acknowledge(
   db: SqlDriver,
-  tbl: SyncedTable,
+  tbl: OutboxTable,
   rows: readonly PendingRow[],
   requeueWorkouts: readonly string[] = [],
   op: OutboxOp = 'upsert',
@@ -113,7 +121,7 @@ export async function acknowledge(
  */
 export async function rowsWithPendingChanges(
   db: SqlExecutor,
-  tbl: SyncedTable,
+  tbl: OutboxTable,
   ids: readonly string[],
 ): Promise<Set<string>> {
   const found = new Set<string>();
@@ -136,7 +144,7 @@ export async function rowsWithPendingChanges(
  * anywhere must not be sent (an upload would re-create a gutted workout, or
  * be refused forever for a missing parent). See pull.ts.
  */
-export async function dropLinesTx(tx: SqlExecutor, tbl: SyncedTable, ids: readonly string[]): Promise<void> {
+export async function dropLinesTx(tx: SqlExecutor, tbl: OutboxTable, ids: readonly string[]): Promise<void> {
   for (let i = 0; i < ids.length; i += ID_CHUNK) {
     const part = ids.slice(i, i + ID_CHUNK);
     await tx.runAsync(`delete from outbox where tbl = ? and row_id in (${placeholders(part.length)})`, [tbl, ...part]);

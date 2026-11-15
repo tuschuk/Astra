@@ -1,23 +1,27 @@
 /**
  * Which weight unit (kg or lb) the app shows and accepts — the one place screens ask.
  *
- * Why this exists: the logger (B09) has to show and read weights in the lifter's unit, but the
- * kg/lb setting itself arrives with B15 (settings and units) — `user_settings.unit` is not yet
- * copied onto the phone. Rather than every screen hard-coding pounds, they all ask this module,
- * so B15 has exactly one place to rewire to the real, synced setting.
+ * Why this exists: every screen that shows or reads a weight (the logger, a saved workout,
+ * editing a workout, exercise history) asks this hook instead of deciding for itself, so the
+ * lifter's kg/lb choice reaches all of them from one place. B09 left the seam; B15 wired it to
+ * the real, synced setting: the hook now follows the unit store (settings/unitStore.ts), which
+ * mirrors `user_settings.unit` on the phone. Flip the toggle in Settings and every mounted
+ * weight re-draws in the new unit.
  *
- * Today the answer is always the server's default for `user_settings.unit`: pounds. No weight
- * math lives here — converting and rounding stays in `@training-math`.
+ * No weight math lives here — converting and rounding stays in `@training-math`, and stored
+ * weights are always kg whatever this says.
  */
+import { useSyncExternalStore } from 'react';
 import type { WeightUnit } from '@training-math';
 
-/** The unit every account starts with (the column default of `user_settings.unit`). */
-export const DEFAULT_DISPLAY_UNIT: WeightUnit = 'lb';
+import { unitStore } from './unitStore';
+
+export { DEFAULT_DISPLAY_UNIT } from './unitStore';
 
 /**
- * The unit the signed-in lifter sees weights in. A hook so that B15 can make it follow the
- * synced setting (and re-render screens when it changes) without touching any caller.
+ * The unit the signed-in lifter sees weights in. Re-renders the calling screen whenever the
+ * lifter (or a download from another of their devices) changes it.
  */
 export function useDisplayUnit(): WeightUnit {
-  return DEFAULT_DISPLAY_UNIT;
+  return useSyncExternalStore(unitStore.subscribe, unitStore.getSnapshot);
 }

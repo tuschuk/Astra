@@ -5,7 +5,7 @@
  */
 import { describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
-import { fireEvent, render, waitFor } from '@testing-library/react-native';
+import { fireEvent, render } from '@testing-library/react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { AuthProvider } from '@/auth/AuthProvider';
@@ -19,9 +19,10 @@ import CommunitiesScreen from '@/app/(tabs)/communities';
 import LibraryScreen from '@/app/(tabs)/library';
 import YouScreen from '@/app/(tabs)/you';
 
-// The Home screen navigates via expo-router; stub the router.
+// The Home and You screens navigate via expo-router; stub the router.
+const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
-  useRouter: () => ({ push: jest.fn() }),
+  useRouter: () => ({ push: mockPush }),
 }));
 
 function renderScreen(element: React.ReactElement) {
@@ -92,7 +93,7 @@ describe('tab screens', () => {
     expect(screen.getByText(/No exercises match/)).toBeTruthy();
   });
 
-  it('You renders the profile skeleton with both follow counts and the signed-in email', async () => {
+  it('You renders the profile skeleton with both follow counts (the email lives in Settings since B15)', async () => {
     const client = createFakeAuthClient({ storedSession: fakeSession('me@example.com') });
     const screen = await renderScreen(
       <AuthProvider client={client} appState={createFakeAppState()}>
@@ -102,17 +103,19 @@ describe('tab screens', () => {
     expect(screen.getByText('Your profile')).toBeTruthy();
     expect(screen.getByText('Followers')).toBeTruthy();
     expect(screen.getByText('Following')).toBeTruthy();
-    await waitFor(() => expect(screen.getByText('me@example.com')).toBeTruthy());
+    expect(screen.queryByText('me@example.com')).toBeNull();
   });
 
-  it('You has a Sign out button that signs out of this device', async () => {
+  it('B15: You has a Settings (gear) button that opens Settings, and no Sign out of its own', async () => {
     const client = createFakeAuthClient({ storedSession: fakeSession() });
     const screen = await renderScreen(
       <AuthProvider client={client} appState={createFakeAppState()}>
         <YouScreen />
       </AuthProvider>,
     );
-    await fireEvent.press(screen.getByLabelText('Sign out'));
-    expect(client.signOut).toHaveBeenCalledWith({ scope: 'local' });
+    await fireEvent.press(screen.getByLabelText('Settings'));
+    expect(mockPush).toHaveBeenCalledWith('/settings');
+    // Sign-out moved to Settings (one home for it).
+    expect(screen.queryByLabelText('Sign out')).toBeNull();
   });
 });
