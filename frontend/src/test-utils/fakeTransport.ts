@@ -16,7 +16,15 @@
  *   - `loseNextResponse()` — the next upload is SAVED but the reply is lost,
  *     so the phone thinks it failed and will retry (the classic duplicate trap).
  */
-import type { ExerciseRow, RowByTable, SetRow, SyncedTable, WorkoutExerciseRow, WorkoutRow } from '@/db/dao';
+import type {
+  ExerciseRow,
+  PersonalRecordRow,
+  RowByTable,
+  SetRow,
+  SyncedTable,
+  WorkoutExerciseRow,
+  WorkoutRow,
+} from '@/db/dao';
 import type { PullCursor, PushRow, SyncTransport } from '@/sync/transport';
 
 type AnyRow = { id: string; updated_at: string } & Record<string, unknown>;
@@ -25,6 +33,7 @@ type AnyRow = { id: string; updated_at: string } & Record<string, unknown>;
 const PARENT: { [T in SyncedTable]?: { column: string; table: SyncedTable } } = {
   workout_exercises: { column: 'workout_id', table: 'workouts' },
   sets: { column: 'workout_exercise_id', table: 'workout_exercises' },
+  personal_records: { column: 'source_set_id', table: 'sets' },
 };
 
 /** True if row `r` comes after bookmark `c` in (updated_at, id) order. */
@@ -45,6 +54,7 @@ export class FakeServer implements SyncTransport {
     workouts: new Map(),
     workout_exercises: new Map(),
     sets: new Map(),
+    personal_records: new Map(),
   };
   /** Every upload request received, in order (including failed ones). */
   readonly upsertCalls: { tbl: SyncedTable; ids: string[] }[] = [];
@@ -99,14 +109,29 @@ export class FakeServer implements SyncTransport {
       }
     }
     if (rows.some((r) => 'updated_at' in r)) throw new Error('client must not send updated_at');
-    this.seed(tbl, rows);
+    const stored =
+      tbl === 'personal_records'
+        ? (rows.map((r) => this.keepBest(r as PushRow<'personal_records'>)) as unknown as readonly PushRow<T>[])
+        : rows;
+    this.seed(tbl, stored);
     if (this.loseResponse) {
       this.loseResponse = false;
       throw new Error('Network request failed (response lost)');
     }
   }
 
-  private page<T extends 'workouts' | 'exercises'>(
+  /**
+   * The server's keep-best trigger (…_personal_records.sql): an upload that would LOWER a stored
+   * record keeps the stored best, book and proof — and still succeeds (the row is re-stamped).
+   */
+  private keepBest(row: PushRow<'personal_records'>): PushRow<'personal_records'> {
+    const stored = this.tables.personal_records.get(row.id);
+    if (!stored || row.value_kg >= stored.value_kg) return row;
+    const { updated_at: _stamp, ...kept } = stored;
+    return { ...row, ...kept, created_at: row.created_at };
+  }
+
+  private page<T extends 'workouts' | 'exercises' | 'personal_records'>(
     tbl: T,
     after: PullCursor | null,
     limit: number,
@@ -128,6 +153,11 @@ export class FakeServer implements SyncTransport {
   async pullExercises(after: PullCursor | null, limit: number): Promise<ExerciseRow[]> {
     this.guard();
     return this.page('exercises', after, limit, () => true);
+  }
+
+  async pullPersonalRecords(userId: string, after: PullCursor | null, limit: number): Promise<PersonalRecordRow[]> {
+    this.guard();
+    return this.page('personal_records', after, limit, (r) => r.user_id === userId);
   }
 
   /** Requests to the child endpoints, to check the engine keeps id lists short. */

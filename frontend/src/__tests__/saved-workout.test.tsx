@@ -130,6 +130,33 @@ describe('Saved workout screen', () => {
     expect(screen.queryByText(/^↳/)).toBeNull();
   });
 
+  it('B13: badges each set that holds a record with its kind; a set whose record was beaten loses it', async () => {
+    const first = await startActiveWorkout(db, SIGNED_IN_USER_ID, steadyOptions(START));
+    const squat = await first.addExercise(libraryExerciseId('squat'));
+    await first.logSet(squat.id, { reps: 5, weight: { value: 315, unit: 'lb' }, isWarmup: true });
+    await first.logSet(squat.id, { reps: 1, weight: { value: 405, unit: 'lb' } });
+    await first.logSet(squat.id, { reps: 3, weight: { value: 365, unit: 'lb' } });
+    await first.finish();
+    mockParams = { id: first.getSnapshot().workout.id };
+
+    const view = await renderSignedIn(<SavedWorkoutScreen />);
+    await screen.findByText('Squat');
+    // The single holds the true 1RM; the triple holds the 3RM and (365 × 3 → 401.5 < 405) not e1RM.
+    expect(await screen.findByText('PR · 1RM · e1RM')).toBeTruthy();
+    expect(screen.getByText('PR · 3RM')).toBeTruthy();
+    expect(screen.getAllByText(/^PR ·/)).toHaveLength(2); // the warm-up never
+    await view.unmount();
+
+    // A later, heavier single takes the 1RM and e1RM books: the old single's badge goes.
+    const second = await startActiveWorkout(db, SIGNED_IN_USER_ID, steadyOptions('2026-11-13T12:00:00.000Z'));
+    const squat2 = await second.addExercise(libraryExerciseId('squat'));
+    await second.logSet(squat2.id, { reps: 1, weight: { value: 425, unit: 'lb' } });
+    await second.finish();
+    await renderSignedIn(<SavedWorkoutScreen />);
+    expect(await screen.findByText('PR · 3RM')).toBeTruthy();
+    expect(screen.queryByText('PR · 1RM · e1RM')).toBeNull();
+  });
+
   it('never shows another user’s workout', async () => {
     mockParams = { id: await seedWorkout(OTHER_USER_ID) };
     await renderSignedIn(<SavedWorkoutScreen />);

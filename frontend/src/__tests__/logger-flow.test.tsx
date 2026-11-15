@@ -11,7 +11,9 @@
  * "Discard workout" / "Keep lifting") and Discard. The router is a stub, so each screen is
  * rendered in turn the way navigation would show it; the database is handed in through a
  * mocked `openAppDatabase`. Sync is proven in B07/B08; B11's test pushes once more to show its
- * new columns (superset, drop, time, score) reach the stand-in server intact.
+ * new columns (superset, drop, time, score) reach the stand-in server intact. B13 walks the
+ * last-time panel (previous sets + current PRs + History link) and the PR badge Finish leaves on
+ * the saved workout: a heavier 5 is flagged, a repeat of the record is not.
  */
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
@@ -19,6 +21,7 @@ import { Alert, type AlertButton } from 'react-native';
 import { fireEvent, screen, waitFor } from '@testing-library/react-native';
 
 import type { SqlDriver } from '@/db/driver';
+import { libraryExerciseId } from '@/library/uuidv5';
 import { createPreparedDb, renderSignedIn, SIGNED_IN_USER_ID } from '@/test-utils/loggerTestKit';
 import { loadActiveWorkout, startActiveWorkout } from '@/workout/activeWorkout';
 import { clearSessionWorkout, currentSessionWorkout } from '@/workout/activeWorkoutSession';
@@ -167,6 +170,40 @@ describe('logger flow (B09 definition of done)', () => {
       ],
       [[8, true, null, false]],
     ]);
+  });
+
+  it('B13: the panel shows last time and PRs; a heavier 5 is flagged a 5RM on the saved workout, a repeat is not', async () => {
+    // Last session: 5 × 200 lb on bench.
+    const past = await startActiveWorkout(db, SIGNED_IN_USER_ID, {
+      clock: () => '2026-11-10T09:00:00.000Z',
+    });
+    const pastBench = await past.addExercise(libraryExerciseId('bench_press'));
+    await past.logSet(pastBench.id, { reps: 5, weight: { value: 200, unit: 'lb' } });
+    await past.finish();
+
+    await startActiveWorkout(db, SIGNED_IN_USER_ID);
+    await renderSignedIn(<ActiveWorkoutScreen />);
+    await addExercise('bench press', 'Bench Press');
+    // The last-time panel (LOG-5): last session's sets, the current PRs, and a History link.
+    expect(await screen.findByText('Last time: 5 @ 200 lb')).toBeTruthy();
+    expect(await screen.findByText(/^PRs: e1RM 233\.3 lb · 5RM 200 lb$/)).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('History of Bench Press'));
+    expect(mockRouter.push).toHaveBeenCalledWith({
+      pathname: '/exercise-history/[exerciseId]',
+      params: { exerciseId: pastBench.exercise_id },
+    });
+
+    await logSet('Bench Press', '5', '200', 1); // a repeat of the record: volume, not a PR
+    await logSet('Bench Press', '5', '225', 2); // a heavier 5: 5RM and e1RM
+    await fireEvent.press(screen.getByLabelText('Finish'));
+    await waitFor(() => expect(mockRouter.replace).toHaveBeenCalled());
+    const [[target]] = mockRouter.replace.mock.calls as [[{ params: { id: string } }]];
+    await screen.unmount();
+
+    mockParams = { id: target.params.id };
+    await renderSignedIn(<SavedWorkoutScreen />);
+    expect(await screen.findByText('PR · e1RM · 5RM')).toBeTruthy();
+    expect(screen.getAllByText(/^PR ·/)).toHaveLength(1); // only the 225 set
   });
 
   it('B11: a superset, a drop set, a timed and a scored entry log, sync and show as one unit each', async () => {

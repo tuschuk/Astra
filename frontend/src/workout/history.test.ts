@@ -13,7 +13,7 @@ import { createPreparedDb, steadyOptions } from '@/test-utils/loggerTestKit';
 import { OTHER_USER_ID, USER_ID } from '@/test-utils/workoutFixtures';
 
 import { startActiveWorkout } from './activeWorkout';
-import { exerciseInfo, lastSessionSets, listPastWorkouts, readWorkout } from './history';
+import { exerciseInfo, exerciseSessions, lastSessionSets, listPastWorkouts, readWorkout } from './history';
 
 const BENCH = libraryExerciseId('bench_press');
 const SQUAT = libraryExerciseId('squat');
@@ -151,5 +151,43 @@ describe('exerciseInfo', () => {
       equipment: 'Bodyweight',
     });
     expect(await exerciseInfo(db, USER_ID, '00000000-0000-4000-8000-00000000dead')).toBeNull();
+  });
+});
+
+describe('exerciseSessions (LOG-4 history screen)', () => {
+  it('lists every finished session of the exercise, newest first, with only that exercise’s sets', async () => {
+    const db = await createPreparedDb();
+    const first = await logWorkout(db, USER_ID, '2026-11-08T09:00:00.000Z', [
+      { exerciseId: BENCH, reps: [5, 5] },
+      { exerciseId: SQUAT, reps: [3] },
+    ]);
+    await logWorkout(db, USER_ID, '2026-11-09T09:00:00.000Z', [{ exerciseId: SQUAT, reps: [3] }]);
+    const twice = await logWorkout(db, USER_ID, '2026-11-11T09:00:00.000Z', [
+      { exerciseId: BENCH, reps: [8], kg: 80 },
+      { exerciseId: DEADLIFT, reps: [1] },
+      { exerciseId: BENCH, reps: [6], kg: 90 },
+    ]);
+    await logWorkout(db, OTHER_USER_ID, '2026-11-12T09:00:00.000Z', [{ exerciseId: BENCH, reps: [1] }]);
+    await logWorkout(db, USER_ID, '2026-11-13T09:00:00.000Z', [{ exerciseId: BENCH, reps: [2] }], false);
+
+    const sessions = await exerciseSessions(db, USER_ID, BENCH);
+    expect(sessions.map((s) => s.workoutId)).toEqual([twice, first]);
+    // The exercise appeared twice in one workout: both slots' sets, in workout order.
+    expect(sessions[0].sets.map((s) => [s.reps, s.weight_kg])).toEqual([
+      [8, 80],
+      [6, 90],
+    ]);
+    expect(sessions[1].sets.map((s) => s.reps)).toEqual([5, 5]);
+    expect(sessions[1].startedAt).toBe('2026-11-08T09:00:00.000Z');
+  });
+
+  it('skips a workout where the exercise was added but no set logged, and stops at the limit', async () => {
+    const db = await createPreparedDb();
+    await logWorkout(db, USER_ID, '2026-11-08T09:00:00.000Z', [{ exerciseId: BENCH, reps: [] }]);
+    for (let day = 1; day <= 3; day += 1) {
+      await logWorkout(db, USER_ID, `2026-11-0${day}T09:00:00.000Z`, [{ exerciseId: SQUAT, reps: [5] }]);
+    }
+    expect(await exerciseSessions(db, USER_ID, BENCH)).toEqual([]);
+    expect(await exerciseSessions(db, USER_ID, SQUAT, 2)).toHaveLength(2);
   });
 });

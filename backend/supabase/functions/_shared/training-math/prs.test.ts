@@ -1,7 +1,15 @@
 // Tests for prs.ts — PR classification and rebuilding records from history.
 import { describe, expect, it } from '@jest/globals';
 
-import { classifyPrs, recordsFromSets, type PrCandidateSet, type PrRecords } from './prs.ts';
+import {
+  beatsRecord,
+  classifyPrs,
+  compareRecordBooks,
+  recordBooks,
+  recordsFromSets,
+  type PrCandidateSet,
+  type PrRecords,
+} from './prs.ts';
 
 const set = (weightKg: number | null, reps: number | null, isWarmup = false): PrCandidateSet => ({
   weightKg,
@@ -126,5 +134,86 @@ describe('recordsFromSets', () => {
     const records = recordsFromSets(history);
     expect(classifyPrs(set(105, 5), records)).toEqual([]);
     expect(classifyPrs(set(106, 5), records).map((e) => e.kind)).toEqual(['repMax', 'e1rm']);
+  });
+});
+
+describe('recordBooks', () => {
+  const ref = <R>(s: PrCandidateSet, r: R) => ({ ...s, ref: r });
+
+  it('names the set that holds each book, books ordered true 1RM, e1RM, rep maxes by reps', () => {
+    const books = recordBooks([
+      ref(set(60, 5, true), 'warmup'),
+      ref(set(100, 5), 'a'),
+      ref(set(110, 3), 'b'),
+      ref(set(120, 1), 'c'),
+      ref(set(105, 5), 'd'),
+    ]);
+    expect(books.map((b) => [b.kind, b.kind === 'repMax' ? b.reps : null, b.ref])).toEqual([
+      ['true1rm', null, 'c'],
+      ['e1rm', null, 'd'], // 105 × 5 → 122.5 beats 120 × 1 and 110 × 3
+      ['repMax', 3, 'b'],
+      ['repMax', 5, 'd'],
+    ]);
+    expect(books[0].valueKg).toBe(120);
+    expect(books[1].valueKg).toBeCloseTo(122.5, 10);
+  });
+
+  it('keeps the EARLIER set on a tie', () => {
+    const books = recordBooks([ref(set(100, 5), 'first'), ref(set(100, 5), 'second')]);
+    expect(books.every((b) => b.ref === 'first')).toBe(true);
+  });
+
+  it('never moves a book for a volume-only repeat, or for warm-ups and weightless sets', () => {
+    const books = recordBooks([
+      ref(set(100, 5), 'top'),
+      ...Array.from({ length: 5 }, (_, i) => ref(set(100, 5), `again${i}`)),
+      ref(set(80, 10), 'lighter'), // e1RM 106.7 < 116.7, a new 10RM book though
+      ref(set(500, 1, true), 'warmup'),
+      ref(set(null, 20), 'bodyweight'),
+    ]);
+    expect(books.map((b) => b.ref)).toEqual(['top', 'top', 'lighter']);
+  });
+
+  it('returns nothing for an empty or all-warm-up history', () => {
+    expect(recordBooks([])).toEqual([]);
+    expect(recordBooks([ref(set(200, 1, true), 1)])).toEqual([]);
+  });
+
+  it('gives the same values as recordsFromSets', () => {
+    const history = [set(100, 5), set(110, 3), set(120, 1), set(105, 5)];
+    const fromBooks: PrRecords = { repMaxesKg: {} };
+    for (const b of recordBooks(history.map((s, i) => ref(s, i)))) {
+      if (b.kind === 'repMax') fromBooks.repMaxesKg[b.reps] = b.valueKg;
+      else if (b.kind === 'true1rm') fromBooks.true1RmKg = b.valueKg;
+      else fromBooks.e1RmKg = b.valueKg;
+    }
+    expect(fromBooks).toEqual(recordsFromSets(history));
+  });
+});
+
+describe('compareRecordBooks', () => {
+  it('lists true 1RM, e1RM, then rep maxes from fewest reps up — for books and saved rows alike', () => {
+    const rows = [
+      { kind: 'repMax' as const, reps: 8 },
+      { kind: 'e1rm' as const, reps: null },
+      { kind: 'repMax' as const, reps: 3 },
+      { kind: 'true1rm' as const },
+    ];
+    expect([...rows].sort(compareRecordBooks).map((r) => `${r.kind}${r.reps ?? ''}`)).toEqual([
+      'true1rm',
+      'e1rm',
+      'repMax3',
+      'repMax8',
+    ]);
+  });
+});
+
+describe('beatsRecord', () => {
+  it('counts a first-ever value and a real improvement, never a tie or float noise', () => {
+    expect(beatsRecord(50, undefined)).toBe(true);
+    expect(beatsRecord(100.001, 100)).toBe(true);
+    expect(beatsRecord(100, 100)).toBe(false);
+    expect(beatsRecord(100 + 1e-9, 100)).toBe(false);
+    expect(beatsRecord(99, 100)).toBe(false);
   });
 });

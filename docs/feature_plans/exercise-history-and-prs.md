@@ -397,3 +397,50 @@ Tristen overrules). Questions that changed or sharpened the plan:
 - **Scope verdict:** right as written. The saved-workout badge is the minimal on-screen surface
   that makes "flags a PR" observable (the DoD's own wording) and is read-only over this step's
   table — included; everything else that *reads* PRs stays with its own step.
+
+## Build deviations (builder run, Nov 14, 2026)
+
+1. **Migration version:** applied live as `personal_records`. Supabase recorded
+   `20261115035806`, and the file is named to match. The builder ran a Gate-2-style live probe in
+   one rolled-back DO block, with synthetic users and nothing left behind:
+   - An insert by the owner was accepted.
+   - Citing another user's set was refused (42501).
+   - Inserting as another user was refused (42501).
+   - A second row for the same book was refused (23505).
+   - A repMax row without reps was refused (23514).
+   - A lower upsert kept value 100 and the original source set.
+   - A higher upsert took 120.123 and the new source set.
+   - User B saw, updated and deleted 0 of user A's rows.
+   - Deleting the source set cascaded the row away.
+
+   The security advisors reported no lints.
+2. **Two extra server indexes** beyond the plan: `(user_id, updated_at, id)` for the pull
+   bookmark and `(source_set_id)` for the cascade. The keep-best trigger also pins `kind` and
+   `exercise_id` along with value / reps / source. That is harmless, because the deterministic
+   id fixes both.
+3. **The math module exports two more helpers** (review fix):
+   - `beatsRecord`, the classifier's ε rule. The never-lower compare reuses it instead of
+     inventing a tolerance.
+   - `compareRecordBooks`, the one record ordering, used by `recordBooks` and `currentPrs`. The
+     first draft had a copy of it in the app.
+4. **History screen session header:** the workout's title with its date beneath, or the date
+   alone when untitled. The plan said "date header per session".
+5. **Saved-workout badge on a drop set** collects the records of every segment of that drop set
+   onto its one row.
+6. **Test placement:** the store-level finish proofs, the push/pull/keep-best sync proofs and
+   the rollback proof live in `workout/prs.test.ts` and `db/dao.test.ts`, not
+   `activeWorkout.test.ts` / `pull.test.ts`. `push.test.ts` only gained the new count key. The
+   fake server mirrors the keep-best trigger.
+7. **Known, not fixed — server-side ties:** the trigger fires only when the incoming value is
+   *lower*. So an equal value pushed from a second device replaces `source_set_id`: the last
+   write decides which set holds the badge, and the value never changes. The fold's "earlier set
+   keeps a tie" holds only within one device. Left for B14, which reworks this trigger anyway
+   (DEFERRED.md).
+8. **Review (mattpocock-skills:code-review, both axes):** Spec found no missing requirements and
+   no correctness defects. Standards found no hard violations. Fixed: the duplicated ordering
+   rule and the `beats` alias. Left as they are (judgement calls):
+   - "e1RM" is the only estimate wording on screen, with no citation shown. Whether a computed
+     e1RM counts as a "performance claim" is Tristen's call.
+   - Small duplications: the distinct-exercise-id helper, and the `back()` and set-row JSX
+     shared by the saved-workout and history screens.
+   - Hand-written per-table count objects in push/pull.

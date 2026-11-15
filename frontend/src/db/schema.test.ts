@@ -18,6 +18,7 @@ describe('migrate', () => {
     expect(tables.map((t) => t.name)).toEqual([
       'exercises',
       'outbox',
+      'personal_records',
       'sets',
       'sync_state',
       'workout_exercises',
@@ -52,8 +53,30 @@ describe('migrate', () => {
 
     await migrate(db);
 
-    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 3 });
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: SCHEMA_VERSION });
     expect(await db.getFirstAsync('select reps, score, notes from sets')).toEqual({ reps: 5, score: 'AMRAP', notes: null });
+  });
+
+  it('upgrades a version-3 phone to version 4 (personal_records), keeping the sets already there', async () => {
+    const db = createNodeSqliteDriver();
+    // A phone that installed the app between B12 and B13: versions 1–3 have run.
+    for (const migration of MIGRATIONS.slice(0, 3)) await db.execAsync(migration);
+    await db.execAsync('pragma user_version = 3');
+    await db.runAsync(
+      "insert into workouts (id, user_id, started_at, created_at, updated_at) values ('w', 'u', 't', 't', 't')",
+    );
+    await db.runAsync(
+      "insert into workout_exercises (id, workout_id, position, created_at, updated_at) values ('e', 'w', 0, 't', 't')",
+    );
+    await db.runAsync(
+      "insert into sets (id, workout_exercise_id, position, reps, notes, created_at, updated_at) values ('s', 'e', 0, 5, 'belt', 't', 't')",
+    );
+
+    await migrate(db);
+
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 4 });
+    expect(await db.getFirstAsync('select reps, notes from sets')).toEqual({ reps: 5, notes: 'belt' });
+    expect(await db.getFirstAsync('select count(*) as n from personal_records')).toEqual({ n: 0 });
   });
 
   it('upgrades a version-1 phone through every later version (sets.score), keeping the sets already there', async () => {

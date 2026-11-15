@@ -48,8 +48,13 @@ export type PrEvent =
  */
 const EPSILON = 1e-6;
 
-/** True when `candidate` beats `current` (or there is no current record yet). */
-function beats(candidate: number, current: number | undefined): boolean {
+/**
+ * True when `candidate` beats `current` (or there is no current record yet) — the one "is this
+ * bigger enough to count?" rule. Exported so code that compares against records it has SAVED
+ * (the logger's PR persistence) asks exactly the same question the classifier does, instead of
+ * inventing its own tolerance.
+ */
+export function beatsRecord(candidate: number, current: number | undefined): boolean {
   return current === undefined || candidate > current + EPSILON;
 }
 
@@ -68,18 +73,18 @@ export function classifyPrs(set: PrCandidateSet, records: PrRecords): PrEvent[] 
 
   const events: PrEvent[] = [];
   if (reps === 1) {
-    if (beats(weightKg, records.true1RmKg)) {
+    if (beatsRecord(weightKg, records.true1RmKg)) {
       events.push(withPrevious({ kind: 'true1rm', valueKg: weightKg }, records.true1RmKg));
     }
   } else {
     const previous = records.repMaxesKg[reps];
-    if (beats(weightKg, previous)) {
+    if (beatsRecord(weightKg, previous)) {
       events.push(withPrevious({ kind: 'repMax', reps, valueKg: weightKg }, previous));
     }
   }
   if (reps <= MAX_EPLEY_REPS) {
     const estimate = epleyE1rm(weightKg, reps);
-    if (beats(estimate, records.e1RmKg)) {
+    if (beatsRecord(estimate, records.e1RmKg)) {
       events.push(withPrevious({ kind: 'e1rm', valueKg: estimate }, records.e1RmKg));
     }
   }
@@ -103,13 +108,73 @@ function applyPrs(records: PrRecords, events: PrEvent[]): PrRecords {
 }
 
 /**
- * Rebuild a lifter's records for one exercise from their set history, using exactly the same
- * rules as `classifyPrs`. Used to seed records from history and to recompute them after a set
- * is edited or deleted. Order of sets doesn't change the result.
+ * One record book's current best, and which set holds it.
+ *   - `kind` / `reps`: which book (only rep maxes carry `reps`, the rep count of their book);
+ *   - `valueKg`: the best, in kg (for e1rm, the Epley estimate);
+ *   - `ref`: whatever the caller attached to the set that set it — the logger passes the set's
+ *     database id, so a saved record can point at its proof.
  */
-export function recordsFromSets(sets: PrCandidateSet[]): PrRecords {
-  return sets.reduce<PrRecords>(
-    (records, set) => applyPrs(records, classifyPrs(set, records)),
-    { repMaxesKg: {} },
-  );
+export type RecordBook<Ref> =
+  | { kind: 'true1rm' | 'e1rm'; valueKg: number; ref: Ref }
+  | { kind: 'repMax'; reps: number; valueKg: number; ref: Ref };
+
+/** A logged set plus the caller's label for it (see `RecordBook.ref`). */
+export type RefSet<Ref> = PrCandidateSet & { ref: Ref };
+
+/** Where each kind of book sits in a list of records. */
+const KIND_RANK: Record<PrKind, number> = { true1rm: 0, e1rm: 1, repMax: 2 };
+
+/**
+ * The one order records are listed in everywhere — true 1RM, e1RM, then rep maxes from fewest
+ * reps up — for anything with a kind and (for rep maxes) a rep count: a folded book or a saved
+ * record row. Use it with `Array.sort`.
+ */
+export function compareRecordBooks(
+  a: { kind: PrKind; reps?: number | null },
+  b: { kind: PrKind; reps?: number | null },
+): number {
+  return KIND_RANK[a.kind] - KIND_RANK[b.kind] || (a.reps ?? 0) - (b.reps ?? 0);
+}
+
+/**
+ * Rebuild every record book for one exercise from its set history, remembering which set holds
+ * each best. Input: the sets in the order they were logged, each with a `ref`. Output: one entry
+ * per book that has a record, ordered true 1RM, e1RM, then rep maxes by rep count.
+ *
+ * Uses `classifyPrs` set by set — so the rules are exactly the classifier's (warm-ups, weightless
+ * sets and volume never count). A tie never beats a record, so when two sets tie the EARLIER one
+ * keeps it: the lifter set that record first. Why it exists: saving PRs needs the proof (which
+ * set), which `recordsFromSets` alone throws away.
+ */
+export function recordBooks<Ref>(sets: readonly RefSet<Ref>[]): RecordBook<Ref>[] {
+  let records: PrRecords = { repMaxesKg: {} };
+  const books = new Map<string, RecordBook<Ref>>();
+  for (const set of sets) {
+    const events = classifyPrs(set, records);
+    records = applyPrs(records, events);
+    for (const event of events) {
+      if (event.kind === 'repMax') {
+        books.set(`repMax:${event.reps}`, { kind: 'repMax', reps: event.reps, valueKg: event.valueKg, ref: set.ref });
+      } else {
+        books.set(event.kind, { kind: event.kind, valueKg: event.valueKg, ref: set.ref });
+      }
+    }
+  }
+  return [...books.values()].sort(compareRecordBooks);
+}
+
+/**
+ * Rebuild a lifter's records for one exercise from their set history, using exactly the same
+ * rules as `classifyPrs` (it is `recordBooks` with the "which set" part dropped). Used to seed
+ * records from history and to recompute them after a set is edited or deleted. Order of sets
+ * doesn't change the result.
+ */
+export function recordsFromSets(sets: readonly PrCandidateSet[]): PrRecords {
+  const records: PrRecords = { repMaxesKg: {} };
+  for (const book of recordBooks(sets.map((set) => ({ ...set, ref: null })))) {
+    if (book.kind === 'repMax') records.repMaxesKg[book.reps] = book.valueKg;
+    else if (book.kind === 'true1rm') records.true1RmKg = book.valueKg;
+    else records.e1RmKg = book.valueKg;
+  }
+  return records;
 }

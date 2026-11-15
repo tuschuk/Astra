@@ -30,14 +30,25 @@ the feed), B10 set-types (LOG-14, LOG-15 Built), B09 logger-screen (LOG-2, NFR-2
 active-workout-store (NFR-3 Built), B07 local-store-and-sync (FND-3 Built), B06 training-math,
 B05 auth-and-signup. Details in each plan file.
 
-**B13 exercise-history-and-prs** (planning now): `personal_records` table (user, exercise, kind:
-true 1RM / rep max per rep count / estimated 1RM; value; source set) with owner RLS; PR detection
-on finish through `@training-math` (`classifyPrs`, `recordsFromSets`), computed locally first and
-synced; the fuller "last time" panel; per-exercise history screen. Standing inputs for its
-planner: B10 settled **no separate rep-record book for bodyweight movements** (the three existing
-`PrKind`s only — Tristen can overrule before this merges); B06 recorded that `PrKind` is the
-canonical vocabulary and a matching SQL enum is not a mirrored copy; the device mirror grows a
-table (schema V4) and `TABLE_COLUMNS`; migration applied live, file renamed to the recorded version.
+**B13 exercise-history-and-prs (built on its branch, awaiting Gate 2):**
+
+- **Server:** `personal_records` holds one row per record book (user × exercise × kind [× reps]):
+  the current best plus its source set. It has owner-only RLS, `private.owns_set` on writes, a
+  unique book index, and a silent **keep-best trigger** that never lets an upload lower a record.
+  The migration is applied live, and the file is named to the recorded version
+  (`20261115035806_personal_records.sql`). The builder's live probe is recorded in the plan file.
+  Device schema V4.
+- **Finish:** `finish()` runs `improvedRecords` (`workout/prs.ts`). It folds the full finished
+  history plus today's sets through the new `@training-math` `recordBooks` and writes only
+  improved books, in the same transaction as the workout. Ids are deterministic uuidv5 per book.
+- **Sync:** pull has a third bookmark for the records.
+- **UI:** the entry card shows the "last time" panel (last sets + "PRs: …" line + History link),
+  there is a new `exercise-history/[exerciseId]` screen, and the saved workout has
+  "PR · 5RM"-style badges.
+- **B14 must rework the keep-best trigger.**
+
+Eight build deviations are recorded in the plan file. B10's "no bodyweight rep-record book"
+reading was kept; Tristen can still overrule it before merge.
 
 **Pipeline operations** (all in `docs/PIPELINE.md`): n8n detached with `NODES_EXCLUDE=[]`; board
 `gvu4dg0NPtND4tGG` Active with a POST webhook trigger; `claude` CLI 2.1.325; headless allowlist

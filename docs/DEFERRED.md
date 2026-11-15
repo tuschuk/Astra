@@ -165,3 +165,16 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - A save refused *after* its box closed (unmount flush) only logs a `console.warn`; the inputs'
     `maxLength` makes that near-unreachable. Surface it on the card if it is ever seen.
   - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.
+- B13 exercise-history-and-prs follow-ups (`exercise-history-and-prs`):
+  - **B14 must rework the keep-best trigger** (`private.keep_best_personal_record`) before it
+    can lower a record on edit/delete, and add a forced-recompute mode to `improvedRecords`. Also
+    decide ties there: the trigger currently lets an equal value replace `source_set_id`.
+  - **Device check (Tristen):** the last-time panel's PR line and History link at phone width;
+    the history screen; the "PR · …" badge on the saved workout after a finish.
+  - **e1RM copy:** shown as "e1RM" (an estimate by name) with no on-screen source. Decide whether
+    CLAUDE.md's "numeric performance claim cites a source" rule wants an "Epley estimate" note.
+  - An exercise's PR line stays empty until its first finish after B13 ships (history seeds then).
+  - Small duplication to extract when a third user appears: distinct exercise ids of a workout,
+    `back()`, and the set-row JSX shared by the saved-workout and history screens.
+  - History screen has no paging (newest 50) and no tap-through to a session's workout.
+  - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.

@@ -1,7 +1,8 @@
 /**
  * Download: brings the server's changes to the user's own data onto the
- * device — their workouts (with every entry and set inside them) and the
- * exercises they can see (the shared library plus their customs).
+ * device — their workouts (with every entry and set inside them), the
+ * exercises they can see (the shared library plus their customs), and their
+ * personal records (B13).
  *
  * How it finds what changed: each table keeps a bookmark in `sync_state` —
  * the (updated_at, id) of the last row downloaded. A pull asks for rows after
@@ -40,8 +41,12 @@ export const PULL_OVERLAP_MS = 5000;
 /** The lowest possible id, used as the tie-breaker when rewinding a bookmark. */
 const MIN_ID = '00000000-0000-0000-0000-000000000000';
 
-/** `sync_state` keys of the two bookmarks. */
-export const CURSOR_KEYS = { workouts: 'pull_cursor:workouts', exercises: 'pull_cursor:exercises' } as const;
+/** `sync_state` keys of the three bookmarks. */
+export const CURSOR_KEYS = {
+  workouts: 'pull_cursor:workouts',
+  exercises: 'pull_cursor:exercises',
+  personal_records: 'pull_cursor:personal_records',
+} as const;
 
 type CursorKey = (typeof CURSOR_KEYS)[keyof typeof CURSOR_KEYS];
 
@@ -115,21 +120,29 @@ export interface PullResult {
   workouts: number;
   workout_exercises: number;
   sets: number;
+  personal_records: number;
 }
 
 /**
- * Downloads exercises the user can see, page by page, from the rewound
- * bookmark until a short page says there is nothing more.
+ * Downloads one stand-alone table (no children) page by page, from the
+ * rewound bookmark until a short page says there is nothing more. Each page
+ * and its bookmark are saved in one transaction.
  */
-async function pullExercises(db: SqlDriver, transport: SyncTransport, result: PullResult): Promise<void> {
-  let after = rewind(await readCursor(db, CURSOR_KEYS.exercises));
+async function pullStandalone<T extends 'exercises' | 'personal_records'>(
+  db: SqlDriver,
+  tbl: T,
+  fetchPage: (after: PullCursor | null) => Promise<RowByTable[T][]>,
+  result: PullResult,
+): Promise<void> {
+  const key = CURSOR_KEYS[tbl];
+  let after = rewind(await readCursor(db, key));
   for (;;) {
-    const page = await transport.pullExercises(after, PULL_PAGE_SIZE);
+    const page = await fetchPage(after);
     if (page.length === 0) return;
     const next = lastCursor(page);
     await db.withTransactionAsync(async (tx) => {
-      result.exercises += await applyRows(tx, 'exercises', page);
-      await writeCursor(tx, CURSOR_KEYS.exercises, next);
+      result[tbl] += await applyRows(tx, tbl, page);
+      await writeCursor(tx, key, next);
     });
     if (page.length < PULL_PAGE_SIZE) return;
     after = next;
@@ -181,12 +194,19 @@ async function pullWorkoutTrees(
 
 /**
  * Downloads everything new for user `userId`: exercises first (workouts point
- * at them), then workouts with their contents. Throws the transport's error on
- * failure; pages already saved stay saved and their bookmarks stay moved.
+ * at them), then workouts with their contents, then the user's personal
+ * records (they cite sets). Throws the transport's error on failure; pages
+ * already saved stay saved and their bookmarks stay moved.
  */
 export async function pullChanges(db: SqlDriver, transport: SyncTransport, userId: string): Promise<PullResult> {
-  const result: PullResult = { exercises: 0, workouts: 0, workout_exercises: 0, sets: 0 };
-  await pullExercises(db, transport, result);
+  const result: PullResult = { exercises: 0, workouts: 0, workout_exercises: 0, sets: 0, personal_records: 0 };
+  await pullStandalone(db, 'exercises', (after) => transport.pullExercises(after, PULL_PAGE_SIZE), result);
   await pullWorkoutTrees(db, transport, userId, result);
+  await pullStandalone(
+    db,
+    'personal_records',
+    (after) => transport.pullPersonalRecords(userId, after, PULL_PAGE_SIZE),
+    result,
+  );
   return result;
 }

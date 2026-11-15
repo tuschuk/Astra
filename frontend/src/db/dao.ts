@@ -35,6 +35,8 @@
  * Every query the UI runs on these tables must filter by the signed-in
  * user's id — the device file can still hold a previous account's rows.
  */
+import type { PrKind } from '@training-math';
+
 import { enqueueTx } from '@/sync/outbox';
 
 import { placeholders, type SqlDriver, type SqlExecutor, type SqlValue } from './driver';
@@ -108,22 +110,51 @@ export interface SetRow {
   updated_at: string;
 }
 
+/**
+ * One record book's current best for one exercise (server table `personal_records`, B13):
+ * the heaviest single (`true1rm`), the heaviest weight for exactly `reps` reps (`repMax`), or
+ * the best estimated 1RM (`e1rm`) — and the set that holds it. One row per book, not one per
+ * PR ever hit. The id is deterministic per book (see `workout/prs.ts`).
+ */
+export interface PersonalRecordRow {
+  id: string;
+  user_id: string;
+  exercise_id: string;
+  kind: PrKind;
+  /** Which rep count's book — rep maxes only (2 and up); null for true1rm and e1rm. */
+  reps: number | null;
+  /** The best, in kg, rounded to the server column's 3 decimals. */
+  value_kg: number;
+  /** The set that set this record — its proof. */
+  source_set_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
 /** The row shape of each synced table. */
 export interface RowByTable {
   exercises: ExerciseRow;
   workouts: WorkoutRow;
   workout_exercises: WorkoutExerciseRow;
   sets: SetRow;
+  personal_records: PersonalRecordRow;
 }
 
-/** The four tables mirrored on the device and kept in sync with the server. */
+/** The five tables mirrored on the device and kept in sync with the server. */
 export type SyncedTable = keyof RowByTable;
 
 /**
  * Parents before children: the order rows must reach the server in, so a set
- * never arrives before the entry it belongs to (the server checks that).
+ * never arrives before the entry it belongs to, and a personal record never
+ * before the set it cites (the server checks both).
  */
-export const SYNC_ORDER: readonly SyncedTable[] = ['exercises', 'workouts', 'workout_exercises', 'sets'];
+export const SYNC_ORDER: readonly SyncedTable[] = [
+  'exercises',
+  'workouts',
+  'workout_exercises',
+  'sets',
+  'personal_records',
+];
 
 /** Every column of each table, as named on both the device and the server. */
 export const TABLE_COLUMNS: { readonly [T in SyncedTable]: readonly (keyof RowByTable[T])[] } = {
@@ -151,6 +182,17 @@ export const TABLE_COLUMNS: { readonly [T in SyncedTable]: readonly (keyof RowBy
     'duration_seconds',
     'score',
     'notes',
+    'created_at',
+    'updated_at',
+  ],
+  personal_records: [
+    'id',
+    'user_id',
+    'exercise_id',
+    'kind',
+    'reps',
+    'value_kg',
+    'source_set_id',
     'created_at',
     'updated_at',
   ],
@@ -311,20 +353,29 @@ export async function writeLocal<T extends SyncedTable>(
 /** The three tables that make up one workout: the workout, its exercise slots, their sets. */
 export type WorkoutTreeTable = 'workouts' | 'workout_exercises' | 'sets';
 
-/** Rows of a workout tree, per table; any table may be left out. */
-export type WorkoutTreeRows = { [T in WorkoutTreeTable]?: readonly RowByTable[T][] };
+/**
+ * Rows of a workout tree, per table; any table may be left out. Finishing a
+ * workout may also carry the personal records it set (B13), so they are
+ * saved in the same all-or-nothing transaction as the workout itself.
+ */
+export type WorkoutTreeRows = { [T in WorkoutTreeTable]?: readonly RowByTable[T][] } & {
+  personal_records?: readonly PersonalRecordRow[];
+};
 
 /**
  * Saves a whole workout tree as the user's change, in ONE transaction:
  * every row is stamped `updated_at = now`, saved, and added to the outbox,
- * parents before children. If any given entry or set belongs to a workout
- * not in `tree.workouts`, that workout is re-stamped and queued too (the
- * touch-the-root rule, same as `writeLocal`). Afterwards the `onLocalWrite`
- * listeners hear about each table written, so the sync engine pushes soon.
+ * parents before children (personal records last — they cite sets). If any
+ * given entry or set belongs to a workout not in `tree.workouts`, that
+ * workout is re-stamped and queued too (the touch-the-root rule, same as
+ * `writeLocal`); a personal record has no parent workout and syncs on its
+ * own. Afterwards the `onLocalWrite` listeners hear about each table
+ * written, so the sync engine pushes soon.
  *
  * Why one transaction matters: finishing a workout queues the workout and
- * all its sets. Split across transactions, a crash in between could upload
- * a finished-looking empty workout for good. Here it is all or nothing.
+ * all its sets (and the PRs they set). Split across transactions, a crash in
+ * between could upload a finished-looking empty workout — or a workout whose
+ * PRs were silently lost — for good. Here it is all or nothing.
  */
 export async function writeLocalTree(
   db: SqlDriver,
@@ -332,7 +383,9 @@ export async function writeLocalTree(
   options: WriteLocalOptions = {},
 ): Promise<void> {
   const now = options.now ?? new Date().toISOString();
-  const tables = (['workouts', 'workout_exercises', 'sets'] as const).filter((t) => (tree[t]?.length ?? 0) > 0);
+  const tables = (['workouts', 'workout_exercises', 'sets', 'personal_records'] as const).filter(
+    (t) => (tree[t]?.length ?? 0) > 0,
+  );
   if (tables.length === 0) return;
 
   await db.withTransactionAsync(async (tx) => {

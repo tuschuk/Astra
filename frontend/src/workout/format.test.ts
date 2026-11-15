@@ -10,8 +10,11 @@ import {
   formatDropSet,
   formatDuration,
   formatLastTime,
+  formatPrBadge,
+  formatPrLine,
   formatSet,
   formatWeight,
+  prBookLabel,
   groupDropSets,
   parseDurationInput,
   parseNumberInput,
@@ -27,6 +30,30 @@ import {
 
 /** 185 lb as the store saves it (converted, rounded to the column's 2 decimals). */
 const KG_185LB = roundWeightKgForStorage(lbToKg(185));
+
+describe('PR text (LOG-4)', () => {
+  const records = [
+    { kind: 'true1rm' as const, reps: null, value_kg: roundWeightKgForStorage(lbToKg(225)) },
+    { kind: 'e1rm' as const, reps: null, value_kg: 110.25 },
+    { kind: 'repMax' as const, reps: 5, value_kg: roundWeightKgForStorage(lbToKg(205)) },
+  ];
+
+  it('names each book', () => {
+    expect(records.map(prBookLabel)).toEqual(['1RM', 'e1RM', '5RM']);
+  });
+
+  it('writes the PR line in the lifter’s unit, and nothing for no records', () => {
+    expect(formatPrLine(records, 'lb')).toBe('1RM 225 lb · e1RM 243.1 lb · 5RM 205 lb');
+    expect(formatPrLine(records.slice(1, 2), 'kg')).toBe('e1RM 110.3 kg');
+    expect(formatPrLine([], 'lb')).toBe('');
+  });
+
+  it('writes the badge for the books one set holds', () => {
+    expect(formatPrBadge([{ kind: 'repMax', reps: 5 }])).toBe('PR · 5RM');
+    expect(formatPrBadge(records)).toBe('PR · 1RM · e1RM · 5RM');
+    expect(formatPrBadge([])).toBe('');
+  });
+});
 
 describe('formatWeight / formatSet', () => {
   it('shows a stored kg weight in the lifter unit, rounded for display', () => {

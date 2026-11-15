@@ -51,7 +51,7 @@ flowchart TD
 
   subgraph Device["On the device"]
     Store[("expo-sqlite key-value store<br/>the saved Supabase session<br/>(survives killing the app)")]
-    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets<br/>+ outbox (unsent changes) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
+    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records (schema V4, B13)<br/>+ outbox (unsent changes) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
     LocalSeed["First-launch seed (library/seedLocal.ts)<br/>insert-if-missing all 151 exercises,<br/>id = uuidv5(namespace, slug); never queued"]
     WriteLocal["writeLocal / writeLocalTree (db/dao.ts): the queued write paths<br/>rows + outbox lines + re-stamp & queue parent workout,<br/>all-or-nothing (writeLocalTree: a whole workout in one transaction)"]
     Drafts["writeDraftRows / deleteDraftRowsTx (db/dao.ts): the in-progress path<br/>saved at once, NEVER queued; refused for a finished workout"]
@@ -61,10 +61,13 @@ flowchart TD
   end
 
   subgraph LoggerUI["Logger screens (signed-in stack, above the tab bar)"]
-    Logger["Active workout (app/active-workout.tsx)<br/>EntryCard per exercise: sets, reps + weight in lb (displayUnit.ts) + optional RPE,<br/>Warm-up chip (next sets are warm-ups), W toggle per logged set (B10),<br/>Bodyweight exercise: weight box = '+ lb' added load, reps alone logs,<br/>Timed chip (B11): reveals Time (s or m:ss) + Score boxes, closing clears them,<br/>Log set (reps, weight, time or score), Drop = next drop of the latest set (B11),<br/>Repeat last set (ONE tap, NFR-2), remove set (a drop set's top row removes all of it),<br/>link toggle (B11): superset with the card above, 'Superset' badge,<br/>drops shown as ↳ rows under one 'Set n' (sets numbered as the lifter counts),<br/>move up / down, remove exercise, 'Last time' line (LOG-5, work sets only)<br/>one store call per card at a time<br/>notes (B12): header Title + Notes boxes; 'Add note' under each exercise;<br/>note icon on every logged set / drop opens its box (one set box per card);<br/>boxes autosave (useAutosaveText) ~750 ms after typing + on close;<br/>Finish flushes every box first (AutosaveRegistry)<br/>empty slot on open: resume from astra.db or go back"]
+    Logger["Active workout (app/active-workout.tsx)<br/>EntryCard per exercise: sets, reps + weight in lb (displayUnit.ts) + optional RPE,<br/>Warm-up chip (next sets are warm-ups), W toggle per logged set (B10),<br/>Bodyweight exercise: weight box = '+ lb' added load, reps alone logs,<br/>Timed chip (B11): reveals Time (s or m:ss) + Score boxes, closing clears them,<br/>Log set (reps, weight, time or score), Drop = next drop of the latest set (B11),<br/>Repeat last set (ONE tap, NFR-2), remove set (a drop set's top row removes all of it),<br/>link toggle (B11): superset with the card above, 'Superset' badge,<br/>drops shown as ↳ rows under one 'Set n' (sets numbered as the lifter counts),<br/>move up / down, remove exercise,<br/>last-time panel (LOG-5): 'Last time' line (work sets only) + 'PRs: 1RM … · e1RM … · 5RM …'<br/>+ History link (B13; PRs read once on mount, they only change at finish)<br/>one store call per card at a time<br/>notes (B12): header Title + Notes boxes; 'Add note' under each exercise;<br/>note icon on every logged set / drop opens its box (one set box per card);<br/>boxes autosave (useAutosaveText) ~750 ms after typing + on close;<br/>Finish flushes every box first (AutosaveRegistry)<br/>empty slot on open: resume from astra.db or go back"]
     Picker["Add exercise panel (ExercisePicker, a Modal)<br/>alias-aware searchExercises over the catalog;<br/>slug → libraryExerciseId → store.addExercise"]
     EmptyQ{"Finish with zero sets?"}
-    Saved["Saved workout (app/workout/[id].tsx), read-only<br/>date, duration, every exercise + set in lb<br/>superset = ONE card labelled 'Superset' (B11);<br/>drop set = ONE row 'a → b → c'; time and score shown (B11)<br/>title (or date); workout, exercise and set notes as text (B12; drop notes '↳ …')<br/>(another user's / unfinished id: 'not on this phone')"]
+    Saved["Saved workout (app/workout/[id].tsx), read-only<br/>date, duration, every exercise + set in lb<br/>superset = ONE card labelled 'Superset' (B11);<br/>drop set = ONE row 'a → b → c'; time and score shown (B11)<br/>title (or date); workout, exercise and set notes as text (B12; drop notes '↳ …')<br/>PR badge under each set that holds a record now: 'PR · 1RM · e1RM' (B13)<br/>(another user's / unfinished id: 'not on this phone')"]
+    History["Exercise history (app/exercise-history/[exerciseId].tsx), read-only (B13, LOG-4)<br/>exercise name; 'Current PRs' (or 'No PRs yet');<br/>newest 50 finished sessions: title or date, that exercise's sets<br/>(warm-ups 'W', drop set on one row); Back"]
+    Logger -->|"History link: router.push"| History
+    History -->|Back| Logger
     Logger -->|Add exercise| Picker
     Picker -->|tap an exercise| Logger
     Logger -->|Finish| EmptyQ
@@ -79,16 +82,23 @@ flowchart TD
     ListQ["listPastWorkouts: finished only, newest first, limit 100, counts"]
     ReadQ["readWorkout: one finished workout, entries joined to exercise names, sets"]
     LastQ["lastSessionSets: newest finished workout with a logged set of<br/>this exercise, never the current draft; + exerciseInfo (name, equipment)"]
+    SessQ["exerciseSessions (B13): newest 50 finished workouts with a logged set<br/>of this exercise, each with that exercise's sets"]
+    PrQ["currentPrs (workout/prs.ts, B13): stored records of one exercise,<br/>ordered 1RM, e1RM, rep maxes by reps"]
   end
   LocalDB --> ListQ --> Workout
   LocalDB --> ReadQ --> Saved
   LocalDB --> LastQ --> Logger
+  LocalDB --> SessQ --> History
+  LocalDB --> PrQ
+  PrQ --> Logger
+  PrQ --> Saved
+  PrQ --> History
 
   subgraph ActiveWO["Active-workout store (src/workout/activeWorkout.ts)<br/>driven by the logger screens through the session slot + useActiveWorkout hooks"]
     StartWO["startActiveWorkout: blank public workout<br/>(refused while one is in progress)"]
     ResumeWO["loadActiveWorkout: on launch, rebuild the<br/>signed-in user's unfinished workout from astra.db"]
     MutWO["add / remove / reorder exercise; log / fix / remove set;<br/>repeat last set; updateSets / removeSets (several sets, one transaction, B11);<br/>linkWithPrevious / unlinkFromPrevious (superset_group, B11);<br/>setTitle / setNotes / setEntryNotes / setSetNotes (B12, trimmed, blank = none;<br/>repeat never copies a set note):<br/>check server limits, convert lb→kg,<br/>commit to SQLite, then re-read the snapshot"]
-    FinishWO["finish: ended_at = max(now, started_at),<br/>queue workout + entries + sets in ONE transaction; store sealed"]
+    FinishWO["finish: ended_at = max(now, started_at);<br/>PR detection (workout/prs.ts improvedRecords, B13): per exercise, fold finished<br/>history + today's sets through recordBooks; keep only books that beat the stored row;<br/>queue workout + entries + sets + improved personal_records in ONE transaction; store sealed"]
     DiscardWO["discard: delete the draft (cascades), nothing to sync"]
   end
   StartWO --> Drafts
@@ -104,8 +114,8 @@ flowchart TD
 
   subgraph SyncEng["Sync engine (src/sync), mounted by useSync in the root layout"]
     Triggers{{"Triggers, debounced 750 ms, one run at a time:<br/>start with a session, app back to foreground,<br/>network reconnects, a local write"}}
-    Push["Push: outbox → server, parents first,<br/>batches of 500 upserts on id (no updated_at),<br/>then workouts again to re-touch roots;<br/>clear lines up to each row's watermark; stop on failure"]
-    Pull["Pull: exercises, then own workouts by (updated_at, id)<br/>bookmark minus 5 s; fetch their entries and sets;<br/>save page + bookmark in one transaction;<br/>skip rows with unsent local edits"]
+    Push["Push: outbox → server, parents first<br/>(… sets, then personal_records),<br/>batches of 500 upserts on id (no updated_at),<br/>then workouts again to re-touch roots;<br/>clear lines up to each row's watermark; stop on failure"]
+    Pull["Pull: exercises, then own workouts by (updated_at, id)<br/>bookmark minus 5 s; fetch their entries and sets;<br/>then own personal_records on their own bookmark (B13);<br/>save page + bookmark in one transaction;<br/>skip rows with unsent local edits"]
     Triggers --> Push --> Pull
   end
   Catalog --> LocalSeed
@@ -118,7 +128,7 @@ flowchart TD
   subgraph Backend["Supabase project (live)"]
     AuthAPI["Supabase Auth<br/>email + password accounts"]
     Trigger{"signup trigger handle_new_user<br/>refuses missing / under-18 birthdate;<br/>creates profile, settings, body data"}
-    DB[("Postgres<br/>profiles, settings, body data, follows, blocks,<br/>exercises, workouts, workout_exercises, sets<br/>see database-erd.md")]
+    DB[("Postgres<br/>profiles, settings, body data, follows, blocks,<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records (owner-only RLS; keep-best trigger<br/>never lets an upload lower a record)<br/>see database-erd.md")]
     AuthAPI --> Trigger --> DB
   end
 
@@ -136,11 +146,12 @@ flowchart TD
   Library -.->|"not wired yet: Library still reads the bundled catalog, not astra.db"| LocalDB
 
   subgraph Shared["Shared training math (backend/supabase/functions/_shared/training-math)<br/>import name in the app: @training-math"]
-    MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification,<br/>session volume (volume.ts: warm-ups and weightless sets add 0),<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store and the logger's<br/>display (displayWeight); no server function yet"]
+    MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification<br/>+ recordBooks fold (which set holds each book), beatsRecord, compareRecordBooks (B13),<br/>session volume (volume.ts: warm-ups and weightless sets add 0),<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store and the logger's<br/>display (displayWeight); no server function yet"]
   end
   MathMod -->|"lbToKg, assertValidSetFields (incl. score + set-note length),<br/>assertValidSupersetGroup, title / workout-note / entry-note caps (B12),<br/>round weight / RPE for storage"| MutWO
   MathMod -->|"displayWeight (format.ts)"| Logger
-  MathMod -.->|"not wired yet: Tool Kit calculators (B16),<br/>logger PR badges + volume (B13), unit setting (B15)"| Workout
+  MathMod -->|"recordBooks, beatsRecord, roundToIncrement (B13)"| FinishWO
+  MathMod -.->|"not wired yet: Tool Kit calculators (B16),<br/>session volume display, unit setting (B15)"| Workout
   MathMod -.->|"not wired yet: post-workout analysis<br/>server function (B18)"| Backend
 
   class Home,Market,Communities scaffold
@@ -192,7 +203,15 @@ flowchart TD
    **Discard workout** instead of Start.
 7. **See past workouts.** The Workout tab lists the newest 100 finished workouts (date,
    duration, exercise and set counts); tapping one opens it with every set.
-8. Everything else is a placeholder that renders its final layout with inert controls (Start
+8. **PRs and exercise history (B13).** Finishing a workout works out, on the phone and offline,
+   which record books it improved: the heaviest single (**1RM**), the heaviest weight for exactly
+   N reps (**5RM**, …) and the best estimated 1RM (**e1RM**, Epley). Warm-ups, bodyweight sets
+   and extra volume never count. The saved workout then shows **"PR · 5RM"**-style badges under
+   each set that holds a record. While logging, each exercise card shows **"PRs: 1RM 225 lb ·
+   e1RM 243.1 lb · 5RM 205 lb"** under the "Last time" line, plus a **History** link to that
+   exercise's history screen: current PRs, then every finished session of it (newest 50) with
+   its sets.
+9. Everything else is a placeholder that renders its final layout with inert controls (Start
    from a program, the Tool Kit tiles, Home, Marketplace, Communities).
 
 ## Data path today
@@ -243,6 +262,19 @@ flowchart TD
   a note never undoes a warm-up flip made just before it. `sets.notes` (device schema V3) joined
   `TABLE_COLUMNS`; `workouts.title` / `notes` and `workout_exercises.notes` were already there —
   no sync changes.
+  **B13:** `finish` calls `improvedRecords` (`workout/prs.ts`) inside the store's queue. For each
+  exercise in the workout, it reads every set of the user's *finished* workouts (so the draft
+  being finished and any stray drafts are left out), appends today's sets from the snapshot, and
+  folds them through `@training-math` `recordBooks`. It then compares each book, rounded to 3
+  decimals, with the stored row using `beatsRecord`, and keeps only improvements. The rows go to
+  `writeLocalTree` with the workout tree, in one transaction. Their ids are
+  `uuidv5(PR_RECORD_NAMESPACE, "user:exercise:kind:reps")`, the same on every device. The logger
+  card, the saved workout and the history screen all read records through `currentPrs`; the
+  history screen also uses `exerciseSessions` (`workout/history.ts`). The new route is declared in
+  the root layout's signed-in guard and is pushed from the card's History link.
+  `personal_records` (device schema V4) joined `TABLE_COLUMNS` and `SYNC_ORDER` after `sets`.
+  Pull gained a third bookmark (`pull_cursor:personal_records`, via
+  `transport.pullPersonalRecords`) that runs after the workout trees.
 - **On-device store and sync (B07).**
   `src/sync/useSync.ts` runs in the root layout. On launch it opens `astra.db`
   (`src/db/database.ts`: foreign keys on, WAL, migrations by `PRAGMA user_version`). It then seeds
@@ -279,7 +311,7 @@ flowchart TD
   - **Failures:** they are logged, and whatever didn't upload stays queued. There is no retry
     timer.
 - **Still unwired:** the Library reads the bundled catalog, not `astra.db`; the unit toggle
-  (B15), PR badges (B13), editing a finished workout (B14) and post-workout analysis (B18/B21)
+  (B15), editing a finished workout (B14, which must also recompute and possibly lower PRs) and post-workout analysis (B18/B21)
   don't exist yet; nothing feeds the social feed.
 
 ## Shared pieces every screen uses
@@ -307,6 +339,6 @@ flowchart TD
 - Test-only helpers live in `src/test-utils/`: a fake Supabase auth client and fake AppState,
   `renderWithAuth`, a real-SQLite driver over Node's `node:sqlite` (`nodeSqliteDriver.ts`), an
   in-memory fake server for sync (`fakeTransport.ts`: upsert-by-id, server-stamped `updated_at`,
-  foreign-key refusals, offline and lost-reply modes), workout fixtures, and the logger kit
+  foreign-key refusals, the PR keep-best rule, offline and lost-reply modes), workout fixtures, and the logger kit
   (`loggerTestKit.tsx`: prepared database, test clock, signed-in render). The app never
   imports them.

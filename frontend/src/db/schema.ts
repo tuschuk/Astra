@@ -7,6 +7,7 @@
  *     server's training tables (backend/supabase/migrations/…_training.sql and
  *     …_exercises_slug.sql). Column names match the server's exactly, so
  *     syncing a row is a straight copy, not a translation.
+ *   - personal_records — the lifter's current PRs per exercise (version 4, B13).
  *   - outbox — the list of local changes not yet sent to the server (see
  *     `sync/outbox.ts`).
  *   - sync_state — small bookkeeping values, such as how far the last
@@ -112,8 +113,30 @@ const V3 = `
 alter table sets add column notes text;
 `;
 
+/**
+ * Version 4 (B13): `personal_records` — the lifter's current best in each record book (true
+ * 1RM, rep max per rep count, estimated 1RM) per exercise, and the set that holds it. Mirrors
+ * the server's `…_personal_records.sql`. Written on the phone when a workout is finished (see
+ * `workout/prs.ts`) and synced like every other table. Like the rest of the mirror it has no
+ * CHECKs or foreign keys: the server enforces those.
+ */
+const V4 = `
+create table personal_records (
+  id            text primary key not null,
+  user_id       text not null,
+  exercise_id   text not null,
+  kind          text not null,
+  reps          integer,
+  value_kg      real not null,
+  source_set_id text not null,
+  created_at    text not null,
+  updated_at    text not null
+);
+create index personal_records_user_exercise_idx on personal_records (user_id, exercise_id);
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1, V2, V3];
+export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;
