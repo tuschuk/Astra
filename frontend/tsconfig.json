@@ -38,6 +38,8 @@
     // The analyze-workout function's request logic and its tests. Its index.ts is left out on
     // purpose: it is Deno-only wiring (Deno.serve, an npm: import) that this compiler can't see.
     "../backend/supabase/functions/analyze-workout/handler.ts",
+    // B27: the moderate function's request logic, same reasoning (its index.ts is Deno-only).
+    "../backend/supabase/functions/moderate/handler.ts",
     "../backend/supabase/functions/tests/**/*.ts"
   ]
 }

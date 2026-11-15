@@ -19,7 +19,10 @@ live — the `post_hot_scores` ranking view), `20261115130809_profile_reads_and_
 applied live — `follow_counts`, the widened `personal_records` read rule, the public `avatars`
 bucket, the own-folder `avatar_url` CHECK), `20261115141242_post_privacy.sql` (B26, applied live —
 `user_settings.progress_pic_visibility`, the progress-pic-private CHECK dropped, the post→workout
-visibility lockstep trigger),
+visibility lockstep trigger), `20261115150035_moderation.sql` and
+`20261115151850_reports_not_self.sql` (B27, both applied live — `mutes`, `moderators`, `reports`
+and its stamping trigger, mute added to `private.workout_visible`, author-level filtering of
+votes and comments),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -58,6 +61,13 @@ erDiagram
   profiles ||--o{ comments : "user_id writes (cascade)"
   posts ||..|| post_scores : "view: one row per post (security_invoker)"
   posts ||..|| post_hot_scores : "view: one row per post + hot_score (security_invoker, B24)"
+  profiles ||--o{ mutes : "muter_id (cascade, B27)"
+  profiles ||--o{ mutes : "muted_id (cascade, B27)"
+  profiles ||--o| moderators : "user_id (cascade, B27)"
+  profiles ||--o{ reports : "reporter_id files (cascade, B27)"
+  profiles ||--o{ reports : "reported_user_id, trigger-stamped (cascade, B27)"
+  posts ||..o{ reports : "target_id when target_kind = post (no FK: reports outlive content)"
+  comments ||..o{ reports : "target_id when target_kind = comment (no FK)"
 
   auth_users {
     uuid id PK "managed by Supabase Auth"
@@ -247,7 +257,65 @@ erDiagram
     timestamptz created_at "= posts.created_at"
     float8 hot_score "Reddit hot: sign(net)*log10(max(abs(net),1)) + (epoch-1134028003)/45000"
   }
+
+  mutes {
+    uuid muter_id PK, FK "who muted"
+    uuid muted_id PK, FK "who is hidden from them; cannot equal muter_id"
+    timestamptz created_at
+  }
+
+  moderators {
+    uuid user_id PK, FK "a moderator (the founder); written only by service role / migration"
+    timestamptz created_at
+  }
+
+  reports {
+    uuid id PK "server-generated"
+    uuid reporter_id FK "who reported"
+    text target_kind "post or comment"
+    uuid target_id "the post / comment id (no FK)"
+    uuid reported_user_id FK "content's author, stamped by trigger; CHECK not the reporter"
+    text reason "spam, harassment, nudity, not-training, impersonation, other"
+    text details "optional, max 500"
+    text status "open (default), resolved, dismissed"
+    timestamptz created_at
+  }
 ```
+
+## Moderation and safety (B27)
+
+Migrations `20261115150035_moderation.sql` and `20261115151850_reports_not_self.sql`.
+
+- **Mute** (`mutes`, one row per muter→muted): one-way and silent. Spelled once in
+  `private.muted_by_viewer(author)` (definer), which `private.workout_visible` now consults beside
+  the blocks clause — so a lifter you muted has their workouts, posts, PR history and photos
+  hidden from *you* on every surface (feed, profile tabs, storage reads). Their view of you does not
+  change. Mute does **not** touch follows (no trigger). Deleting the row restores everything.
+- **Author-level filtering** (`private.author_visible(author)`: your own, or no block either way and
+  not muted by you) joins the `votes` and `comments` read rules, so a blocked/muted lifter's
+  comment or vote on a *third* person's post disappears for you too. Consequence: `post_scores` and
+  `post_hot_scores` (both `security_invoker`) sum the votes *you* may see, so two viewers can see
+  slightly different tallies where blocks/mutes exist.
+- **Who the founder is** is a `moderators` row (seeded live per project, never in a migration),
+  read by `private.is_moderator()`. You may read only your own row; no app write policy exists.
+- **Reports** are an audit queue: `target_id` has no FK, so a report survives its content being
+  deleted (by the author or by the founder). `reports_stamp_reported_user` (before insert,
+  definer function `private.stamp_reported_user`) overwrites `reported_user_id` with the true
+  author read from `posts` / `comments`, and raises `That content is gone` if the row doesn't
+  exist. `reports_not_self` refuses reporting your own content. `unique (reporter_id,
+  target_kind, target_id)` makes a second report of the same thing a 23505. `reports_open_idx
+  (status, created_at)` serves the founder's "open, oldest first" query.
+- **Removal** is the `moderate` server function (service role, below the RLS): remove-post deletes
+  the post (votes/comments cascade, its workout stays) and its `post-images` object, then marks
+  its open reports `resolved`; remove-comment deletes the comment and resolves its reports;
+  remove-account deletes the auth user (cascading everything) and sweeps the `post-images/<id>/`
+  and `avatars/<id>/` folders. A moderator's own account can't be removed this way.
+- **Live-probed at build time** (synthetic users, rolled back / deleted): reports stamped the true
+  author even when a different id was sent; re-reports 23505; a deleted target refused; a
+  non-moderator read 0 reports, the moderator read all; a self-report refused. A mutes B → B's
+  posts, workouts, hot rows, comment and vote on C's post all vanished for A; A still followed B;
+  B still saw A; C still saw everything; unmute restored. A blocks B → hidden both ways, follows
+  gone both ways, C unaffected; unblock restored the comment.
 
 ## Post privacy (B26)
 
@@ -296,7 +364,8 @@ Migration `20261115114409_votes_comments.sql` (and its fix `20261115115739_comme
   published "hot" formula over the net vote sum (votes only — no comment weight). Each 12.5 hours
   of age (45000 s) weighs as much as a 10× vote lead; a post with net 0 or ±1 ranks by age alone,
   so zero-vote posts come newest first. `security_invoker`, so it ranks only what the viewer may
-  see; every viewer of a post reads all its votes, so the score is the same for everyone. The
+  see; since B27 a viewer reads only the votes of voters they may see (blocks/mutes), so the score
+  can differ slightly between viewers (see Moderation and safety). The
   feed's "Hot" order reads it *directly* (`from('post_hot_scores')`, ordered `hot_score desc, id
   desc`, keyset on `(hot_score, id)`) and embeds author / flair / workout / votes through the
   preserved FK columns — unlike `post_scores`, the embed goes view → table, which PostgREST
@@ -570,6 +639,8 @@ does not own, so another user's public workout can never be analysed over its ow
   `posts_flair_guard` on `posts` — see the votes section.
 - **A workout follows its post's visibility** (B26): `sync_workout_visibility` on `posts` — see
   Post privacy.
+- **A report's reported account is stamped from the content** (B27): `reports_stamp_reported_user`
+  on `reports` — see Moderation and safety. Muting has no trigger (follows stay).
 
 ## Who can see and change what (row-level security)
 
@@ -592,13 +663,16 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `storage.objects` in `post-images` (B22) | your own folder, or cited by a post you may see | insert, update, delete only in your own folder — see the photo posts section |
 | `storage.objects` in `avatars` (B25) | anyone through the bucket's public URL; through the API, your own folder | insert, update, delete only in your own folder — see the profiles section |
 | `follow_counts(profile_id)` (function, B25) | any signed-in user, for any profile: two counts, no rows | — |
-| `votes` (B23) | every vote on a post you may see (`private.can_view_post`) — so the tally is the same for everyone | insert and update only as yourself, on a post you may see; delete only your own |
-| `comments` (B23) | every comment on a post you may see | insert only as yourself, on a post you may see; no updates; delete only your own |
-| `post_scores` (view, B23) | `security_invoker`: whatever the posts / votes / comments rules above let you read | — |
-| `post_hot_scores` (view, B24) | `security_invoker`: the posts you may read, each ranked by the votes you may read on it (all of them) | — |
+| `votes` (B23, B27) | votes on a post you may see (`private.can_view_post`) **whose voter** you may see (`private.author_visible`: yours, or no block either way and not muted by you) | insert and update only as yourself, on a post you may see; delete only your own |
+| `comments` (B23, B27) | comments on a post you may see whose author you may see (same two helpers) | insert only as yourself, on a post you may see; no updates; delete only your own |
+| `post_scores` (view, B23) | `security_invoker`: whatever the posts / votes / comments rules above let you read — so since B27 the tally is the votes *you* may see | — |
+| `post_hot_scores` (view, B24) | `security_invoker`: the posts you may read, each ranked by the votes you may read on it | — |
+| `mutes` (B27) | only rows where you are the muter | manage your own mute list |
+| `moderators` (B27) | only your own row | nobody — service role / migration only |
+| `reports` (B27) | moderators only (`private.is_moderator()`) | insert only as yourself, about a post or comment you can currently see (each table's own read rule decides), never your own; no updates or deletes — the founder works the queue via service role |
 
 **Workout visibility rule** (`private.workout_visible`): you always see your own; a block in either
-direction hides everything; otherwise `public` is open to any signed-in user, `followers` requires
+direction hides everything; a lifter you muted is hidden from you (B27, one way); otherwise `public` is open to any signed-in user, `followers` requires
 that you follow the owner, `private` is owner-only. Child tables ask the same question through the
 workout they belong to; `posts` asks it directly with the post's own author and visibility;
 `votes` and `comments` ask it through their post (`private.can_view_post(post_id)`, B23).
@@ -608,9 +682,11 @@ they can see rows the caller's own RLS would hide.
 
 ## Deletion behaviour
 
-- Deleting an auth user cascades through `profiles` to settings, body data, follows, blocks, owned
-  exercises, workouts, their entries and sets, posts, votes, comments, and the user's tombstones.
-  Deleting a post cascades to its votes and comments (B23).
+- Deleting an auth user cascades through `profiles` to settings, body data, follows, blocks, mutes,
+  a moderator row, reports filed by them and reports about them (B27), owned exercises, workouts,
+  their entries and sets, posts, votes, comments, and the user's tombstones (live-probed at B27).
+  Storage objects are not rows of this graph — the `moderate` function sweeps them.
+  Deleting a post cascades to its votes and comments (B23); reports about it stay (no FK, B27).
 - Deleting a workout cascades to its `workout_exercises` and their `sets` (and the records citing
   them), to its `workout_analyses` row and to its post (B20), and leaves tombstones for the workout and each record
   (an analysis gets none: other devices drop it with the workout's tombstone). The app deletes a finished

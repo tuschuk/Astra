@@ -14,7 +14,10 @@
  * open the post's comments. Votes go straight to the server; the card shows the change at once
  * and takes it back if refused. Tapping a card's author opens their profile (B25). On the
  * lifter's own cards (B26), the "who can see this" chip changes a post to Only you / Followers /
- * Public — sent straight to the server, where row-level security makes it real.
+ * Public — sent straight to the server, where row-level security makes it real. On other
+ * lifters' cards (B27), the ⋯ button reports the post to the founder's moderation queue. Lifters
+ * the viewer blocked or muted (from their profile) are simply absent — the server leaves their
+ * posts, comments and votes out.
  *
  * Order and flair (B24): under "Your feed", Latest | Hot picks newest first or the server's
  * vote ranking (SOC-11), and a row of flair chips — All plus one per flair on the phone — shows
@@ -52,6 +55,7 @@ import { useAppDatabase } from '@/db/useAppDatabase';
 import { getSupabase } from '@/lib/supabase';
 import { appendPage, feedAuthorIds, loadFeedPage, type FeedCursor, type FeedPost } from '@/social/feed';
 import { getCachedFeedPrefs, loadFeedPrefs, saveFeedPrefs, type FeedPrefs, type FeedSort } from '@/social/feedPrefs';
+import { reportPost as fileReport, type ReportReason, type ReportResult } from '@/social/moderation';
 import { setPostVisibility, visibilityTargetOf, withPostVisibility, type PostVisibilityResult } from '@/social/postPrivacy';
 import { castVote, clearVote, type VoteResult, type VoteValue } from '@/social/votes';
 import { colors, spacing } from '@/theme';
@@ -243,6 +247,17 @@ export default function HomeScreen() {
   );
 
   /**
+   * Another lifter's card's ⋯ → report (B27): files the report for the founder's queue. A block
+   * or mute needs no wiring here — it is made from a profile, and the next feed load simply lacks
+   * those rows (the server's security rules drop them).
+   */
+  const reportPost = useCallback(
+    (postId: string, reason: ReportReason, details: string): Promise<ReportResult> =>
+      fileReport(client, me, postId, reason, details),
+    [client, me],
+  );
+
+  /**
    * An own card's "who can see this" choice (B26): changes the post on the server (its workout
    * follows there) and the phone's copies, then the feed's own list, so a card rebuilt after
    * scrolling shows the new audience. The post stays on the lifter's own feed whatever they
@@ -386,6 +401,7 @@ export default function HomeScreen() {
             onChangeVisibility={changeVisibility}
             onOpenComments={openComments}
             onOpenProfile={openProfile}
+            onReport={reportPost}
           />
         )}
         ListHeaderComponent={header}

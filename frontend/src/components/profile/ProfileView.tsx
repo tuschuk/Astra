@@ -15,6 +15,12 @@
  *     paging back to the very first one), and **PRs** (current records per exercise, e.g.
  *     "1RM 140 kg · e1RM 151.7 kg · 5RM 130 kg", in the viewer's kg / lb unit). On your own
  *     Posts tab (B26) each card has the "who can see this" chip — Only you / Followers / Public.
+ *   - (B27) on someone else's profile, **Mute / Unmute** and **Block / Unblock** under the follow
+ *     button. Mute hides their posts, workouts and comments from you, one way, without telling
+ *     them and without unfollowing. Block (asked first) hides both ways and removes follows both
+ *     ways; while blocking, there is no Follow button. A muted or blocked profile says so in one
+ *     line — its tabs are empty because the server leaves that lifter's content out. After any
+ *     change the header, counts and open tab are read again. Their post cards' ⋯ reports a post.
  *
  * Where the data comes from:
  *   - your own History and PRs are read from the phone, so they work with no signal, and a past
@@ -28,7 +34,7 @@
  * A profile that doesn't exist (a deleted account, a bad link) says "This lifter isn't available".
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, StyleSheet, View } from 'react-native';
+import { Alert, FlatList, StyleSheet, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 
 import { useAuth } from '@/auth/AuthProvider';
@@ -49,6 +55,18 @@ import { getSupabase } from '@/lib/supabase';
 import { useDisplayUnit } from '@/settings/displayUnit';
 import { appendPage, loadFeedPage, type FeedCursor, type FeedPost } from '@/social/feed';
 import { follow, unfollow } from '@/social/follows';
+import {
+  blockUser,
+  muteUser,
+  relationTo,
+  reportPost as fileReport,
+  unblockUser,
+  unmuteUser,
+  type Relation,
+  type ReportReason,
+  type ReportResult,
+  type SafetyResult,
+} from '@/social/moderation';
 import { personLabels } from '@/social/names';
 import { getCachedOwnProfile, loadOwnProfile, saveOwnProfile, type OwnProfileIdentity } from '@/social/ownProfileCache';
 import { setPostVisibility, visibilityTargetOf, withPostVisibility, type PostVisibilityResult } from '@/social/postPrivacy';
@@ -84,6 +102,27 @@ export const PROFILE_MISSING = 'This lifter isn’t available.';
 
 /** The line under the header when the server can't be reached. */
 export const PROFILE_OFFLINE = 'Counts and posts need a connection.';
+
+/** (B27) The line on a profile you muted — their tabs are empty because of it, and this says why. */
+export const PROFILE_MUTED_LINE = 'You muted this lifter. Their posts, workouts and comments are hidden from you. They aren’t told.';
+
+/** (B27) The line on a profile you blocked. */
+export const PROFILE_BLOCKED_LINE = 'You blocked this lifter. Neither of you can see the other’s posts, workouts or comments.';
+
+/**
+ * (B27) Asks before blocking — a block also removes follows both ways, which unblocking doesn't
+ * bring back. "Cancel" does nothing; "Block" runs `onConfirm`. Uses the phone's native alert.
+ */
+export function confirmBlock(name: string, onConfirm: () => void): void {
+  Alert.alert(
+    `Block ${name}?`,
+    'Neither of you will see the other’s posts, workouts or comments, and follows are removed both ways. They aren’t told.',
+    [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Block', style: 'destructive', onPress: onConfirm },
+    ],
+  );
+}
 
 /** One History row: your own workout (from the phone, tappable) or someone else's (from the server). */
 type HistoryRow = { kind: 'own'; summary: PastWorkoutSummary } | { kind: 'other'; workout: ProfileWorkout };
@@ -135,8 +174,13 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
   const [posts, setPosts] = useState<PagedList<FeedPost, FeedCursor>>({ status: 'idle' });
   const [history, setHistory] = useState<PagedList<HistoryRow, HistoryCursor>>({ status: 'idle' });
   const [prs, setPrs] = useState<PrList>({ status: 'idle' });
+  // (B27) Whether I block / mute this lifter, and a safety change in flight / its refusal.
+  const [relationState, setRelation] = useState<{ forId: string; value: Relation } | null>(null);
+  const relation = relationState?.forId === profileId ? relationState.value : null;
+  const [safetyBusy, setSafetyBusy] = useState(false);
+  const [safetyMessage, setSafetyMessage] = useState<string | null>(null);
   // Each reload gets a number per list; an answer that lands after a newer reload is dropped.
-  const generation = useRef({ header: 0, posts: 0, history: 0, prs: 0 });
+  const generation = useRef({ header: 0, posts: 0, history: 0, prs: 0, relation: 0 });
   const pageInFlight = useRef(false);
 
   useEffect(() => {
@@ -171,6 +215,22 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
       );
     }
   }, [client, me, profileId, own]);
+
+  /**
+   * (B27) Whether I block / mute this lifter — the Mute and Block buttons' states. Only read for
+   * someone else's profile. A failed read leaves the buttons hidden (no guessing a state).
+   */
+  const loadRelation = useCallback(async () => {
+    if (!me || own) return;
+    const mine = ++generation.current.relation;
+    try {
+      const value = await relationTo(client, me, profileId);
+      if (mine === generation.current.relation) setRelation({ forId: profileId, value });
+    } catch (error: unknown) {
+      if (mine !== generation.current.relation) return;
+      console.warn('Profile: block / mute state could not be loaded', error);
+    }
+  }, [client, me, own, profileId]);
 
   /** The first page of posts: this lifter's own posts, newest first (the feed read, one author). */
   const loadPosts = useCallback(async () => {
@@ -254,7 +314,8 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
   useFocusEffect(
     useCallback(() => {
       void loadHeader();
-    }, [loadHeader]),
+      void loadRelation();
+    }, [loadHeader, loadRelation]),
   );
   useFocusEffect(
     useCallback(() => {
@@ -340,6 +401,31 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
     [client, db, me],
   );
 
+  /** Another lifter's post card's ⋯ → report (B27). */
+  const reportPost = useCallback(
+    (postId: string, reason: ReportReason, details: string): Promise<ReportResult> =>
+      fileReport(client, me, postId, reason, details),
+    [client, me],
+  );
+
+  /**
+   * (B27) Mute / unmute / block / unblock, then re-read everything — the server's security rules
+   * change what the counts, tabs and follow button show, so the screen asks again rather than
+   * guessing. One change at a time; a refusal shows a calm line under the buttons.
+   */
+  async function changeSafety(change: (c: typeof client, me: string, them: string) => Promise<SafetyResult>): Promise<void> {
+    if (!me || safetyBusy) return;
+    setSafetyBusy(true);
+    setSafetyMessage(null);
+    const result = await change(client, me, profileId);
+    setSafetyBusy(false);
+    if (!result.ok) {
+      setSafetyMessage(result.message);
+      return;
+    }
+    await Promise.all([loadRelation(), loadHeader(), loadSection(section)]);
+  }
+
   if (header.status === 'missing') {
     return (
       <Screen>
@@ -387,7 +473,8 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
 
       {own ? (
         <Button label="Edit profile" variant="ghost" onPress={() => router.push('/edit-profile')} style={styles.action} />
-      ) : ready && me ? (
+      ) : ready && me && !relation?.blocking ? (
+        // No Follow while I block them — the server would refuse it anyway.
         <FollowButton
           // A re-read header remounts the button with the server's answer.
           key={`${ready.id}:${String(ready.viewerFollows)}`}
@@ -396,6 +483,47 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
           onSettled={() => void loadHeader()}
           style={styles.action}
         />
+      ) : null}
+
+      {!own && ready && me && relation ? (
+        <View style={styles.safety}>
+          {relation.blocking ? (
+            <Body variant="small" style={styles.muted}>
+              {PROFILE_BLOCKED_LINE}
+            </Body>
+          ) : relation.muting ? (
+            <Body variant="small" style={styles.muted}>
+              {PROFILE_MUTED_LINE}
+            </Body>
+          ) : null}
+          <View style={styles.safetyButtons}>
+            {relation.blocking ? null : (
+              <Button
+                label={relation.muting ? 'Unmute' : 'Mute'}
+                variant="ghost"
+                disabled={safetyBusy}
+                onPress={() => void changeSafety(relation.muting ? unmuteUser : muteUser)}
+                style={styles.safetyButton}
+              />
+            )}
+            <Button
+              label={relation.blocking ? 'Unblock' : 'Block'}
+              variant="ghost"
+              disabled={safetyBusy}
+              onPress={() =>
+                relation.blocking
+                  ? void changeSafety(unblockUser)
+                  : confirmBlock(who.name, () => void changeSafety(blockUser))
+              }
+              style={styles.safetyButton}
+            />
+          </View>
+          {safetyMessage ? (
+            <Body variant="small" style={styles.muted}>
+              {safetyMessage}
+            </Body>
+          ) : null}
+        </View>
       ) : null}
 
       {header.status === 'error' ? (
@@ -488,6 +616,7 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
           photoSource={photoSource}
           onVote={vote}
           onChangeVisibility={changeVisibility}
+          onReport={reportPost}
           onOpenComments={(postId) => router.push({ pathname: '/post-comments/[id]', params: { id: postId } })}
         />
       );
@@ -623,6 +752,17 @@ const styles = StyleSheet.create({
   },
   muted: {
     color: colors.muted,
+  },
+  safety: {
+    marginTop: spacing.md,
+    gap: spacing.xs,
+  },
+  safetyButtons: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  safetyButton: {
+    flex: 1,
   },
   footer: {
     alignItems: 'center',

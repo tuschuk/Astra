@@ -3,6 +3,7 @@
  * others' comments"): a post's comments from two people, oldest first, with the right names;
  * the composer's cap (Send off, the one refusal sentence); sending one (it appears as the fake
  * server saved it); the "more exist" line at the load cap; and the offline state with Retry.
+ * (B27) Reporting someone else's comment from its ⋯ lands one report row; own comments have no ⋯.
  * The Supabase client is the in-memory fake social client; the router is a stub.
  */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
@@ -11,6 +12,7 @@ import { act, fireEvent, screen } from '@testing-library/react-native';
 
 import { COMMENT_MAX_CHARS, COMMENT_TOO_LONG } from '@/social/commentLimits';
 import { COMMENTS_LIMIT } from '@/social/comments';
+import { REPORT_THANKS } from '@/social/moderation';
 import { createFakeSocialClient } from '@/test-utils/fakeSocialClient';
 import { profile } from '@/test-utils/feedFixtures';
 import { renderSignedIn, SIGNED_IN_USER_ID } from '@/test-utils/loggerTestKit';
@@ -138,6 +140,25 @@ describe('Comments screen', () => {
     expect(screen.getByText(SEND_FAILED_LINE)).toBeTruthy();
     expect(screen.getByLabelText('Write a comment').props.value).toBe('Into the void');
     warn.mockRestore();
+  });
+
+  it('(B27) another lifter’s comment can be reported from its ⋯; my own has none', async () => {
+    mockSocial.tables.comments.push(comment('mine', ME, '2026-11-14T10:10:00.000Z', 'Lockout looked easy'));
+    await renderSignedIn(<PostCommentsScreen />);
+    await screen.findByText('First, from Ann');
+    expect(screen.queryByLabelText('Report Me Myself’s comment')).toBeNull();
+    await fireEvent.press(screen.getByLabelText('Report Bob’s comment'));
+    expect(screen.getByText('Report comment')).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText(/^Harassment:/));
+    await act(async () => {
+      fireEvent.press(screen.getByLabelText('Send report'));
+    });
+    expect(await screen.findByText(REPORT_THANKS)).toBeTruthy();
+    expect(mockSocial.tables.reports).toEqual([
+      { reporter_id: ME, target_kind: 'comment', target_id: 'c2', reason: 'harassment', details: null },
+    ]);
+    await fireEvent.press(screen.getByLabelText('Done'));
+    expect(screen.queryByText('Report comment')).toBeNull();
   });
 
   it('Back returns to where the lifter came from', async () => {

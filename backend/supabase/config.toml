@@ -404,6 +404,11 @@ deno_version = 2
 [functions.analyze-workout]
 verify_jwt = true
 
+# B27: the founder's removal function. JWT verification on: the caller is identified from their
+# login, and only someone in the `moderators` table gets past the handler's check.
+[functions.moderate]
+verify_jwt = true
+
 [analytics]
 enabled = true
 port = 54327
