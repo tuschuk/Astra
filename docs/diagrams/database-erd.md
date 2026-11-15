@@ -14,7 +14,8 @@ Source migrations: `20261114100000_identity.sql`, `20261114100100_training.sql`,
 `20261115105852_post_images.sql` (B22, applied live — posts kinds, the `post-images` bucket and
 its storage policies), `20261115114409_votes_comments.sql` and
 `20261115115739_comments_body_not_blank.sql` (B23, both applied live — votes, comments, the
-`post_scores` view, the upvote-only triggers),
+`post_scores` view, the upvote-only triggers), `20261115122437_post_hot_scores.sql` (B24, applied
+live — the `post_hot_scores` ranking view),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -51,6 +52,7 @@ erDiagram
   posts ||--o{ comments : "post_id (cascade)"
   profiles ||--o{ comments : "user_id writes (cascade)"
   posts ||..|| post_scores : "view: one row per post (security_invoker)"
+  posts ||..|| post_hot_scores : "view: one row per post + hot_score (security_invoker, B24)"
 
   auth_users {
     uuid id PK "managed by Supabase Auth"
@@ -227,6 +229,18 @@ erDiagram
     int score "sum of votes.value, 0 when none"
     int comment_count "count of comments, 0 when none"
   }
+
+  post_hot_scores {
+    uuid id "= posts.id (VIEW, not a table)"
+    uuid user_id "= posts.user_id (FK kept: embeds author)"
+    text flair_id "= posts.flair_id (FK kept: embeds flair; filter)"
+    uuid workout_id "= posts.workout_id (FK kept: embeds workout)"
+    text kind "= posts.kind"
+    text image_path "= posts.image_path"
+    workout_visibility visibility "= posts.visibility"
+    timestamptz created_at "= posts.created_at"
+    float8 hot_score "Reddit hot: sign(net)*log10(max(abs(net),1)) + (epoch-1134028003)/45000"
+  }
 ```
 
 ## Votes, comments and the net score (B23)
@@ -241,6 +255,19 @@ Migration `20261115114409_votes_comments.sql` (and its fix `20261115115739_comme
   only add up rows the *viewer* may read: it gives no new reading power. The feed reads it in a
   second request by post id (`post_id=in.(…)`) — PostgREST will not embed a view over `posts`
   inside a `posts` request (PGRST200, probed live).
+- **The hot ranking (B24, SOC-11)** is the view `post_hot_scores` (migration
+  `20261115122437_post_hot_scores.sql`): every post's own feed columns plus `hot_score`, Reddit's
+  published "hot" formula over the net vote sum (votes only — no comment weight). Each 12.5 hours
+  of age (45000 s) weighs as much as a 10× vote lead; a post with net 0 or ±1 ranks by age alone,
+  so zero-vote posts come newest first. `security_invoker`, so it ranks only what the viewer may
+  see; every viewer of a post reads all its votes, so the score is the same for everyone. The
+  feed's "Hot" order reads it *directly* (`from('post_hot_scores')`, ordered `hot_score desc, id
+  desc`, keyset on `(hot_score, id)`) and embeds author / flair / workout / votes through the
+  preserved FK columns — unlike `post_scores`, the embed goes view → table, which PostgREST
+  allows. One catch, probed live: through the view `profiles` is reachable two ways (the author
+  FK, and many-to-many via `votes`), so the author embed must name `profiles!posts_user_id_fkey`
+  or the server answers PGRST201. No index serves `hot_score` (computed); the vote sum aggregates
+  before the author filter — measure with `explain analyze` once there is real data.
 - **Upvote-only flairs (Physique Check).** Trigger `votes_upvote_only` (before insert or update on
   `votes`, function `private.vote_allowed`) raises `This post takes upvotes only` (SQLSTATE
   `P0001`) for any `value = -1` on a post whose flair has `upvotes_only = true` — read through
@@ -321,8 +348,9 @@ foreign key, since an offline finish's analysis may reach the server after the p
   marks Physique Check; since B23 the votes trigger enforces it and the card hides the downvote.
 - **Feed order** is `created_at desc, id desc`, matched by `posts_user_created_idx (user_id,
   created_at desc, id desc)`. The phone pages by bookmark — "older than (created_at, id)" — never
-  by offset. `posts_flair_idx (flair_id)` indexes the flair foreign key (no query filters by
-  flair yet).
+  by offset. `posts_flair_idx (flair_id)` indexes the flair foreign key, and since B24 serves the
+  feed's flair filter (`flair_id=eq.…`, SOC-9). The "Hot" order reads `post_hot_scores` instead
+  (votes section).
 - **Mostly not mirrored.** Other people's posts are never on the phone: the feed is read from the
   server each time (and embeds the workout, its entries, sets and exercise names in one request).
   Since B21 the phone keeps only its *own* posts (upload-only, never downloaded) and a copy of
@@ -484,6 +512,7 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `votes` (B23) | every vote on a post you may see (`private.can_view_post`) — so the tally is the same for everyone | insert and update only as yourself, on a post you may see; delete only your own |
 | `comments` (B23) | every comment on a post you may see | insert only as yourself, on a post you may see; no updates; delete only your own |
 | `post_scores` (view, B23) | `security_invoker`: whatever the posts / votes / comments rules above let you read | — |
+| `post_hot_scores` (view, B24) | `security_invoker`: the posts you may read, each ranked by the votes you may read on it (all of them) | — |
 
 **Workout visibility rule** (`private.workout_visible`): you always see your own; a block in either
 direction hides everything; otherwise `public` is open to any signed-in user, `followers` requires

@@ -390,3 +390,21 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     `raise` on `votes` — give it a custom errcode if a second one appears; the fake social client
     branches per table.
   - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.
+- B24 feed-sort-and-filter follow-ups (`feed-sort-and-filter`):
+  - **Live ranking probe and `explain analyze` on `post_hot_scores`** need several real accounts
+    with votes; the live project has one profile and no posts. Gate 2 / Tristen: seed 2–3 test
+    accounts, check a 3-vote older post outranks a 0-vote newer one, a private / blocked post is
+    absent, and look at the plan for the whole-`votes` aggregation. Recorded rewrite if slow:
+    lateral per-post sums (view body only).
+  - **Preference roaming** across phones (a `user_settings` column + mirror) — with B26 if ever
+    wanted (plan G1).
+  - **`ChoiceChips` lives in `components/toolkit/`** but Home now uses it too; move it to
+    `components/ui/` in a tidy-up pass (left alone to keep this diff on its feature).
+  - **The fake's `fakeHotScore` copies the migration's formula** (test-only, labelled). The Hot
+    ordering tests check the fake, not the SQL; a change to the view body must change the fake too.
+  - Review judgement calls left as-is: `loadFeedPage` branches on the order at the query-builder
+    stage (plan G11 kept one function); `sort` + `flairId` travel as two params rather than one
+    type (they map 1:1 to `FeedPrefs`; bundle if a third feed option appears).
+  - Pre-existing: three "overlapping act()" console warnings in older `home-feed.test.tsx` tests
+    (present on main before B24); the B24 tests add none.
+  - `mmdc` not run for this build either; diagrams not render-checked.

@@ -41,21 +41,24 @@ interface PostSpec {
 }
 
 /**
- * A post, with its author, flair and workout nested in, plus the `user_id` column the feed
- * filters on (the server sends it only when asked; the fake needs it to filter).
+ * A post, with its author, flair and workout nested in, plus the `user_id` and (B24)
+ * `flair_id` columns the feed filters on (the server sends them only when asked; the fake needs
+ * them to filter). `flair_id` always matches the nested flair, as the foreign key guarantees.
  */
 export function rawPost(
   spec: PostSpec,
-): RawFeedPost & { user_id: string; workout: NonNullable<RawFeedPost['workout']> } {
+): RawFeedPost & { user_id: string; flair_id: string; workout: NonNullable<RawFeedPost['workout']> } {
   const entries = spec.entries ?? [{ name: 'Bench Press', sets: [feedSet({ reps: 5, weight_kg: 100 })] }];
+  const flair = spec.flair ?? { id: 'wod', name: 'WOD', upvotes_only: false };
   return {
     id: spec.id,
     user_id: spec.author.id,
+    flair_id: flair.id,
     created_at: spec.createdAt,
     kind: 'workout',
     image_path: null,
     visibility: 'public',
-    flair: spec.flair ?? { id: 'wod', name: 'WOD', upvotes_only: false },
+    flair,
     author: spec.author,
     workout: {
       id: `workout-${spec.id}`,
@@ -84,20 +87,22 @@ export function rawImagePost(spec: {
   createdAt: string;
   kind: 'progress-pic' | 'pr';
   flair?: { id: string; name: string; upvotes_only?: boolean };
-}): RawFeedPost & { user_id: string } {
+}): RawFeedPost & { user_id: string; flair_id: string } {
+  const flair =
+    spec.flair ??
+    (spec.kind === 'progress-pic'
+      ? // As seeded on the server (B20 migration): Physique Check takes upvotes only.
+        { id: 'physique-check', name: 'Physique Check', upvotes_only: true }
+      : { id: 'new-pr', name: 'New PR', upvotes_only: false });
   return {
     id: spec.id,
     user_id: spec.author.id,
+    flair_id: flair.id,
     created_at: spec.createdAt,
     kind: spec.kind,
     image_path: `${spec.author.id}/${spec.id}.jpg`,
     visibility: spec.kind === 'progress-pic' ? 'private' : 'public',
-    flair:
-      spec.flair ??
-      (spec.kind === 'progress-pic'
-        ? // As seeded on the server (B20 migration): Physique Check takes upvotes only.
-          { id: 'physique-check', name: 'Physique Check', upvotes_only: true }
-        : { id: 'new-pr', name: 'New PR', upvotes_only: false }),
+    flair,
     author: spec.author,
     workout: null,
   };

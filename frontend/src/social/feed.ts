@@ -3,6 +3,8 @@
  * newest first, a page at a time — shared workouts and (B22) progress-pic and PR photo posts.
  * Since B23 each post also carries its net score, its comment count and the viewer's own vote
  * (SOC-4, SOC-5), and its flair says whether it takes upvotes only — the card's whole footer.
+ * Since B24 the feed can also be read ranked by votes ("Hot", from the server's
+ * `post_hot_scores` view, SOC-11) instead of newest first, and narrowed to one flair (SOC-9).
  *
  * Why this exists: the feed is the one screen that shows other people's workouts, and those are
  * never copied onto the phone (the device holds only the lifter's own rows). So the feed is read
@@ -25,11 +27,34 @@ import type { VoteValue } from './votes';
 /** How many posts one page of the feed holds. */
 export const FEED_PAGE_SIZE = 20;
 
-/** Where the last page ended: the oldest post's time and id. The next page starts just before it. */
-export interface FeedCursor {
+/**
+ * The two orders the feed can be read in (B24, SOC-11): newest first ("Latest"), or ranked by
+ * the server's hot score ("Hot").
+ */
+export type FeedSort = 'latest' | 'hot';
+
+/** In "Latest" order, where the last page ended: the oldest post's time and id. */
+export interface LatestFeedCursor {
+  sort: 'latest';
   created_at: string;
   id: string;
 }
+
+/**
+ * In "Hot" order (B24), where the last page ended: the lowest-ranked post's hot score — the
+ * server's number, echoed back untouched, never computed here — and its id.
+ */
+export interface HotFeedCursor {
+  sort: 'hot';
+  hot_score: number;
+  id: string;
+}
+
+/**
+ * The bookmark for the next page. It is tagged with the order it was made in, so a bookmark
+ * from one order can never be replayed under the other (`loadFeedPage` refuses it).
+ */
+export type FeedCursor = LatestFeedCursor | HotFeedCursor;
 
 /** One set as a feed card prints it — exactly the parts `formatSet` reads. */
 export type FeedSet = Pick<
@@ -108,11 +133,17 @@ export interface FeedPage {
  * B23 adds the flair's `upvotes_only` flag, and `my_vote`: the post's votes embedded under that
  * name, which `loadFeedPage` narrows to the viewer's own row with a filter on the alias
  * (`my_vote.user_id`) — so the reply never carries anyone else's votes.
+ *
+ * B24: the same select serves both orders — "Latest" reads it from `posts`, "Hot" from the
+ * `post_hot_scores` view, which carries the same columns. The author embed names its foreign key
+ * (`!posts_user_id_fkey`) because, read through the view, the live server also sees a second
+ * path to `profiles` (through `votes`) and refuses the bare name as ambiguous. On `posts` the
+ * hint names the same relationship it already used.
  */
 export const FEED_SELECT =
   'id,created_at,kind,image_path,visibility,' +
   'flair:flairs(id,name,upvotes_only),' +
-  'author:profiles(id,username,display_name),' +
+  'author:profiles!posts_user_id_fkey(id,username,display_name),' +
   'workout:workouts(id,title,notes,started_at,ended_at,' +
   'workout_exercises(id,position,superset_group,exercise:exercises(name),' +
   'sets(id,position,reps,weight_kg,rpe,is_warmup,drop_set_position,duration_seconds,score))),' +
@@ -157,7 +188,12 @@ export interface RawFeedPost {
   } | null;
   /** The viewer's own vote, as a list of at most one row (the alias filter keeps only theirs). */
   my_vote?: { value: number }[] | null;
+  /** Only on a "Hot" read (B24): the post's rank from the view, used solely as the next bookmark. */
+  hot_score?: number | string;
 }
+
+/** The view the "Hot" order reads from (B24) — the hot score's one home. */
+export const HOT_SOURCE = 'post_hot_scores';
 
 /**
  * The "older than this bookmark" filter: an earlier time, or the same time and a smaller id.
@@ -165,9 +201,24 @@ export interface RawFeedPost {
  * means a new post arriving while the lifter scrolls never shifts a page — no card is shown
  * twice or skipped. Times are double-quoted because they contain `:` and `+`.
  */
-export function beforeCursorFilter(cursor: FeedCursor): string {
+export function beforeCursorFilter(cursor: Pick<LatestFeedCursor, 'created_at' | 'id'>): string {
   const ts = `"${cursor.created_at}"`;
   return `created_at.lt.${ts},and(created_at.eq.${ts},id.lt.${cursor.id})`;
+}
+
+/**
+ * The "ranked below this bookmark" filter for the Hot order (B24): a lower hot score, or the
+ * same score and a smaller id. The score is the server's own number sent straight back; a hot
+ * score is a plain five-digit decimal (seconds since Reddit's epoch ÷ 45000), so it always
+ * prints without an exponent or any character the filter syntax reserves.
+ *
+ * Unlike "Latest", this order can move while the lifter scrolls (a vote raises a post), so a
+ * page can occasionally repeat a post (dropped by `appendPage`) or miss one (back on the next
+ * refresh) — accepted ranked-feed behaviour (plan, risk 2).
+ */
+export function beforeHotCursorFilter(cursor: Pick<HotFeedCursor, 'hot_score' | 'id'>): string {
+  const h = String(cursor.hot_score);
+  return `hot_score.lt.${h},and(hot_score.eq.${h},id.lt.${cursor.id})`;
 }
 
 /**
@@ -277,31 +328,55 @@ export async function loadPostScores(
   );
 }
 
+/** The bookmark that continues after `last`, in the order `sort` (null if the reply lacked a score). */
+function cursorAfter(last: RawFeedPost, sort: FeedSort): FeedCursor | null {
+  if (sort === 'latest') return { sort, created_at: last.created_at, id: last.id };
+  const score = Number(last.hot_score);
+  if (Number.isFinite(score)) return { sort, hot_score: score, id: last.id };
+  // Can't happen (the view always computes a score); if it ever does, paging stops, visibly in the log.
+  console.warn('Feed: a Hot page came back without its hot score; no further pages');
+  return null;
+}
+
 /**
- * One page of the feed for the viewer `me`: the posts of `authorIds`, newest first, starting just
- * before `after` (or at the newest post when `after` is null), each with its score, comment count
- * and the viewer's own vote (B23). The server's security decides which of those posts the lifter
- * may actually see. A full page means there may be more, so it returns a bookmark; a short page
- * is the end. Two requests: the posts, then their scores.
+ * One page of the feed for the viewer `me`: the posts of `authorIds`, each with its score,
+ * comment count and the viewer's own vote (B23). The server's security decides which of those
+ * posts the lifter may actually see.
+ *
+ *   - `sort` (B24, SOC-11): 'latest' reads `posts` newest first; 'hot' reads the
+ *     `post_hot_scores` view, highest hot score first (ties: larger id first). Both use the same
+ *     select, so the cards look identical either way.
+ *   - `flairId` (B24, SOC-9): when set, only posts wearing that flair; null means every flair.
+ *   - `after`: the bookmark from the previous page (null for the first page). It must come from
+ *     the same order — a bookmark from the other order is a bug in the caller and is refused
+ *     rather than silently returning a wrong page.
+ *
+ * A full page means there may be more, so it returns a bookmark; a short page is the end. Two
+ * requests: the posts, then their scores.
  */
 export async function loadFeedPage(
   client: SupabaseClient,
   me: string,
   authorIds: readonly string[],
+  sort: FeedSort,
+  flairId: string | null,
   after: FeedCursor | null,
 ): Promise<FeedPage> {
+  if (after && after.sort !== sort) throw new Error(`A ${after.sort} bookmark can't continue the ${sort} feed`);
   if (authorIds.length === 0) return { posts: [], next: null };
   let query = client
-    .from('posts')
-    .select(FEED_SELECT)
+    .from(sort === 'hot' ? HOT_SOURCE : 'posts')
+    .select(sort === 'hot' ? `${FEED_SELECT},hot_score` : FEED_SELECT)
     .in('user_id', [...authorIds])
     // Narrows the embedded votes to the viewer's own — the alias, not the table's name.
     .eq('my_vote.user_id', me);
-  if (after) query = query.or(beforeCursorFilter(after));
-  const { data, error } = await query
-    .order('created_at', { ascending: false })
-    .order('id', { ascending: false })
-    .limit(FEED_PAGE_SIZE);
+  if (flairId !== null) query = query.eq('flair_id', flairId);
+  if (after) query = query.or(after.sort === 'hot' ? beforeHotCursorFilter(after) : beforeCursorFilter(after));
+  const ordered =
+    sort === 'hot'
+      ? query.order('hot_score', { ascending: false })
+      : query.order('created_at', { ascending: false });
+  const { data, error } = await ordered.order('id', { ascending: false }).limit(FEED_PAGE_SIZE);
   throwIfError(error, 'Loading the feed failed');
   // The one cast from the untyped reply, at the seam; everything past here is typed.
   const raw = (data ?? []) as unknown as RawFeedPost[];
@@ -310,6 +385,6 @@ export async function loadFeedPage(
   return {
     // Dropped posts still count toward the bookmark below, so paging never re-reads them.
     posts: raw.map((p) => toFeedPost(p, scores.get(p.id))).filter((p): p is FeedPost => p !== null),
-    next: raw.length === FEED_PAGE_SIZE && last ? { created_at: last.created_at, id: last.id } : null,
+    next: raw.length === FEED_PAGE_SIZE && last ? cursorAfter(last, sort) : null,
   };
 }

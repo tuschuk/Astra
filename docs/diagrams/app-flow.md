@@ -30,7 +30,9 @@ flowchart TD
 
   Tabs["Tab layout (only with a session)<br/>five bottom tabs, Workout dead center,<br/>floating top-right profile button"]
 
-  Tabs --> Home["Home (app/(tabs)/index.tsx, B20, SOC-1)<br/>FlatList of PostCards: followed lifters' + my own posts, newest first —<br/>workout posts, and (B22) progress-pic / PR photo posts: the photo is an RN Image of<br/>/storage/v1/object/authenticated/post-images/path with the viewer's Bearer token + apikey<br/>(postImageSource; 'Photo unavailable' panel on error); my own progress pic: 'Only you can see this post';<br/>reloads page 1 on every focus; pull-to-refresh; end of list → next page (20, keyset);<br/>card footer (B23, SOC-4/5): Upvote · net score · Downvote (no Downvote at all when flair.upvotesOnly,<br/>e.g. Physique Check) — tap = optimistic score ± voteDelta, revert + message on refusal;<br/>'n comments' / 'Comment' button;<br/>header 'Share a photo' (B22) + 'Find lifters' buttons; empty: follow nobody → Find lifters + Log a workout,<br/>follow people who haven't posted → Find lifters;<br/>request failed / offline → 'The feed needs a connection' + Retry (nothing queued)"]
+  Tabs --> Home["Home (app/(tabs)/index.tsx, B20, SOC-1)<br/>FlatList of PostCards: followed lifters' + my own posts, newest first —<br/>workout posts, and (B22) progress-pic / PR photo posts: the photo is an RN Image of<br/>/storage/v1/object/authenticated/post-images/path with the viewer's Bearer token + apikey<br/>(postImageSource; 'Photo unavailable' panel on error); my own progress pic: 'Only you can see this post';<br/>reloads page 1 on every focus; pull-to-refresh; end of list → next page (20, keyset);<br/>card footer (B23, SOC-4/5): Upvote · net score · Downvote (no Downvote at all when flair.upvotesOnly,<br/>e.g. Physique Check) — tap = optimistic score ± voteDelta, revert + message on refusal;<br/>'n comments' / 'Comment' button;<br/>header 'Share a photo' (B22) + 'Find lifters' buttons;<br/>under 'Your feed' (B24): order chips Latest | Hot (SOC-11) and a scrolling flair row All + one chip per<br/>device flairs row (SOC-9) — shown once the remembered choice AND the flair list are read; first feed read waits for both;<br/>a remembered flair not in the flair list reads as All; tap = save + reload page 1 ('Loading your feed…'<br/>whenever the list on screen was loaded for another order / flair);<br/>empty: filtered to a flair → 'No Form Check posts yet.' + Show all posts;<br/>follow nobody → Find lifters + Log a workout, follow people who haven't posted → Find lifters;<br/>request failed / offline → 'The feed needs a connection' + Retry (nothing queued)"]
+  Home <-->|"social/feedPrefs.ts (B24): loadFeedPrefs (cached per user; damaged → Latest + All),<br/>saveFeedPrefs on every chip tap (fire-and-forget)"| FeedPrefsStore[("kv-store key astra.social.feedPrefs.userId<br/>JSON v1: sort latest | hot + flairId (null = All);<br/>this phone only, not synced, one entry per account")]
+  Home -->|"readFlairs on focus (B24): flair chips, by position"| LocalDB
   Home -->|"Find lifters: router.push('/find-lifters')"| FindScr["Find lifters (app/find-lifters.tsx, B20, SOC-7 part)<br/>search box (≥ 2 letters, 300 ms after typing stops);<br/>UserCards (letter avatar, name, @handle, Follow / Following) — never me,<br/>never someone I blocked; no match / no connection messages; Back"]
   Home -->|"Log a workout (empty feed)"| Workout
   FindScr -->|"Back: router.back (Home reloads on focus)"| Home
@@ -45,7 +47,7 @@ flowchart TD
   Home -->|"arrow tap: castVote (upsert on post_id,user_id) / clearVote (delete mine)"| VoteQ
   CommentsScr --> CommentQ
   subgraph SocialMod["Social reads (src/social, B20): online only, client passed in, RLS decides visibility"]
-    FeedQ["feed.ts: feedAuthorIds = me + follows.followee_id where follower_id = me;<br/>loadFeedPage(client, me, authors, after): posts.select(FEED_SELECT: kind, image_path, visibility,<br/>flair (id, name, upvotes_only — B23), author, workout (plain left embed since B22) → entries →<br/>exercise name, sets, my_vote:votes(value) — B23) .in(user_id, authors) .eq(my_vote.user_id, me)<br/>[.or(beforeCursorFilter)] order created_at desc, id desc, limit 20;<br/>then (B23) loadPostScores: post_scores.select(post_id, score, comment_count).in(post_id, page ids);<br/>toFeedPost: photo post → kind + imagePath; workout post → sort entries + sets, weight → number;<br/>+ score, commentCount (0 without a scores row), myVote (+1 / −1 / null);<br/>a workout post whose workout RLS withheld (null) is dropped; appendPage drops repeats"]
+    FeedQ["feed.ts: feedAuthorIds = me + follows.followee_id where follower_id = me;<br/>loadFeedPage(client, me, authors, sort, flairId, after) — B24: Latest → from posts, Hot → from the<br/>post_hot_scores view (same select + hot_score); .select(FEED_SELECT: kind, image_path, visibility,<br/>flair (id, name, upvotes_only — B23), author:profiles!posts_user_id_fkey (hint required through the view, B24),<br/>workout (plain left embed since B22) → entries → exercise name, sets, my_vote:votes(value) — B23)<br/>.in(user_id, authors) .eq(my_vote.user_id, me) [.eq(flair_id, flairId) — B24, SOC-9]<br/>Latest: [.or(beforeCursorFilter)] order created_at desc, id desc;<br/>Hot: [.or(beforeHotCursorFilter: hot_score lt, or eq + id lt)] order hot_score desc, id desc; limit 20;<br/>the bookmark is tagged latest | hot — one from the other order is refused;<br/>then (B23) loadPostScores: post_scores.select(post_id, score, comment_count).in(post_id, page ids);<br/>toFeedPost: photo post → kind + imagePath; workout post → sort entries + sets, weight → number;<br/>+ score, commentCount (0 without a scores row), myVote (+1 / −1 / null);<br/>a workout post whose workout RLS withheld (null) is dropped; appendPage drops repeats"]
     VoteQ["votes.ts (B23): castVote → votes.upsert(onConflict post_id,user_id);<br/>clearVote → delete where post_id + user_id = me; never throw:<br/>P0001 (upvote-only trigger) → 'This post takes upvotes only.', anything else → 'didn't go through';<br/>voteDelta / nextVote: the card's optimistic arithmetic (the tally itself stays on the server)"]
     CommentQ["comments.ts (B23): loadComments → comments.select(…, author:profiles) eq post_id<br/>order created_at, id asc, limit 200; addComment → commentBodyError first<br/>(commentLimits.ts: 500 chars, not blank — mirrors the CHECK), then insert(…).select().single()"]
     FollowQ["follows.ts: searchLifters (sanitized ilike on username / display_name,<br/>not me, not in my blocks, limit 20, + which I follow);<br/>follow = insert follows row (duplicate = ok; RLS refusal → 'You can't follow this lifter.');<br/>unfollow = delete my row"]
@@ -447,7 +449,14 @@ flowchart TD
    score and arrow go back and a short line says why. The **Comment** / **n comments** button
    opens the post's comments, oldest first, with a box to add one (up to 500 characters; Send
    stays off while it's blank or too long). Back to Home reloads the counts.
-17. Everything else is a placeholder that renders its final layout with inert controls (Start
+17. **Sort and filter the feed (B24, SOC-11, SOC-9).** Under "Your feed", **Latest | Hot** chooses
+   the order: Latest is newest first; Hot is the server's ranking (Reddit's published hot
+   formula — votes lift a post, age pulls it down). A row of flair chips — **All** plus one per
+   flair on the phone — filters the feed to one flair; an empty filtered feed says "No *Form
+   Check* posts yet." with **Show all posts**. Both choices are remembered on this phone for this
+   account and come back after the app is closed; a remembered flair that no longer exists reads
+   as All.
+18. Everything else is a placeholder that renders its final layout with inert controls (Start
    from a program, Marketplace, Communities).
 
 ## Data path today
@@ -690,6 +699,18 @@ flowchart TD
   grows `votes` / `comments` tables, a computed `post_scores`, the `my_vote` alias filter, `upsert`,
   `.select().single()` after an insert and the upvote-only trigger (P0001). `post-comments/[id]` is
   declared in the root layout's signed-in guard.
+- **Feed order and flair filter (B24).** `loadFeedPage(client, me, authors, sort, flairId, after)`:
+  Latest reads `posts` exactly as before; Hot reads the `post_hot_scores` view (the hot score's
+  one home — the app only echoes it back as the bookmark) with the same `FEED_SELECT` plus
+  `hot_score`. The author embed names `profiles!posts_user_id_fkey`, which the view requires
+  (PGRST201 otherwise, probed live). A flair adds `eq('flair_id', …)` in either order. Bookmarks
+  are tagged `{ sort: 'latest', created_at, id }` / `{ sort: 'hot', hot_score, id }`; a mismatched
+  one throws. Home keeps the order and flair each ready list was loaded with, so "load more"
+  continues that list, and shows "Loading your feed…" whenever the list on screen doesn't match
+  the chips. The choice lives in `social/feedPrefs.ts` (kv-store, per user id, versioned JSON,
+  never throws, in-memory cache per user). The fake social client grows a computed
+  `post_hot_scores` (same formula, test-only), numeric comparison for number cells, and the
+  PGRST201 refusal of an un-hinted `profiles(` embed on the view; feed fixtures carry `flair_id`.
 - **Still unwired:** the Library reads the bundled catalog, not `astra.db`; posts can't be
   edited, deleted or re-offered from old workouts (photo posts can't be deleted either, so their
   storage objects are never removed); progress pics have no visibility choice (B26); feed cards don't
