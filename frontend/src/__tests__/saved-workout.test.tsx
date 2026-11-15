@@ -24,10 +24,15 @@ jest.mock('@/db/database', () => ({
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: jest.fn(() => false) };
 let mockParams: { id?: string } = {};
-jest.mock('expo-router', () => ({
-  useRouter: () => mockRouter,
-  useLocalSearchParams: () => mockParams,
-}));
+jest.mock('expo-router', () => {
+  const { useEffect } = jest.requireActual<typeof import('react')>('react');
+  return {
+    useRouter: () => mockRouter,
+    useLocalSearchParams: () => mockParams,
+    // Focus = mount here; the screen re-reads on focus (B14).
+    useFocusEffect: (effect: () => void) => useEffect(effect, [effect]),
+  };
+});
 
 const START = '2026-11-12T12:00:00.000Z';
 let db: SqlDriver;

@@ -57,7 +57,7 @@ describe('migrate', () => {
     expect(await db.getFirstAsync('select reps, score, notes from sets')).toEqual({ reps: 5, score: 'AMRAP', notes: null });
   });
 
-  it('upgrades a version-3 phone to version 4 (personal_records), keeping the sets already there', async () => {
+  it('upgrades a version-3 phone through version 4 (personal_records), keeping the sets already there', async () => {
     const db = createNodeSqliteDriver();
     // A phone that installed the app between B12 and B13: versions 1–3 have run.
     for (const migration of MIGRATIONS.slice(0, 3)) await db.execAsync(migration);
@@ -74,9 +74,26 @@ describe('migrate', () => {
 
     await migrate(db);
 
-    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 4 });
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: SCHEMA_VERSION });
     expect(await db.getFirstAsync('select reps, notes from sets')).toEqual({ reps: 5, notes: 'belt' });
     expect(await db.getFirstAsync('select count(*) as n from personal_records')).toEqual({ n: 0 });
+  });
+
+  it('B14: upgrades a version-4 phone to version 5, keeping its waiting outbox lines as uploads', async () => {
+    const db = createNodeSqliteDriver();
+    // A phone that installed the app between B13 and B14, with two changes not yet uploaded.
+    for (const migration of MIGRATIONS.slice(0, 4)) await db.execAsync(migration);
+    await db.execAsync('pragma user_version = 4');
+    await db.runAsync("insert into outbox (tbl, row_id, queued_at) values ('workouts', 'w', 't'), ('sets', 's', 't')");
+
+    await migrate(db);
+
+    expect(SCHEMA_VERSION).toBe(5);
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 5 });
+    expect(await db.getAllAsync('select tbl, row_id, op from outbox order by id')).toEqual([
+      { tbl: 'workouts', row_id: 'w', op: 'upsert' },
+      { tbl: 'sets', row_id: 's', op: 'upsert' },
+    ]);
   });
 
   it('upgrades a version-1 phone through every later version (sets.score), keeping the sets already there', async () => {

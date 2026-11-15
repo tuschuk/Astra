@@ -8,7 +8,11 @@
  *     every insert and update (like the column default and `moddatetime`);
  *   - a child row whose parent isn't there is refused (like the foreign keys);
  *   - downloads come back in (updated_at, id) order after a bookmark, and
- *     workouts only for the requested user.
+ *     workouts only for the requested user;
+ *   - an upload that would lower a personal record keeps the stored best (the
+ *     keep-best trigger), but a delete followed by an insert does not (B14);
+ *   - deletes cascade like the foreign keys and leave tombstones for deleted
+ *     workouts and personal records, like the `record_tombstone` triggers.
  *
  * And it can misbehave on demand:
  *   - `offline = true` — every call fails, like airplane mode;
@@ -25,7 +29,7 @@ import type {
   WorkoutExerciseRow,
   WorkoutRow,
 } from '@/db/dao';
-import type { PullCursor, PushRow, SyncTransport } from '@/sync/transport';
+import type { PullCursor, PushRow, SyncTransport, TombstoneRow } from '@/sync/transport';
 
 type AnyRow = { id: string; updated_at: string } & Record<string, unknown>;
 
@@ -162,6 +166,55 @@ export class FakeServer implements SyncTransport {
 
   /** Requests to the child endpoints, to check the engine keeps id lists short. */
   readonly childRequestSizes: number[] = [];
+
+  /** The server's `sync_tombstones` table (B14), in id order. */
+  readonly tombstones: TombstoneRow[] = [];
+  /** Every delete request received, in order (including failed ones). */
+  readonly deleteCalls: { tbl: SyncedTable; ids: string[] }[] = [];
+  private nextTombstoneId = 1;
+
+  /**
+   * Deletes rows by id, like the real server: the foreign keys cascade (a workout takes its
+   * entries, an entry its sets, a set the personal records citing it), and the tombstone
+   * triggers record every deleted workout and personal record — cascaded ones included. An
+   * id the server doesn't hold is silently nothing to delete.
+   */
+  async deleteRows(tbl: SyncedTable, ids: readonly string[]): Promise<void> {
+    this.deleteCalls.push({ tbl, ids: [...ids] });
+    this.guard();
+    if (this.failing.has(tbl)) throw new Error(`delete from ${tbl} refused`);
+    for (const id of ids) this.deleteCascade(tbl, id);
+  }
+
+  /** Removes one row and everything whose foreign key points at it, writing tombstones. */
+  private deleteCascade(tbl: SyncedTable, id: string): void {
+    const row = this.tables[tbl].get(id) as { user_id?: string } | undefined;
+    if (!row) return;
+    this.tables[tbl].delete(id);
+    if (tbl === 'workouts' || tbl === 'personal_records') {
+      const tombstoneId = this.nextTombstoneId++;
+      this.tombstones.push({ id: tombstoneId, tbl, row_id: id, deleted_at: this.now() });
+      this.tombstoneOwner.set(tombstoneId, row.user_id ?? '');
+    }
+    for (const [child, link] of Object.entries(PARENT) as [SyncedTable, { column: string; table: SyncedTable }][]) {
+      if (link.table !== tbl) continue;
+      for (const [childId, childRow] of [...this.tables[child].entries()]) {
+        if ((childRow as unknown as Record<string, unknown>)[link.column] === id) this.deleteCascade(child, childId);
+      }
+    }
+  }
+
+  /** Who each tombstone belongs to (the real table's user_id column). */
+  private readonly tombstoneOwner = new Map<number, string>();
+
+  /** The user's tombstones after `afterId`, in id order — like the real table's owner-only read. */
+  async pullTombstones(userId: string, afterId: number, limit: number): Promise<TombstoneRow[]> {
+    this.guard();
+    return this.tombstones
+      .filter((t) => t.id > afterId && this.tombstoneOwner.get(t.id) === userId)
+      .slice(0, limit)
+      .map((t) => ({ ...t }));
+  }
 
   async pullWorkoutExercises(workoutIds: readonly string[]): Promise<WorkoutExerciseRow[]> {
     this.guard();

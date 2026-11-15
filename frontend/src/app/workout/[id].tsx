@@ -13,24 +13,31 @@
  * This is what Finish opens, and what each row of the Workout tab's history opens — the
  * "reopens with every set intact" half of LOG-2. It reads straight from the phone's database, so it works offline.
  *
- * What the lifter can do: read it, and go back. Editing a finished workout arrives with B14;
- * the post-workout analysis with B18/B21.
+ * What the lifter can do: read it; go back; tap **Edit** to change it (LOG-9, B14 — the edit
+ * screen, which saves every change at once and recomputes the PRs); or tap **Delete** and
+ * confirm, which deletes the workout, works the PRs out again from what remains (a record it
+ * held passes to the next best set) and returns to the Workout tab. The screen re-reads the
+ * workout every time it comes back into view, so it shows an edit the moment the lifter
+ * returns. The post-workout analysis arrives with B18/B21.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
 import { useAuth } from '@/auth/AuthProvider';
 import { Screen } from '@/components/Screen';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
+import { FormError } from '@/components/ui/FormError';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
+import { confirmDeleteWorkout } from '@/components/workout/confirmDeleteWorkout';
 import { useAppDatabase } from '@/db/useAppDatabase';
 import { useDisplayUnit } from '@/settings/displayUnit';
 import type { PersonalRecordRow } from '@/db/dao';
 import type { SqlExecutor } from '@/db/driver';
 import type { WeightUnit } from '@training-math';
+import { deleteWorkout } from '@/workout/editWorkout';
 import { currentPrs } from '@/workout/prs';
 import {
   formatDropSet,
@@ -83,31 +90,54 @@ export default function SavedWorkoutScreen() {
   const [loaded, setLoaded] = useState<{ forId: string; state: LoadState } | null>(null);
   const state: LoadState = loaded && loaded.forId === id ? loaded.state : { status: 'loading' };
 
-  useEffect(() => {
-    if (!db || !userId || typeof id !== 'string') return;
-    let cancelled = false;
-    readWorkout(db, userId, id)
-      .then(async (workout) => {
-        if (!workout) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Read on every focus, not just once: coming back from the edit screen must show the edited
+  // sets and the recomputed PR badges, not what the screen read before (B14).
+  useFocusEffect(
+    useCallback(() => {
+      if (!db || !userId || typeof id !== 'string') return;
+      let cancelled = false;
+      readWorkout(db, userId, id)
+        .then(async (workout) => {
+          if (!workout) {
+            if (!cancelled) setLoaded({ forId: id, state: { status: 'missing' } });
+            return;
+          }
+          const recordsBySet = await readRecordsBySet(db, userId, workout);
+          if (!cancelled) setLoaded({ forId: id, state: { status: 'found', workout, recordsBySet } });
+        })
+        .catch((caught: unknown) => {
+          console.warn('Saved workout: could not read it from the phone', caught);
           if (!cancelled) setLoaded({ forId: id, state: { status: 'missing' } });
-          return;
-        }
-        const recordsBySet = await readRecordsBySet(db, userId, workout);
-        if (!cancelled) setLoaded({ forId: id, state: { status: 'found', workout, recordsBySet } });
-      })
-      .catch((caught: unknown) => {
-        console.warn('Saved workout: could not read it from the phone', caught);
-        if (!cancelled) setLoaded({ forId: id, state: { status: 'missing' } });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [db, userId, id]);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [db, userId, id]),
+  );
 
   /** Back to wherever this was opened from, or the Workout tab. */
   function back(): void {
     if (router.canGoBack()) router.back();
     else router.replace('/workout');
+  }
+
+  /** Deletes the workout (its records recomputed without it) and goes to the Workout tab. */
+  async function deleteIt(): Promise<void> {
+    if (!db || !userId || typeof id !== 'string' || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await deleteWorkout(db, userId, id);
+      router.replace('/workout');
+    } catch (caught) {
+      console.warn('Saved workout: could not delete it', caught);
+      setError('The workout couldn’t be deleted. Try again.');
+    } finally {
+      setBusy(false);
+    }
   }
 
   const backButton = <Button label="Back" variant="ghost" onPress={back} style={styles.back} />;
@@ -137,6 +167,23 @@ export default function SavedWorkoutScreen() {
         {details}
       </Body>
       {workout.notes ? <Body style={styles.workoutNotes}>{workout.notes}</Body> : null}
+      <View style={styles.actions}>
+        <Button
+          label="Edit"
+          variant="outline"
+          disabled={busy}
+          style={styles.actionButton}
+          onPress={() => router.push({ pathname: '/edit-workout/[id]', params: { id: workout.id } })}
+        />
+        <Button
+          label="Delete"
+          variant="ghost"
+          disabled={busy}
+          style={styles.actionButton}
+          onPress={() => confirmDeleteWorkout(() => void deleteIt())}
+        />
+      </View>
+      <FormError message={error} />
 
       {/* One Card per unit: a lone exercise, or a whole superset with its exercises inside. */}
       {supersetRuns(entries).map(({ superset, entries: run }) => (
@@ -221,6 +268,14 @@ function PrBadge({ records }: { records: readonly PersonalRecordRow[] }) {
 }
 
 const styles = StyleSheet.create({
+  actions: {
+    flexDirection: 'row',
+    gap: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  actionButton: {
+    flex: 1,
+  },
   prBadge: {
     color: colors.accent,
   },

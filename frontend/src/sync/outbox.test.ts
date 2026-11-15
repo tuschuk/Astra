@@ -9,7 +9,48 @@ import { writeLocal } from '@/db/dao';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { WORKOUT } from '@/test-utils/workoutFixtures';
 
-import { acknowledge, outboxSize, pendingRows, rowsWithPendingChanges } from './outbox';
+import { acknowledge, dropLinesTx, enqueueTx, outboxSize, pendingRows, rowsWithPendingChanges } from './outbox';
+
+describe('outbox ops (B14)', () => {
+  it('lists and acknowledges deletes and uploads separately, each with its own watermark', async () => {
+    const db = await prepareDatabase(createNodeSqliteDriver());
+    // A demotion: "delete record R" (line 1), then "upload record R" (line 2).
+    await db.withTransactionAsync(async (tx) => {
+      await enqueueTx(tx, 'personal_records', 'r', 't', 'delete');
+      await enqueueTx(tx, 'personal_records', 'r', 't');
+    });
+    const deletes = await pendingRows(db, 'personal_records', 'delete');
+    expect(deletes).toEqual([{ rowId: 'r', mark: 1 }]);
+    expect(await pendingRows(db, 'personal_records')).toEqual([{ rowId: 'r', mark: 2 }]);
+
+    // Acknowledging the delete must not swallow the re-insert queued after it.
+    await acknowledge(db, 'personal_records', deletes, [], 'delete');
+    expect(await pendingRows(db, 'personal_records', 'delete')).toEqual([]);
+    expect(await pendingRows(db, 'personal_records')).toEqual([{ rowId: 'r', mark: 2 }]);
+    expect(await outboxSize(db)).toBe(1);
+  });
+
+  it('an upload acknowledgement leaves a later delete of the same row queued', async () => {
+    const db = await prepareDatabase(createNodeSqliteDriver());
+    await writeLocal(db, 'workouts', [WORKOUT]);
+    const uploads = await pendingRows(db, 'workouts');
+    await db.withTransactionAsync((tx) => enqueueTx(tx, 'workouts', WORKOUT.id, 't', 'delete'));
+    await acknowledge(db, 'workouts', uploads);
+    expect(await pendingRows(db, 'workouts', 'delete')).toHaveLength(1);
+    expect(await rowsWithPendingChanges(db, 'workouts', [WORKOUT.id])).toEqual(new Set([WORKOUT.id]));
+  });
+
+  it('dropLinesTx throws away every line of the given rows, of both ops', async () => {
+    const db = await prepareDatabase(createNodeSqliteDriver());
+    await db.withTransactionAsync(async (tx) => {
+      await enqueueTx(tx, 'sets', 'a', 't');
+      await enqueueTx(tx, 'sets', 'a', 't', 'delete');
+      await enqueueTx(tx, 'sets', 'b', 't');
+      await dropLinesTx(tx, 'sets', ['a']);
+    });
+    expect(await rowsWithPendingChanges(db, 'sets', ['a', 'b'])).toEqual(new Set(['b']));
+  });
+});
 
 describe('outbox', () => {
   it('lists each changed row once, however many times it was edited', async () => {

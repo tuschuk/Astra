@@ -5,14 +5,23 @@
 import { describe, expect, it } from '@jest/globals';
 
 import { prepareDatabase } from '@/db/database';
-import { getRowsByIds, writeLocal, type WorkoutRow } from '@/db/dao';
+import { getRowsByIds, writeLocal, type PersonalRecordRow, type WorkoutRow } from '@/db/dao';
 import { libraryExerciseId } from '@/library/uuidv5';
 import { FakeServer } from '@/test-utils/fakeTransport';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { ENTRIES, OTHER_USER_ID, SETS, USER_ID, WORKOUT } from '@/test-utils/workoutFixtures';
 
 import { pushOutbox } from './push';
-import { CHILD_CHUNK_SIZE, CURSOR_KEYS, PULL_OVERLAP_MS, PULL_PAGE_SIZE, pullChanges, readCursor, rewind } from './pull';
+import {
+  CHILD_CHUNK_SIZE,
+  CURSOR_KEYS,
+  PULL_OVERLAP_MS,
+  PULL_PAGE_SIZE,
+  pullChanges,
+  readCursor,
+  rewind,
+  TOMBSTONE_CURSOR_KEY,
+} from './pull';
 
 const strip = <T extends { updated_at: string }>(row: T): Omit<T, 'updated_at'> => {
   const { updated_at: _ignored, ...rest } = row;
@@ -210,5 +219,144 @@ describe('rewind', () => {
   it('starts from the beginning with no bookmark or an unreadable one', () => {
     expect(rewind(null)).toBeNull();
     expect(rewind({ updated_at: 'garbage', id: 'x' })).toBeNull();
+  });
+});
+
+/** A 5RM record held by fixture set `setIndex`, for the tombstone tests. */
+function record(setIndex = 1, value = 100): PersonalRecordRow {
+  return {
+    id: 'd0000000-0000-4000-8000-000000000001',
+    user_id: USER_ID,
+    exercise_id: libraryExerciseId('bench_press'),
+    kind: 'repMax',
+    reps: 5,
+    value_kg: value,
+    source_set_id: SETS[setIndex].id,
+    created_at: WORKOUT.created_at,
+    updated_at: WORKOUT.created_at,
+  };
+}
+
+/** Another device's change inside the fixture workout: the workout is re-stamped (touch-the-root). */
+function touchWorkoutOnServer(server: FakeServer) {
+  server.seed('workouts', [strip(WORKOUT)]);
+}
+
+describe('pullChanges — deletions arriving from other devices (B14)', () => {
+  it('drops sets and exercises the server’s copy of a changed workout no longer has', async () => {
+    const { db, server } = await setup();
+    serverHasFixtureWorkout(server);
+    await pullChanges(db, server, USER_ID);
+
+    await server.deleteRows('sets', [SETS[2].id]);
+    await server.deleteRows('workout_exercises', [ENTRIES[1].id]);
+    touchWorkoutOnServer(server);
+    const result = await pullChanges(db, server, USER_ID);
+
+    expect(result.removed).toBe(4); // set 2; entry 1 and its two sets
+    expect(await count(db, 'sets')).toBe(2);
+    expect(await count(db, 'workout_exercises')).toBe(1);
+  });
+
+  it('spares rows with unsent local changes — offline work against that workout survives', async () => {
+    const { db, server } = await setup();
+    serverHasFixtureWorkout(server);
+    await pullChanges(db, server, USER_ID);
+    // Offline here: a new set logged, and set 2 edited, against the old workout…
+    const added = { ...SETS[1], id: 'c0000000-0000-4000-8000-000000009999', position: 3 };
+    await writeLocal(db, 'sets', [added, { ...SETS[2], reps: 9 }]);
+    // …while another device removed set 2.
+    await server.deleteRows('sets', [SETS[2].id]);
+    touchWorkoutOnServer(server);
+    await pullChanges(db, server, USER_ID);
+
+    expect((await getRowsByIds(db, 'sets', [added.id, SETS[2].id])).map((s) => s.id).sort()).toEqual(
+      [added.id, SETS[2].id].sort(),
+    );
+  });
+
+  it('drops local records citing a removed set, unsent lines included, so the queue cannot jam', async () => {
+    const { db, server } = await setup();
+    serverHasFixtureWorkout(server);
+    await pullChanges(db, server, USER_ID);
+    await writeLocal(db, 'personal_records', [record(2)]); // unsent; cites set 2
+    await server.deleteRows('sets', [SETS[2].id]);
+    touchWorkoutOnServer(server);
+    await pullChanges(db, server, USER_ID);
+
+    expect(await count(db, 'personal_records')).toBe(0);
+    expect(await count(db, 'outbox', "where tbl = 'personal_records'")).toBe(0);
+    await pushOutbox(db, server); // nothing left that the server would refuse
+  });
+
+  it('applies a deleted-workout tombstone: the tree goes with every outbox line about it, even a pending edit', async () => {
+    const { db, server } = await setup();
+    serverHasFixtureWorkout(server);
+    server.seed('personal_records', [strip(record(1))]);
+    await pullChanges(db, server, USER_ID);
+    // An unsent title edit here, while another device deletes the workout.
+    await writeLocal(db, 'workouts', [{ ...WORKOUT, title: 'renamed offline' }]);
+    await writeLocal(db, 'sets', [{ ...SETS[0], reps: 6 }]);
+    await server.deleteRows('workouts', [WORKOUT.id]);
+    const result = await pullChanges(db, server, USER_ID);
+
+    expect(result.tombstones).toBeGreaterThanOrEqual(1);
+    expect(await count(db, 'workouts')).toBe(0);
+    expect(await count(db, 'sets')).toBe(0);
+    expect(await count(db, 'personal_records')).toBe(0);
+    expect(await count(db, 'outbox')).toBe(0);
+    // Nothing is pushed that could re-create a gutted workout on the server.
+    await pushOutbox(db, server);
+    expect(server.tables.workouts.size).toBe(0);
+  });
+
+  it('a record tombstone deletes the local copy, but spares an unsent one and a re-created one', async () => {
+    const { db, server } = await setup();
+    serverHasFixtureWorkout(server);
+    server.seed('personal_records', [strip(record(1))]);
+    await pullChanges(db, server, USER_ID);
+
+    // Plain deletion: the record goes.
+    await server.deleteRows('personal_records', [record().id]);
+    await pullChanges(db, server, USER_ID);
+    expect(await count(db, 'personal_records')).toBe(0);
+
+    // Demotion on another device: deleted, then re-created under the same id (later stamp).
+    server.seed('personal_records', [strip(record(1))]);
+    await pullChanges(db, server, USER_ID);
+    await server.deleteRows('personal_records', [record().id]);
+    server.seed('personal_records', [strip(record(3, 90))]);
+    await pullChanges(db, server, USER_ID);
+    expect((await getRowsByIds(db, 'personal_records', [record().id]))[0]?.value_kg).toBe(90);
+
+    // An unsent local record survives a tombstone; its own upload settles the server.
+    await writeLocal(db, 'personal_records', [record(1, 110)]);
+    await server.deleteRows('personal_records', [record().id]);
+    await pullChanges(db, server, USER_ID);
+    expect((await getRowsByIds(db, 'personal_records', [record().id]))[0]?.value_kg).toBe(110);
+  });
+
+  it('keeps a tombstone bookmark, so each tombstone is applied once', async () => {
+    const { db, server } = await setup();
+    serverHasFixtureWorkout(server);
+    await pullChanges(db, server, USER_ID);
+    await server.deleteRows('workouts', [WORKOUT.id]);
+    expect((await pullChanges(db, server, USER_ID)).tombstones).toBe(1);
+    // The same workout id arriving again later (re-synced) is not deleted by the old tombstone.
+    serverHasFixtureWorkout(server);
+    await pullChanges(db, server, USER_ID);
+    expect(await count(db, 'workouts')).toBe(1);
+    expect(await db.getFirstAsync('select value from sync_state where key = ?', [TOMBSTONE_CURSOR_KEY])).toEqual({
+      value: '1',
+    });
+  });
+
+  it('never reads another user’s tombstones', async () => {
+    const { db, server } = await setup();
+    serverHasFixtureWorkout(server);
+    await pullChanges(db, server, USER_ID);
+    server.seed('workouts', [workoutN(7, OTHER_USER_ID)]);
+    await server.deleteRows('workouts', [workoutN(7, OTHER_USER_ID).id]);
+    expect((await pullChanges(db, server, USER_ID)).tombstones).toBe(0);
   });
 });

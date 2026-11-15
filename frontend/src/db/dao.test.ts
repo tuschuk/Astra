@@ -12,6 +12,7 @@ import { ENTRIES, makeSet, SETS, USER_ID, WORKOUT } from '@/test-utils/workoutFi
 import { prepareDatabase } from './database';
 import {
   deleteDraftRowsTx,
+  deleteLocalRowsTx,
   getRowsByIds,
   onLocalWrite,
   upsertRows,
@@ -301,5 +302,42 @@ describe('upsertRows', () => {
         SETS.map((s) => s.id),
       ),
     ).toHaveLength(5);
+  });
+});
+
+describe('deleteLocalRowsTx (B14)', () => {
+  /** A device holding the fixture workout, already uploaded (outbox empty). */
+  async function syncedDb() {
+    const db = await freshDb();
+    await writeLocal(db, 'workouts', [WORKOUT]);
+    await writeLocal(db, 'workout_exercises', ENTRIES);
+    await writeLocal(db, 'sets', SETS);
+    await db.runAsync('delete from outbox');
+    return db;
+  }
+
+  it('deletes a set, queues one delete line, and re-stamps and queues its workout', async () => {
+    const db = await syncedDb();
+    await db.withTransactionAsync((tx) => deleteLocalRowsTx(tx, 'sets', [SETS[0].id], LATER));
+    expect(await getRowsByIds(db, 'sets', [SETS[0].id])).toEqual([]);
+    expect(await pendingRows(db, 'sets', 'delete')).toEqual([{ rowId: SETS[0].id, mark: expect.any(Number) }]);
+    expect(await pendingRows(db, 'workouts')).toHaveLength(1);
+    expect((await getRowsByIds(db, 'workouts', [WORKOUT.id]))[0].updated_at).toBe(LATER);
+  });
+
+  it('deleting an exercise slot takes its sets locally but queues only the slot', async () => {
+    const db = await syncedDb();
+    await db.withTransactionAsync((tx) => deleteLocalRowsTx(tx, 'workout_exercises', [ENTRIES[1].id], LATER));
+    expect(await getRowsByIds(db, 'sets', [SETS[3].id, SETS[4].id])).toEqual([]);
+    expect(await pendingRows(db, 'sets', 'delete')).toEqual([]);
+    expect(await pendingRows(db, 'workout_exercises', 'delete')).toHaveLength(1);
+  });
+
+  it('deleting a workout queues just its delete and touches no other root', async () => {
+    const db = await syncedDb();
+    await db.withTransactionAsync((tx) => deleteLocalRowsTx(tx, 'workouts', [WORKOUT.id], LATER));
+    expect(await outboxSize(db)).toBe(1);
+    expect(await pendingRows(db, 'workouts', 'delete')).toHaveLength(1);
+    expect(await db.getFirstAsync('select count(*) as n from sets')).toEqual({ n: 0 });
   });
 });

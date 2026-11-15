@@ -1,5 +1,5 @@
 /**
- * The sync engine's view of the server: six operations, nothing more.
+ * The sync engine's view of the server: eight operations, nothing more.
  *
  * Why an interface: the real implementation (`supabaseTransport.ts`) talks to
  * Supabase over the network; tests use an in-memory fake server
@@ -79,4 +79,31 @@ export interface SyncTransport {
    * (updated_at, id) — the records another device (or the server's keep-best rule) changed.
    */
   pullPersonalRecords(userId: string, after: PullCursor | null, limit: number): Promise<PersonalRecordRow[]>;
+
+  /**
+   * Deletes rows on the server by id (B14). The server's foreign keys take a deleted
+   * workout's entries and sets with it (and the personal records citing those sets). An id
+   * the server doesn't have is simply nothing to delete — that is what makes a retry safe.
+   */
+  deleteRows(tbl: SyncedTable, ids: readonly string[]): Promise<void>;
+
+  /**
+   * One page of the user's own tombstones (B14) — notes of deleted workouts and personal
+   * records — with an id greater than `afterId` (0 = from the beginning), ordered by id.
+   */
+  pullTombstones(userId: string, afterId: number, limit: number): Promise<TombstoneRow[]>;
+}
+
+/**
+ * One deleted row, as the server's `sync_tombstones` table records it (B14): which table,
+ * which row, and when. Written by the server's own triggers, read by the user's other devices
+ * so they can delete their copies.
+ */
+export interface TombstoneRow {
+  /** Server-assigned and strictly increasing — the download's bookmark. */
+  id: number;
+  tbl: 'workouts' | 'personal_records';
+  row_id: string;
+  /** When the row was deleted, by the server's clock. */
+  deleted_at: string;
 }

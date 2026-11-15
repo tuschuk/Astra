@@ -8,14 +8,15 @@
  * relaxes that.
  *
  * Uploads use Supabase's upsert — "insert, or update the row with this id" —
- * which is what makes a retried upload harmless. Downloads read in
- * (updated_at, id) order after a bookmark (see transport.ts, pull.ts).
+ * which is what makes a retried upload harmless; deletes (B14) delete by id,
+ * equally harmless to retry. Downloads read in (updated_at, id) order after a
+ * bookmark, and tombstones in id order (see transport.ts, pull.ts).
  */
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { TABLE_COLUMNS, type RowByTable, type SyncedTable } from '@/db/dao';
 
-import type { PullCursor, SyncTransport } from './transport';
+import type { PullCursor, SyncTransport, TombstoneRow } from './transport';
 
 /** Throws the request's error, if it had one, as a normal Error. */
 function throwIfError(error: { message: string } | null, what: string): void {
@@ -76,6 +77,25 @@ export function createSupabaseTransport(client: SupabaseClient): SyncTransport {
     pullWorkoutExercises: (workoutIds) => childrenOf('workout_exercises', 'workout_id', workoutIds),
 
     pullSets: (workoutExerciseIds) => childrenOf('sets', 'workout_exercise_id', workoutExerciseIds),
+
+    async deleteRows(tbl, ids) {
+      if (ids.length === 0) return;
+      // Row-level security limits this to the user's own rows; an id already gone is no error.
+      const { error } = await client.from(tbl).delete().in('id', [...ids]);
+      throwIfError(error, `Delete from ${tbl} failed`);
+    },
+
+    async pullTombstones(userId, afterId, limit) {
+      const { data, error } = await client
+        .from('sync_tombstones')
+        .select('id,tbl,row_id,deleted_at')
+        .eq('user_id', userId)
+        .gt('id', afterId)
+        .order('id', { ascending: true })
+        .limit(limit);
+      throwIfError(error, 'Download of deletions failed');
+      return (data ?? []) as unknown as TombstoneRow[];
+    },
   };
 
   /**

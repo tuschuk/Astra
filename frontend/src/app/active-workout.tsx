@@ -24,9 +24,8 @@
  * nothing to resume.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, FlatList, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, FlatList, StyleSheet, View } from 'react-native';
 import { useRouter } from 'expo-router';
-import { MAX_WORKOUT_NOTES_LENGTH, MAX_WORKOUT_TITLE_LENGTH } from '@training-math';
 
 import { useAuth } from '@/auth/AuthProvider';
 import { Screen } from '@/components/Screen';
@@ -37,17 +36,16 @@ import { Body, Heading } from '@/components/ui/Text';
 import { EntryCard } from '@/components/workout/EntryCard';
 import { ExercisePicker } from '@/components/workout/ExercisePicker';
 import { confirmDiscardWorkout } from '@/components/workout/confirmDiscardWorkout';
-import type { WorkoutRow } from '@/db/dao';
+import { WorkoutDetailsFields } from '@/components/workout/WorkoutDetailsFields';
 import { useAppDatabase } from '@/db/useAppDatabase';
 import type { ExerciseDef } from '@/library/catalog';
 import { libraryExerciseId } from '@/library/uuidv5';
 import { useDisplayUnit } from '@/settings/displayUnit';
-import type { ActiveWorkoutStore } from '@/workout/activeWorkout';
 import { clearSessionWorkout, resumeSessionWorkout } from '@/workout/activeWorkoutSession';
-import { supersetPlacement, textErrorMessage, totalSets, workoutDateLabel } from '@/workout/format';
+import { supersetPlacement, totalSets, workoutDateLabel } from '@/workout/format';
 import { useSessionWorkout, useWorkoutSnapshot } from '@/workout/useActiveWorkout';
-import { AutosaveRegistryContext, createAutosaveRegistry, useAutosaveText } from '@/workout/useAutosaveText';
-import { colors, layout, radii, spacing, type } from '@/theme';
+import { AutosaveRegistryContext, createAutosaveRegistry } from '@/workout/useAutosaveText';
+import { spacing } from '@/theme';
 
 export default function ActiveWorkoutScreen() {
   const router = useRouter();
@@ -233,42 +231,6 @@ export default function ActiveWorkoutScreen() {
   );
 }
 
-/**
- * The workout's own Title and Notes boxes, under "Started …" (LOG-3). Each saves itself a moment
- * after the lifter stops typing (see `useAutosaveText`), so nothing typed here is lost if the app
- * is killed; Finish saves anything still waiting. A blank box means no title (the saved workout
- * shows its date) or no note. A save that is refused shows a message under the boxes.
- */
-function WorkoutDetailsFields({ store, workout }: { store: ActiveWorkoutStore; workout: WorkoutRow }) {
-  const title = useAutosaveText({ initial: workout.title, save: (text) => store.setTitle(text), store });
-  const notes = useAutosaveText({ initial: workout.notes, save: (text) => store.setNotes(text), store });
-  const error = title.error ?? notes.error;
-  return (
-    <View style={styles.details}>
-      <TextInput
-        style={[styles.input, styles.titleInput]}
-        value={title.text}
-        onChangeText={title.onChangeText}
-        placeholder="Workout title"
-        placeholderTextColor={colors.muted}
-        maxLength={MAX_WORKOUT_TITLE_LENGTH}
-        accessibilityLabel="Workout title"
-      />
-      <TextInput
-        style={[styles.input, styles.notesInput]}
-        value={notes.text}
-        onChangeText={notes.onChangeText}
-        placeholder="Notes"
-        placeholderTextColor={colors.muted}
-        maxLength={MAX_WORKOUT_NOTES_LENGTH}
-        multiline
-        accessibilityLabel="Workout notes"
-      />
-      <FormError message={error ? textErrorMessage(error) : null} />
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   header: {
     gap: spacing.sm,
@@ -281,28 +243,6 @@ const styles = StyleSheet.create({
   },
   headerButton: {
     flex: 1,
-  },
-  details: {
-    gap: spacing.sm,
-    marginTop: spacing.xs,
-  },
-  input: {
-    ...type.input,
-    minHeight: layout.minTouchTarget,
-    backgroundColor: colors.inputBg,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    borderRadius: radii.lg,
-    paddingHorizontal: spacing.md,
-  },
-  titleInput: {
-    ...type.cardTitle,
-  },
-  notesInput: {
-    // Grows with the note up to a few lines, then scrolls inside the box.
-    maxHeight: 140,
-    paddingVertical: spacing.sm,
-    textAlignVertical: 'top',
   },
   screenContent: {
     paddingBottom: 0,

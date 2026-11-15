@@ -9,7 +9,7 @@ Source migrations: `20261114100000_identity.sql`, `20261114100100_training.sql`,
 `20261114110000_fix_exercise_delete.sql`, `20261114120000_exercises_slug.sql`,
 `20261114120100_library_seed.sql` (generated — see below), `20261115024010_sets_score.sql`,
 `20261115031049_sets_notes.sql`, `20261115035806_personal_records.sql`,
-`20261114224613_signup_birthdate_gate.sql`
+`20261115045638_sync_tombstones.sql` (B14, applied live), `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
 not stamp the birthdate).
@@ -31,6 +31,9 @@ erDiagram
   profiles ||--o{ personal_records : "user_id holds"
   exercises ||--o{ personal_records : "exercise_id (cascade)"
   sets ||--o{ personal_records : "source_set_id proves (cascade)"
+  profiles ||--o{ sync_tombstones : "user_id (cascade)"
+  workouts ||..o{ sync_tombstones : "row_id, written by trigger on delete (no FK)"
+  personal_records ||..o{ sync_tombstones : "row_id, written by trigger on delete (no FK)"
 
   auth_users {
     uuid id PK "managed by Supabase Auth"
@@ -135,6 +138,14 @@ erDiagram
     timestamptz created_at
     timestamptz updated_at
   }
+
+  sync_tombstones {
+    bigint id PK "identity; strictly increasing download bookmark"
+    uuid user_id FK "whose row was deleted"
+    text tbl "workouts or personal_records"
+    uuid row_id "id of the deleted row"
+    timestamptz deleted_at "server clock"
+  }
 ```
 
 ## The launch library inside `exercises`
@@ -199,9 +210,25 @@ per book.
   `source_set_id`, `kind`, `reps` and `exercise_id`, and lets the update succeed. It never raises.
   The row still gets a fresh `updated_at`, so the next download repairs the device. This covers a
   fresh device that finishes a lighter set before its first pull. A tie is not "lower", so it
-  replaces the source set (the value stays the same). **B14 must rework this trigger** when it
-  builds legitimate demotion (deleting a record-setting set).
+  replaces the source set (the value stays the same; settled in B14 as last-write-wins).
+- **Legitimate lowering (B14) goes around the trigger, not through it.** When an edit or delete
+  of a past workout lowers a book, the phone uploads it as **delete, then insert** of the same
+  row id. The trigger is `BEFORE UPDATE` only, so it never sees that; a plain lowered update
+  (a stale device) is still kept at the best. Raises stay plain updates, so keep-best still
+  arbitrates them against another device's higher record. The trigger itself is unchanged.
 - **Cascades**: deleting the source set, or the exercise, deletes the record row.
+
+## Tombstones (B14)
+
+`sync_tombstones` (migration `20261115045638_sync_tombstones.sql`) is the list of rows that
+stopped existing, so a user's other devices can delete their copies (a download cannot see an
+absent row). One line per deleted **workout** or **personal record**, written by the
+`record_tombstone` trigger — `AFTER DELETE … FOR EACH ROW` on both tables, so rows removed by a
+cascade (a deleted workout's records, via its sets) are recorded too. Deleted entries and sets get
+no tombstone: their workout is re-stamped, and other devices re-download the whole workout and
+drop what is missing. Devices read "tombstones after id N" by the `bigint` identity. The trigger
+(`private.record_tombstone`, `security definer`) skips users whose profile is already gone, so
+deleting an account is not blocked by the `user_id` foreign key. Retention is unbounded for now.
 
 ## Enums
 
@@ -229,6 +256,8 @@ per book.
 - **Blocking severs follows.** Inserting a `blocks` row fires `handle_new_block`, which deletes any
   `follows` row between the two people in either direction.
 - **`updated_at` is maintained** by a trigger on every table that has the column.
+- **Deletes leave tombstones.** Deleting a `workouts` or `personal_records` row (directly or by
+  cascade) inserts a `sync_tombstones` line (see Tombstones above).
 
 ## Who can see and change what (row-level security)
 
@@ -244,6 +273,7 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `workouts` | per the visibility rule below | insert, update, delete only your own |
 | `workout_exercises`, `sets` | visible when their workout is | only the workout's owner |
 | `personal_records` | only your own (B25 will widen this for public profiles) | only your own, and `source_set_id` must be a set in one of your workouts (`private.owns_set`) |
+| `sync_tombstones` | only your own | nobody — only the `record_tombstone` trigger inserts |
 
 **Workout visibility rule** (`private.workout_visible`): you always see your own; a block in either
 direction hides everything; otherwise `public` is open to any signed-in user, `followers` requires
@@ -254,8 +284,10 @@ they can see rows the caller's own RLS would hide.
 ## Deletion behaviour
 
 - Deleting an auth user cascades through `profiles` to settings, body data, follows, blocks, owned
-  exercises, workouts, their entries and sets.
-- Deleting a workout cascades to its `workout_exercises` and their `sets`.
+  exercises, workouts, their entries and sets, and the user's tombstones.
+- Deleting a workout cascades to its `workout_exercises` and their `sets` (and the records citing
+  them), and leaves tombstones for the workout and each record. The app deletes a finished
+  workout (B14) by sending only the workout's delete; these cascades do the rest.
 - Deleting an exercise keeps the history: `workout_exercises.exercise_id` becomes null rather than
   deleting the logged work. Its `personal_records` rows are deleted.
 - Deleting a set (or the workout holding it) deletes any `personal_records` row that cites it.
@@ -269,9 +301,11 @@ the rows as they are, with no id remapping.
 ## The device mirror (not part of this database)
 
 This diagram draws the server. The phone keeps its own SQLite copy (`frontend/src/db/schema.ts`)
-of `exercises`, `workouts`, `workout_exercises`, `sets` and `personal_records` (schema version 4
-since B13: version 2 (B11) added `sets.score`, version 3 added `sets.notes`, version 4 added
-`personal_records`; versions are append-only, upgraded on launch). It has the same column names, but
+of `exercises`, `workouts`, `workout_exercises`, `sets` and `personal_records` (schema version 5
+since B14: version 2 (B11) added `sets.score`, version 3 added `sets.notes`, version 4 added
+`personal_records`, version 5 added `outbox.op` (`upsert` or `delete`); versions are append-only,
+upgraded on launch). There is no device copy of `sync_tombstones` — tombstones are applied as
+they download, and `sync_state` keeps the last applied id (`pull_cursor:tombstones`). It has the same column names, but
 uses text for uuids and timestamps and 0/1 for booleans, and it does not repeat the server's
 CHECK rules as SQL (instead the app checks every set against them before saving, through the
 shared `@training-math` `limits.ts`). It also has two tables of its own: `outbox`, the local changes waiting to upload,
@@ -298,3 +332,6 @@ and `sync_state`, the download bookmarks. What this means for the server:
 - **Personal records upload after sets** (they cite them) and download on their own bookmark
   (`pull_cursor:personal_records`), after the workout trees. A record row has no parent workout, so
   it does not touch the root.
+- **Deletes (B14) are `DELETE … WHERE id IN (…)`** as the signed-in user, sent before any upload
+  in each sync, children's tables first. Deleting an id the server no longer has is a no-op, so
+  retries are safe.

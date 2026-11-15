@@ -324,7 +324,7 @@ server would refuse still cannot reach the outbox (the B07 poison-row rule).
 | `frontend/src/db/dao.ts` (+ test) | edit — `writeLocalRowsTx` extracted from `writeLocal` (one home for touch-the-root); `enqueueTx` call sites take the `'upsert'` default |
 | `frontend/src/sync/push.ts` (+ test) | edit — delete phase (reverse `SYNC_ORDER`) before upsert passes; `deleted` counts |
 | `frontend/src/sync/transport.ts`, `supabaseTransport.ts` (+ test), `test-utils/fakeTransport.ts` | edit — `deleteRows`, `pullTombstones`; the fake server mirrors FK cascades and writes tombstones (it already mirrors keep-best) |
-| `frontend/src/sync/pull.ts` (+ test) | edit — tombstone pass (first, own cursor) + tree reconciliation with the pending-rows guard |
+| `frontend/src/sync/pull.ts` (+ test) | edit — tombstone pass (last, own cursor — see the pull section) + tree reconciliation with the pending-rows guard |
 | `frontend/src/sync/engine.ts` (+ test) | edit — result plumbing only, if its tests pin shapes |
 | `frontend/src/workout/prs.ts` (+ test) | edit — `recomputeRecords` (new/changed/gone diff), shared row builder |
 | `frontend/src/workout/activeWorkout.ts` (+ test) | edit — `WritePolicy` seam; draft behavior byte-identical |
@@ -469,3 +469,56 @@ sharpened the plan:
 - **Scope verdict:** right as written. The edit screen, delete action, recompute and its full
   sync round-trip are one inseparable correctness story; everything that merely *reads* PRs
   or workouts stays with its own step (B18 analysis, B20 feed, B25 profiles).
+
+## Build deviations (recorded by the builder)
+
+Each is a deliberate change from the plan text above, made during Code or Review:
+
+1. **Tombstones are also read before every push** (`engine.ts` → `pullTombstonePass`, then
+   push, then the full pull whose last pass is tombstones as planned). Found by the review's
+   Spec axis: the engine pushes before it pulls, so the plan's "workout tombstone wins over a
+   pending edit" rule was defeated — a pending title edit (or the root line any set edit adds)
+   re-inserted a gutted workout on the server before the pull ever read its tombstone. The
+   pre-push pass removes the workout and its lines first. A residual window remains (a
+   tombstone written between the pre-push read and the push); closing it fully needs a server
+   guard and is in DEFERRED. The pre-push pass cannot delete this device's own re-created PR
+   rows that are still unsent (pending guard); an already-pushed-but-not-yet-pulled re-creation
+   may be dropped transiently and is restored by the same sync's PR pull pass (the plan's
+   "PR pull pass is the restorer").
+2. **Pull drops local PR rows citing sets it removes, pending lines included** (tree
+   reconciliation and workout tombstones; plan said "left to the tombstone pass"). The PR
+   tombstone's pending guard would spare an unsent PR row whose source set is gone on the
+   server; its upload would then be refused by the `source_set_id` FK forever and jam the
+   outbox (the B07 poison-row hole). The book stays empty until the server's promoted row
+   arrives or the next finish of that exercise refills it.
+3. **A pending set inside an exercise slot removed elsewhere is lost with the slot.** The
+   pending guard spares the set row, but the device's FK cascade takes it with the (non-pending)
+   slot and its lines are dropped — its parent is gone on the server, so it could never upload.
+   The plan's "a set logged … offline … must survive" holds whenever the slot itself survives.
+   (A pending slot edit, conversely, re-creates a slot removed elsewhere — edits-win, as
+   planned; noted in DEFERRED.)
+4. **The edit store's `discard()` deletes the workout** (plan: it throws). The edit screen's
+   Delete calls it, so the store's status turns `discarded` and every late write — an autosave
+   box flushing as the screen unmounts — is refused instead of re-creating the workout through
+   `writeLocalRowsTx`. The edit policy also checks, at the start of every transaction, that the
+   workout still exists and is finished (a deletion arriving by pull mid-edit).
+5. **The tombstone trigger skips users whose profile is gone.** Without it, deleting an account
+   cascades profile → workouts → tombstone insert → FK violation on `sync_tombstones.user_id`,
+   breaking account deletion. Probed live (rolled back): account deletion succeeds and leaves no
+   tombstones.
+6. **`WorkoutDetailsFields` moved out of `active-workout.tsx`** into
+   `components/workout/WorkoutDetailsFields.tsx` so the logger and the edit screen share it
+   (unchanged behaviour); the delete confirmation lives in
+   `components/workout/confirmDeleteWorkout.ts` for both screens.
+7. **`schema.test.ts` was edited** (its V3→V4 test hard-coded version 4; now `SCHEMA_VERSION`)
+   and gained the V4→V5 test. `activeWorkout.test.ts` and B13's PR tests are otherwise
+   unmodified and pass — the seam-is-a-refactor proof. `engine.ts` changed for deviation 1 only.
+8. **Editing a logged set's numbers on screen is remove + re-log.** `EntryCard` has no inline
+   set-value editor (the logger never needed one); the store's `updateSet` is covered by the
+   store-level tests. An inline editor is a UI follow-up (DEFERRED).
+
+Live probe (builder; synthetic users inside a `do` block rolled back by a final exception):
+keep-best still keeps 100 against a plain lowered update to 90; delete-then-insert leaves 90;
+deleting the workout cascades the PR row and writes 1 workout + 2 PR tombstones (demotion
+delete + cascade); a client insert into `sync_tombstones` is refused; user B reads 0 of A's
+tombstones; deleting A's auth user succeeds with 0 tombstones left.
