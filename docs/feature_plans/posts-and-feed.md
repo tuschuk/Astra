@@ -353,3 +353,36 @@ Run in the planner session at full severity; every checkable claim verified in t
   viewer-unit hook the card needs; `EmptyState`, `Card`, `Screen`, theme tokens all exist.
 - **Scope verdict:** right as written, with one flagged reading (Find lifters, G2/risk 3) and
   one deliberate inclusion (own posts, G6). Nothing else widened; nothing narrowed.
+
+## As built (builder run) — deviations and additions
+
+Migration applied live as `20261115093217_posts_flairs` (file renamed to that version). Live RLS
+probe (one transaction, three synthetic users, rolled back by a final `raise`; nothing left
+behind) confirmed: A (follows B) reads B's public and followers-only posts; stranger C reads B's
+public post only, never the followers-only one; A posting B's workout refused (42501); unknown
+flair refused; client insert into `flairs` refused; B's second post of one workout refused
+(unique); null flair refused; B's workout flipped private → the post drops out of A's
+posts⋈workouts join; after C blocks B, neither sees the other's posts and B can't follow C.
+Security advisor: only the pre-existing leaked-password warning.
+
+Deviations from the plan text, all small:
+
+- **Home reloads page 1 on every focus** (`useFocusEffect`), not only on pull-to-refresh. Reason:
+  after following someone on Find lifters, Back must show their posts; a focus reload is the
+  smallest way. A failed background reload keeps the cards already shown.
+- **Second empty state**: following people who haven't posted gets its own sentence ("Nobody you
+  follow has posted yet") instead of the not-following-anyone text.
+- **Flair/author fallback in `toFeedPost`**: a missing embed (impossible today: `flair_id` is
+  not null and `flairs` is readable) renders `MISSING_FLAIR` ("Post") so a card can't crash. It is
+  a fallback label, not a flair row.
+- **Blocked people are excluded in the search query** (`.not('id','in',…)`) rather than filtered
+  after the limit (review fix), so they never use up one of the 20 places. People who blocked
+  *me* still appear (I can't read their block); the server refuses the follow.
+- **Shared pieces extracted during review**: `lib/throwIfError.ts` (also adopted by
+  `sync/supabaseTransport.ts`), `social/names.ts` (`PersonName`, `personLabels`),
+  `components/social/LetterAvatar.tsx`.
+- **Custom exercises in someone else's post** embed with a null name (exercises RLS hides other
+  users' customs) and print as "Custom exercise". Widening exercises RLS was not in scope.
+- **Search escaping**: the term is double-quoted in the `or()` filter with `%`/`_` escaped as
+  `\\%`/`\\_`; verified against the fake client's PostgREST-style parser, **not** against live
+  PostgREST (no user token in a headless run) — see DEFERRED.

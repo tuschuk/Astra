@@ -30,7 +30,19 @@ flowchart TD
 
   Tabs["Tab layout (only with a session)<br/>five bottom tabs, Workout dead center,<br/>floating top-right profile button"]
 
-  Tabs --> Home["Home<br/>social feed (SOC-1)<br/>today: brand + empty state pointing to Workout"]
+  Tabs --> Home["Home (app/(tabs)/index.tsx, B20, SOC-1)<br/>FlatList of PostCards: followed lifters' + my own workout posts, newest first;<br/>reloads page 1 on every focus; pull-to-refresh; end of list → next page (20, keyset);<br/>header 'Find lifters' button; empty: follow nobody → Find lifters + Log a workout,<br/>follow people who haven't posted → Find lifters;<br/>request failed / offline → 'The feed needs a connection' + Retry (nothing queued)"]
+  Home -->|"Find lifters: router.push('/find-lifters')"| FindScr["Find lifters (app/find-lifters.tsx, B20, SOC-7 part)<br/>search box (≥ 2 letters, 300 ms after typing stops);<br/>UserCards (letter avatar, name, @handle, Follow / Following) — never me,<br/>never someone I blocked; no match / no connection messages; Back"]
+  Home -->|"Log a workout (empty feed)"| Workout
+  FindScr -->|"Back: router.back (Home reloads on focus)"| Home
+  subgraph SocialMod["Social reads (src/social, B20): online only, client passed in, RLS decides visibility"]
+    FeedQ["feed.ts: feedAuthorIds = me + follows.followee_id where follower_id = me;<br/>loadFeedPage: posts.select(FEED_SELECT: flair, author, workout!inner → entries → exercise name, sets)<br/>.in(user_id, authors) [.or(beforeCursorFilter)] order created_at desc, id desc, limit 20;<br/>toFeedPost: sort entries + sets, weight → number; appendPage drops repeats"]
+    FollowQ["follows.ts: searchLifters (sanitized ilike on username / display_name,<br/>not me, not in my blocks, limit 20, + which I follow);<br/>follow = insert follows row (duplicate = ok; RLS refusal → 'You can't follow this lifter.');<br/>unfollow = delete my row"]
+  end
+  Home --> FeedQ
+  FindScr --> FollowQ
+  FeedQ -->|"supabase-js select as the signed-in user"| DB
+  FollowQ -->|"select profiles / blocks / follows; insert / delete follows"| DB
+  DispUnit -->|"viewer's unit: PostCard sets via formatSet / formatDropSet"| Home
   Tabs --> Market["Marketplace<br/>programs (MKT-1..5)<br/>today: featured-section skeleton, placeholder cards"]
   Tabs --> Workout["Workout tab (on focus: re-read astra.db)<br/>no draft: Start empty workout (program start disabled, B35)<br/>draft on phone: Resume workout / Discard (asks first)<br/>Tool Kit tiles: 1RM / RPE / %1RM / Plates / Timer open the Tool Kit at that tool (B16, B17)<br/>Past workouts: newest 100 finished, date + duration + counts"]
   Tabs --> Communities["Communities<br/>Teams and Gyms<br/>today: two sections, each an empty state"]
@@ -215,7 +227,7 @@ flowchart TD
   subgraph Backend["Supabase project (live)"]
     AuthAPI["Supabase Auth<br/>email + password accounts"]
     Trigger{"signup trigger handle_new_user<br/>refuses missing / under-18 birthdate;<br/>creates profile, settings, body data"}
-    DB[("Postgres<br/>profiles, settings, body data, follows, blocks,<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records (owner-only RLS; keep-best trigger<br/>never lets an UPDATE lower a record; delete+insert can),<br/>sync_tombstones (B14: written by delete triggers, owner-only read),<br/>workout_analyses (B18: owner read only; NO write policies)<br/>see database-erd.md")]
+    DB[("Postgres<br/>profiles, settings, body data, follows, blocks,<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records (owner-only RLS; keep-best trigger<br/>never lets an UPDATE lower a record; delete+insert can),<br/>sync_tombstones (B14: written by delete triggers, owner-only read),<br/>workout_analyses (B18: owner read only; NO write policies),<br/>flairs + posts (B20: posts read per workout_visible; write only own post of own workout)<br/>see database-erd.md")]
     AnalyzeFn["Edge function analyze-workout (B18, deployed, verify_jwt on)<br/>POST {workoutId} with the user's token → getUser;<br/>reads AS THE CALLER (RLS); 404 unless the caller OWNS the workout;<br/>422 if unfinished; buildAnalysis (no model); upsert by id<br/>with the SERVICE ROLE (one statement); returns the stored row"]
     AuthAPI --> Trigger --> DB
     AnalyzeFn -->|"select as caller; upsert workout_analyses as service role"| DB
@@ -253,7 +265,7 @@ flowchart TD
   MathMod -->|"epleyE1rm, weightForReps, workingWeightFromRpe, percentOfOneRm,<br/>workingWeightFromPercent, loadBar, lbToKg / kgToLb, roundToIncrement, displayWeight (B16)"| ToolKit
   MathMod -.->|"not wired yet: session volume display"| Workout
 
-  class Home,Market,Communities scaffold
+  class Market,Communities scaffold
   class Seed,Catalog,DB,Store,LocalDB,RackStore data
 ```
 
@@ -370,8 +382,22 @@ flowchart TD
    exercise with a logged set counts, warm-ups included; an exercise added but never done, or a
    custom exercise (no library muscle data), adds nothing. The card is left out when nothing maps.
    It is always read from the phone, never stored, so it is offline and follows edits at once.
-14. Everything else is a placeholder that renders its final layout with inert controls (Start
-   from a program, Home, Marketplace, Communities).
+14. **Read the Home feed and follow lifters (B20, SOC-1, SOC-3, SOC-7 part) — needs a
+   connection.** Home lists workout posts from the people the lifter follows, plus their own,
+   newest first, twenty at a time (scrolling to the bottom loads more; pulling down refreshes;
+   coming back to Home reloads). Each card shows the author (letter avatar, name, @username),
+   "Today" / "Yesterday" / the date, the post's flair chip (its name read from the `flairs`
+   row), the workout's title, its "58 min · 3 exercises · 12 sets" line, up to four exercises
+   with every set printed exactly as the logger prints it in the *viewer's* kg / lb (supersets
+   grouped, drop sets on one row; "+ n more exercises" after four; another lifter's custom
+   exercise reads "Custom exercise"), and the workout's notes. Cards can't be tapped yet. The
+   **Find lifters** button opens a search by name or username; each result has **Follow** /
+   **Following** (one-way, no approval; it flips at once and flips back with "You can't follow
+   this lifter." if a block stops it). No screen creates posts yet — that is B21's
+   finish-to-post — so today a feed only has posts written straight into the database.
+   Offline, Home says the feed needs a connection (with Retry); everything else keeps working.
+15. Everything else is a placeholder that renders its final layout with inert controls (Start
+   from a program, Marketplace, Communities).
 
 ## Data path today
 
@@ -557,9 +583,26 @@ flowchart TD
   the shape data in `components/muscleMapPaths.ts` (hand-authored art, replaceable as data;
   `MUSCLE_ORDER` is the tie-break order, `MUSCLE_NAMES` the display names). Nothing is stored and
   nothing syncs.
-- **Still unwired:** the Library reads the bundled catalog, not `astra.db`; posts linking to an
-  analysis (B21) don't exist yet; the muscle map appears only on the analysis screen; Settings has no Notifications (B47) or
-  Privacy (B26) section; nothing feeds the social feed.
+- **Feed and follows (B20).** Other people's data is never stored on the phone, so Home and
+  Find lifters read the server directly and keep nothing: no device table, no outbox, no sync
+  change. Both screens get the client from `getSupabase()` and the signed-in id from `useAuth()`,
+  and pass them to `social/feed.ts` / `social/follows.ts` (client as a parameter, so tests hand
+  in `test-utils/fakeSocialClient.ts`, an in-memory fake that actually evaluates `in`, `not`,
+  `or()` filter strings, `order` and `limit`). Row-level security decides every visibility
+  question: the posts policy calls `private.workout_visible`, and the feed's `workouts!inner`
+  embed drops a post whose workout the viewer may not see. Paging is by bookmark
+  (`beforeCursorFilter`: older `created_at`, or the same with a smaller `id`), so a post arriving
+  mid-scroll never repeats or skips a card; Home's `generation` counter drops answers that land
+  after a newer load started, and a ref keeps one next-page request in flight. `PostCard` prints
+  through `workout/format.ts` (`formatSet`, `formatDropSet`, `groupDropSets`, `supersetRuns`,
+  `workoutDetailsLabel`, new `postDateLabel`) — closing LOG-13's "and the feed" clause.
+  `social/names.ts` `personLabels` is the one spelling of a person on a card; Supabase request
+  errors throw through the shared `lib/throwIfError.ts` (also used by the sync transport).
+  `find-lifters` is declared in the root layout's signed-in guard.
+- **Still unwired:** the Library reads the bundled catalog, not `astra.db`; no screen creates a
+  post yet (B21 finish-to-post), and posts linking to an analysis don't exist; feed cards don't
+  open a detail screen; the muscle map appears only on the analysis screen; Settings has no
+  Notifications (B47) or Privacy (B26) section.
 
 ## Shared pieces every screen uses
 
@@ -568,6 +611,8 @@ flowchart TD
 - `components/ProfileButton.tsx` is the floating route to You.
 - `components/ui/` holds Button, Card, EmptyState, Text, TextField (labeled input) and FormError
   (red alert line), all styled from `theme/tokens.ts`.
+- `components/social/` (B20) holds PostCard (one feed post), UserCard (a person + Follow /
+  Following, optimistic with revert) and LetterAvatar (the initial badge both use).
 - `components/auth/` holds SignInForm, SignUpForm, BirthdateInput and their shared layout styles.
   The route files in `app/(auth)/` only wire them to the router.
 - `components/workout/` holds EntryCard (one exercise in the logger), ExercisePicker (the
@@ -593,6 +638,7 @@ flowchart TD
   `renderWithAuth`, a real-SQLite driver over Node's `node:sqlite` (`nodeSqliteDriver.ts`), an
   in-memory fake server for sync (`fakeTransport.ts`: upsert-by-id, server-stamped `updated_at`,
   foreign-key refusals, the PR keep-best rule, cascading deletes that write tombstones (B14),
-  an update-only `user_settings` row (B15), offline and lost-reply modes), workout fixtures, and the logger kit
+  an update-only `user_settings` row (B15), offline and lost-reply modes), workout fixtures, the
+  fake social client and feed fixtures (B20: `fakeSocialClient.ts`, `feedFixtures.ts`), and the logger kit
   (`loggerTestKit.tsx`: prepared database, test clock, signed-in render). The app never
   imports them.

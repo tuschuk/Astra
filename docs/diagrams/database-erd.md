@@ -10,7 +10,8 @@ Source migrations: `20261114100000_identity.sql`, `20261114100100_training.sql`,
 `20261114120100_library_seed.sql` (generated — see below), `20261115024010_sets_score.sql`,
 `20261115031049_sets_notes.sql`, `20261115035806_personal_records.sql`,
 `20261115045638_sync_tombstones.sql` (B14, applied live), `20261115080420_workout_analyses.sql`
-(B18, applied live), `20261114224613_signup_birthdate_gate.sql`
+(B18, applied live), `20261115093217_posts_flairs.sql` (B20, applied live),
+`20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
 not stamp the birthdate).
@@ -37,6 +38,9 @@ erDiagram
   personal_records ||..o{ sync_tombstones : "row_id, written by trigger on delete (no FK)"
   workouts ||--o| workout_analyses : "id = workout id (cascade); one per workout"
   profiles ||--o{ workout_analyses : "user_id owns (cascade)"
+  profiles ||--o{ posts : "user_id shares (cascade)"
+  workouts ||--o| posts : "workout_id shared (cascade); one post per workout"
+  flairs ||--o{ posts : "flair_id: exactly one per post"
 
   auth_users {
     uuid id PK "managed by Supabase Auth"
@@ -165,7 +169,46 @@ erDiagram
     timestamptz created_at
     timestamptz updated_at
   }
+
+  flairs {
+    text id PK "stable slug: wod, physique-check, new-pr, form-check"
+    text name "what the chip shows, 1-40 chars"
+    smallint position UK "display order"
+    boolean upvotes_only "true for Physique Check; read by votes (later step)"
+  }
+
+  posts {
+    uuid id PK "client-generated (posts will be made offline after Finish)"
+    uuid user_id FK "the author"
+    text flair_id FK "required: exactly one flair"
+    uuid workout_id FK, UK "the shared workout; one post per workout"
+    workout_visibility visibility "public, followers or private; default public"
+    timestamptz created_at "feed order, newest first"
+    timestamptz updated_at
+  }
 ```
+
+## Posts and the feed (B20)
+
+`posts` and `flairs` (migration `20261115093217_posts_flairs.sql`) are what the Home feed is made
+of. A post shares one finished workout; at launch that is the only kind of post, so `workout_id` is
+required (a later step relaxes it when image posts exist). `unique (workout_id)` makes sharing the
+same session twice impossible, which is what will make finish-to-post safe to retry.
+
+- **Flairs are data.** The launch four (WOD, Physique Check, New PR, Form Check) are seeded rows;
+  any signed-in user may read them and nobody may write them through the API, so a new flair is a
+  migration, not an app release. The app always shows `flairs.name` from the row. `upvotes_only`
+  marks Physique Check, for the votes step to enforce "upvotes only".
+- **Feed order** is `created_at desc, id desc`, matched by `posts_user_created_idx (user_id,
+  created_at desc, id desc)`. The phone pages by bookmark — "older than (created_at, id)" — never
+  by offset. `posts_flair_idx (flair_id)` indexes the flair foreign key (no query filters by
+  flair yet).
+- **Not mirrored.** No device table, no outbox line: other people's posts are read from the server
+  each time (and the feed embeds the workout, its entries, sets and exercise names in one request).
+- **The visibility enum is shared.** `posts.visibility` reuses `workout_visibility` (same three
+  values, same meaning) so `private.workout_visible` serves both. The post and its workout each
+  have their own visibility; the feed shows a post only when **both** are visible to the viewer
+  (it joins the workout with `!inner`, and the workout's own RLS applies).
 
 ## The launch library inside `exercises`
 
@@ -267,8 +310,8 @@ does not own, so another user's public workout can never be analysed over its ow
 ## Enums
 
 - `workout_visibility`: `public` (any signed-in user), `followers` (people who follow the owner),
-  `private` (owner only). Used by `workouts.visibility` and as the per-user default in
-  `user_settings`.
+  `private` (owner only). Used by `workouts.visibility`, `posts.visibility` (B20) and as the
+  per-user default in `user_settings`.
 - `pr_kind`: `true1rm`, `repMax`, `e1rm`. These are exactly the app's `PrKind` names in
   `@training-math`. Used by `personal_records.kind`.
 
@@ -309,19 +352,23 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `personal_records` | only your own (B25 will widen this for public profiles) | only your own, and `source_set_id` must be a set in one of your workouts (`private.owns_set`) |
 | `sync_tombstones` | only your own | nobody — only the `record_tombstone` trigger inserts |
 | `workout_analyses` | only your own | nobody — no write policies; only the `analyze-workout` function (service role) upserts |
+| `flairs` | any signed-in user | nobody — new flairs arrive by migration |
+| `posts` | per the visibility rule below (same helper as workouts) | insert and update only as yourself **and** only for a workout you own (`private.owns_workout`); delete only your own |
 
 **Workout visibility rule** (`private.workout_visible`): you always see your own; a block in either
 direction hides everything; otherwise `public` is open to any signed-in user, `followers` requires
 that you follow the owner, `private` is owner-only. Child tables ask the same question through the
-workout they belong to. These checks run as `security definer` helpers in the `private` schema so
+workout they belong to; `posts` asks it directly with the post's own author and visibility.
+Another user's **custom exercise** stays hidden (exercises RLS), so in someone else's shared
+workout its name embeds as null and the feed card says "Custom exercise". These checks run as `security definer` helpers in the `private` schema so
 they can see rows the caller's own RLS would hide.
 
 ## Deletion behaviour
 
 - Deleting an auth user cascades through `profiles` to settings, body data, follows, blocks, owned
-  exercises, workouts, their entries and sets, and the user's tombstones.
+  exercises, workouts, their entries and sets, posts, and the user's tombstones.
 - Deleting a workout cascades to its `workout_exercises` and their `sets` (and the records citing
-  them) and to its `workout_analyses` row, and leaves tombstones for the workout and each record
+  them), to its `workout_analyses` row and to its post (B20), and leaves tombstones for the workout and each record
   (an analysis gets none: other devices drop it with the workout's tombstone). The app deletes a finished
   workout (B14) by sending only the workout's delete; these cascades do the rest.
 - Deleting an exercise keeps the history: `workout_exercises.exercise_id` becomes null rather than

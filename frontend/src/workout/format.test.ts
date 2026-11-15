@@ -6,6 +6,7 @@ import { describe, expect, it } from '@jest/globals';
 import { lbToKg, roundWeightKgForStorage } from '@training-math';
 
 import {
+  postDateLabel,
   countLabel,
   formatDropSet,
   formatDuration,
@@ -253,6 +254,20 @@ describe('supersets (LOG-11)', () => {
       { linkedToPrevious: true, inSuperset: true },
       { linkedToPrevious: false, inSuperset: false },
     ]);
+  });
+});
+
+describe('postDateLabel (B20)', () => {
+  const now = new Date(2026, 10, 15, 0, 30);
+  it('says Today and Yesterday by calendar day in the phone’s time zone, else the date', () => {
+    expect(postDateLabel(new Date(2026, 10, 15, 0, 5).toISOString(), now)).toBe('Today');
+    // 45 minutes ago, but on the previous calendar day.
+    expect(postDateLabel(new Date(2026, 10, 14, 23, 45).toISOString(), now)).toBe('Yesterday');
+    expect(postDateLabel(new Date(2026, 10, 14, 0, 1).toISOString(), now)).toBe('Yesterday');
+    expect(postDateLabel(new Date(2026, 10, 13, 23, 59).toISOString(), now)).toBe('Fri, Nov 13, 2026');
+  });
+  it('crosses a month and year boundary', () => {
+    expect(postDateLabel(new Date(2026, 11, 31, 20).toISOString(), new Date(2027, 0, 1, 9))).toBe('Yesterday');
   });
 });
 

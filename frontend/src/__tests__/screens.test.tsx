@@ -1,5 +1,5 @@
 /**
- * Screen smoke tests — the tab screens (Workout aside: workout-tab.test.tsx) render their heading and
+ * Screen smoke tests — the tab screens (Workout and Home aside: workout-tab.test.tsx, home-feed.test.tsx) render their heading and
  * primary content. These live outside src/app because expo-router would
  * otherwise register *.test.tsx files as routes.
  */
@@ -13,13 +13,12 @@ import { createFakeAppState, createFakeAuthClient, fakeSession } from '@/test-ut
 import { TEST_SAFE_AREA_METRICS } from '@/test-utils/renderWithAuth';
 import { ALL_EXERCISES } from '@/library/catalog';
 
-import HomeScreen from '@/app/(tabs)/index';
 import MarketplaceScreen from '@/app/(tabs)/marketplace';
 import CommunitiesScreen from '@/app/(tabs)/communities';
 import LibraryScreen from '@/app/(tabs)/library';
 import YouScreen from '@/app/(tabs)/you';
 
-// The Home and You screens navigate via expo-router; stub the router.
+// The You screen navigates via expo-router; stub the router.
 const mockPush = jest.fn();
 jest.mock('expo-router', () => ({
   useRouter: () => ({ push: mockPush }),
@@ -30,12 +29,7 @@ function renderScreen(element: React.ReactElement) {
 }
 
 describe('tab screens', () => {
-  it('Home renders the brand and the feed empty state', async () => {
-    const screen = await renderScreen(<HomeScreen />);
-    expect(screen.getByText('Astra')).toBeTruthy();
-    expect(screen.getByText('Log a workout')).toBeTruthy();
-  });
-
+  // Home is the live feed since B20 (it reads the server); its tests live in home-feed.test.tsx.
   // The Workout tab reads the database and the session since B09; its tests live in
   // workout-tab.test.tsx.
 
