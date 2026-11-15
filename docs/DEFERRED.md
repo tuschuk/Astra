@@ -564,3 +564,23 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     a fresh, empty device database.
   - Mermaid render of `app-flow.md` was not run by the builder (`mmdc` needed approval) — Gate 2
     should render it once.
+- **B34 program-builder:**
+  - **`export-data` does not export programs yet** (plan, Out of scope). B32's function predates the
+    four program tables (`OwnedTable` in `functions/export-data/handler.ts`). Add `programs` →
+    weeks → workouts → exercises (incl. soft-deleted rows, like customs) in the step that redeploys
+    the functions with the `_shared/http.ts` extraction above. Account deletion is already complete
+    (`programs.user_id` cascades from `profiles`).
+  - **Program description, week labels ("Deload"), copy / duplicate a week, drag-to-reorder,
+    undelete** — product calls for later (plan, Out of scope). Moves are one step at a time.
+  - **Program workout reorder and week reorder** — only exercise slots move; weeks and workouts
+    keep their add order (no PRD line asks for more yet).
+  - **B39 must keep program children author-only readable** or change the phone's download shape
+    (plan risk 1; warning in the migration header and the ERD).
+  - **Device check (Tristen):** airplane mode → Workout → Your programs → New program → Add week ×2
+    → Add workout → open it → Add exercise (a library one and a custom) → set sets / reps / weight /
+    RPE → Save targets → kill the app → reopen: the program, weeks, workouts and targets are intact;
+    reconnect → rows in Supabase (`programs`, `program_weeks`, `program_workouts`,
+    `program_exercises`); judge the editor at phone width (four target boxes in a row, the action
+    buttons wrapping, the week cards).
+  - Mermaid render of both diagrams was not run by the builder (`mmdc` needed approval) — Gate 2
+    should render them once.

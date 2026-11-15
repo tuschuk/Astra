@@ -404,3 +404,47 @@ CLAUDE.md "Autonomous sessions"). What was attacked, and what it changed:
   exercises); the only additions are what the hierarchy needs to be editable at all (names,
   positions, removal) and the recorded RPE option the handoff itself names. Nothing from B35+
   is reachable from this branch's UI.
+
+## Build notes and deviations (builder run)
+
+Recorded by the builder; each deliberate departure from the plan above, and why.
+
+- **Migration applied live** as `20261115193156_programs.sql` (the version Supabase recorded),
+  exactly the §(a) schema. Gate 2 probe run by the builder (rolled back): as user A a full tree
+  (program → week → workout → slot on a library id) inserts; as user B every table reads 0 rows by
+  id and unfiltered, updates and deletes 0 rows; B inserting a week or slot into A's program, or a
+  program under A's id, is refused (42501); A still reads the tree intact; RPE 11, 0 sets and an
+  empty name are refused (23514). `get_advisors` (security): no new findings.
+- **No local foreign keys on the device program tables** (was: "local FKs on delete cascade down
+  the chain"). Code review found the plan's claim "a child never lands before its parent within a
+  sync" is false across separate per-table bookmarks: another phone can upload a new program and
+  its week between this phone's programs pass and weeks pass. With a local FK that week's page is
+  refused and the whole pull throws (skipping tombstones / settings / flairs that sync). Bare
+  columns (the `personal_records` precedent) make the early child wait unseen — every read walks
+  down from the program — until the next sync brings the parent. Nothing on the phone hard-deletes
+  program rows, so the cascade bought nothing. Pinned by a test.
+- **One transport method, `pullProgramRows(tbl, userId, after, limit)`**, instead of four
+  (same behaviour: `programs` filtered by `user_id`, the children RLS-scoped; the fake emulates
+  author-only reads by walking the parent chain).
+- **`moveProgramExercise` renumbers the workout's live slots 0…n−1 and writes only the slots whose
+  number changed** (was: swap positions with a sibling). A plain swap is a no-op on a tie — the
+  very offline-insert tie the plan accepts — so the button would silently do nothing. In the
+  common case it still writes exactly the two swapped slots.
+- **`addProgramExercise` refuses an exercise id that isn't, on this phone, a library row or one of
+  the lifter's live customs.** The grilling kept the server's existence-only FK precedent (no
+  visibility CHECK) — unchanged. This is a phone-side poison-row guard: an id the server doesn't
+  hold would fail its FK and wedge the upload queue. The picker only ever offers such ids.
+- **Targets are edited with an explicit Save targets button** per slot (not autosave), and a newly
+  added exercise starts at 3 sets (the required column needs a value).
+- **An untouched weight box saves the stored kg unchanged** (review finding): the box shows the
+  display-rounded number (100 kg → 220.5 lb), and writing that back would move a weight the lifter
+  didn't touch (→ 100.02 kg).
+- **`Button` gained an optional `accessibilityLabel`** so per-row buttons ("Remove Week 2") are
+  distinguishable to screen readers and tests.
+- **Code review:** run with this plan as spec (two axes). Fixed: the weight round-trip bug, the
+  pull FK fault, DEFERRED / plan deviations not yet written, missing tests beside the new
+  components (`ProgramExerciseCard.test.tsx`, `NewProgramForm.test.tsx`), an unused `maxLength`
+  prop, the four soft-remove bodies (one `softRemove`), a duplicated row-type map. Left as
+  judgement calls: error-message prefix matching (the existing `setErrorMessage` precedent), the
+  two editor routes' similar load / refresh scaffolding, the three-level helper chain in the
+  policies (the plan's composed-helpers design), hand-listed per-table counters.

@@ -16,6 +16,8 @@
  *   - flairs — the server's list of post flairs (version 8, B21; download-only, replaced whole).
  *   - posts — the lifter's own posts: workout posts from the Post step (version 8, B21) and photo
  *     posts from Share a photo (version 9, B22). Upload-only.
+ *   - programs, program_weeks, program_workouts, program_exercises — the lifter's own training
+ *     programs (version 12, B34), synced both ways; soft-deleted through `deleted_at`.
  *   - outbox — the list of local changes (uploads and, from version 5,
  *     deletions) not yet sent to the server (see `sync/outbox.ts`).
  *   - sync_state — small bookkeeping values, such as how far the last
@@ -278,8 +280,70 @@ const V11 = `
 alter table exercises add column deleted_at text;
 `;
 
+/**
+ * Version 12 (B34): the lifter's training programs — `programs` → `program_weeks` →
+ * `program_workouts` → `program_exercises`, mirroring the server's `…_programs.sql` column for
+ * column. Authored on the phone (offline) and synced through the generic outbox like workouts.
+ *
+ * Like `personal_records`, these tables have NO local foreign keys — the parent links
+ * (`program_id`, `program_week_id`, `program_workout_id`) and `exercise_id` are bare columns, and
+ * the server's foreign keys are the enforcement point. Why: each table downloads on its own
+ * bookmark, so a week another phone uploaded a moment after its new program can arrive before the
+ * program does; a local foreign key would refuse that download page and fail the whole sync. Without
+ * one, the early week simply waits unseen — every read walks down from the program — until its
+ * program lands. Deletes are soft (`deleted_at`, ISO-8601 text), so nothing needs a cascade. All
+ * reads and writes go through `programs/programs.ts`, which filters the deleted rows.
+ */
+const V12 = `
+create table programs (
+  id         text primary key not null,
+  user_id    text not null,
+  name       text not null,
+  deleted_at text,
+  created_at text not null,
+  updated_at text not null
+);
+create index programs_user_idx on programs (user_id);
+
+create table program_weeks (
+  id         text primary key not null,
+  program_id text not null,
+  position   integer not null,
+  deleted_at text,
+  created_at text not null,
+  updated_at text not null
+);
+create index program_weeks_program_idx on program_weeks (program_id);
+
+create table program_workouts (
+  id              text primary key not null,
+  program_week_id text not null,
+  name            text,
+  position        integer not null,
+  deleted_at      text,
+  created_at      text not null,
+  updated_at      text not null
+);
+create index program_workouts_week_idx on program_workouts (program_week_id);
+
+create table program_exercises (
+  id                 text primary key not null,
+  program_workout_id text not null,
+  exercise_id        text,
+  position           integer not null,
+  target_sets        integer not null,
+  target_reps        integer,
+  target_weight_kg   real,
+  target_rpe         real,
+  deleted_at         text,
+  created_at         text not null,
+  updated_at         text not null
+);
+create index program_exercises_workout_idx on program_exercises (program_workout_id);
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11];
+export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

@@ -22,13 +22,18 @@ interface ButtonProps {
   variant?: ButtonVariant;
   disabled?: boolean;
   style?: StyleProp<ViewStyle>;
+  /**
+   * What a screen reader says, when the visible label alone is ambiguous — e.g. a "Remove" button
+   * on every row ("Remove Week 2"). Defaults to the label.
+   */
+  accessibilityLabel?: string;
 }
 
-export function Button({ label, onPress, variant = 'primary', disabled = false, style }: ButtonProps) {
+export function Button({ label, onPress, variant = 'primary', disabled = false, style, accessibilityLabel }: ButtonProps) {
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={accessibilityLabel ?? label}
       accessibilityState={{ disabled }}
       disabled={disabled}
       onPress={onPress}

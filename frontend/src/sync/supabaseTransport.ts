@@ -25,6 +25,7 @@ import {
   type FlairRow,
   type MirroredTable,
   type MirrorRowByTable,
+  type ProgramTable,
   type RowByTable,
   type WorkoutAnalysisRow,
 } from '@/db/dao';
@@ -82,7 +83,7 @@ export function createSupabaseTransport(
   upload: UploadFileFn = uploadFile,
 ): SyncTransport {
   /** One page of a table after a cursor, optionally narrowed to one user. */
-  async function page<T extends 'workouts' | 'exercises' | 'personal_records' | 'workout_analyses'>(
+  async function page<T extends 'workouts' | 'exercises' | 'personal_records' | 'workout_analyses' | ProgramTable>(
     tbl: T,
     after: PullCursor | null,
     limit: number,
@@ -114,6 +115,12 @@ export function createSupabaseTransport(
 
     // numeric(8,3) arrives as a JSON number, exactly like sets.weight_kg.
     pullPersonalRecords: (userId, after, limit) => page('personal_records', after, limit, userId),
+
+    // B34: only `programs` has a user column; the children are scoped by the server's
+    // author-only security rules, which return the caller's rows and nobody else's.
+    // numeric target_weight_kg / target_rpe arrive as JSON numbers, like sets.weight_kg.
+    pullProgramRows: (tbl, userId, after, limit) =>
+      page(tbl, after, limit, tbl === 'programs' ? userId : undefined) as Promise<RowByTable[typeof tbl][]>,
 
     pullWorkoutExercises: (workoutIds) => childrenOf('workout_exercises', 'workout_id', workoutIds),
 

@@ -6,6 +6,8 @@
  *     logger) and **Start from a program** (disabled until programs arrive, B35);
  *   - with a workout in progress on this phone (even one left behind when the app was killed):
  *     **Resume workout** and **Discard** instead — never a second workout on top of the first;
+ *   - **Your programs** (always): the lifter's own training programs, where they build plans of
+ *     weeks → workouts → exercises with targets (PRG-1, PRG-2, B34);
  *   - the Tool Kit tiles: 1RM, RPE, %1RM, Plates and Timer each open the Tool Kit panel
  *     straight at that tool (TK-1..TK-5), so a lifter can plan — or run a conditioning timer —
  *     without starting a workout;
@@ -131,6 +133,8 @@ export default function WorkoutScreen() {
             <Button label="Start from a program" onPress={() => {}} variant="ghost" disabled />
           </>
         )}
+        {/* The program builder (B34) — always available, even mid-workout. */}
+        <Button label="Your programs" onPress={() => router.push('/programs')} variant="outline" />
         <FormError message={dbError ? 'This phone’s workout storage couldn’t be opened.' : error} />
       </View>
 

@@ -19,7 +19,9 @@
  *   - flairs (B21) are the four rows the real migration seeds; posts (B21) are one per workout,
  *     only about the poster's own workout already on the server, and deleted with it;
  *   - photo posts (B22) name a photo in their author's folder and no workout, progress pics are
- *     private, and the `post-images` bucket replaces an object uploaded to the same path again.
+ *     private, and the `post-images` bucket replaces an object uploaded to the same path again;
+ *   - program rows (B34) need their parent row (the foreign keys) and are read back only by
+ *     their program's author (the author-only security rules).
  *
  * And it can misbehave on demand:
  *   - `offline = true` — every call fails, like airplane mode;
@@ -38,6 +40,7 @@ import type {
   FlairRow,
   PersonalRecordRow,
   PostRow,
+  ProgramTable,
   RowByTable,
   SetRow,
   SyncedTable,
@@ -63,6 +66,9 @@ const PARENT: { [T in SyncedTable]?: { column: string; table: SyncedTable } } = 
   workout_exercises: { column: 'workout_id', table: 'workouts' },
   sets: { column: 'workout_exercise_id', table: 'workout_exercises' },
   personal_records: { column: 'source_set_id', table: 'sets' },
+  program_weeks: { column: 'program_id', table: 'programs' },
+  program_workouts: { column: 'program_week_id', table: 'program_weeks' },
+  program_exercises: { column: 'program_workout_id', table: 'program_workouts' },
 };
 
 /** True if row `r` comes after bookmark `c` in (updated_at, id) order. */
@@ -84,6 +90,10 @@ export class FakeServer implements SyncTransport {
     workout_exercises: new Map(),
     sets: new Map(),
     personal_records: new Map(),
+    programs: new Map(),
+    program_weeks: new Map(),
+    program_workouts: new Map(),
+    program_exercises: new Map(),
   };
   /** Every upload request received, in order (including failed ones). */
   readonly upsertCalls: { tbl: SyncedTable; ids: string[] }[] = [];
@@ -160,7 +170,37 @@ export class FakeServer implements SyncTransport {
     return { ...row, ...kept, created_at: row.created_at };
   }
 
-  private page<T extends 'workouts' | 'exercises' | 'personal_records'>(
+  /**
+   * Who authored the program a program row belongs to (B34), walking up the tree — the fake's
+   * stand-in for the real `private.owns_program` chain. Undefined if any link is missing.
+   */
+  programOwner(tbl: ProgramTable, row: Record<string, unknown>): string | undefined {
+    const t = this.tables;
+    if (tbl === 'programs') return row.user_id as string;
+    if (tbl === 'program_weeks') return t.programs.get(row.program_id as string)?.user_id;
+    if (tbl === 'program_workouts') {
+      const week = t.program_weeks.get(row.program_week_id as string);
+      return week ? this.programOwner('program_weeks', week as unknown as Record<string, unknown>) : undefined;
+    }
+    const workout = t.program_workouts.get(row.program_workout_id as string);
+    return workout ? this.programOwner('program_workouts', workout as unknown as Record<string, unknown>) : undefined;
+  }
+
+  /**
+   * One page of a program table (B34), like the real author-only security rules: only rows of
+   * programs `userId` wrote come back, in (updated_at, id) order after the bookmark.
+   */
+  async pullProgramRows<T extends ProgramTable>(
+    tbl: T,
+    userId: string,
+    after: PullCursor | null,
+    limit: number,
+  ): Promise<RowByTable[T][]> {
+    this.guard();
+    return this.page(tbl, after, limit, (row) => this.programOwner(tbl, row as unknown as Record<string, unknown>) === userId);
+  }
+
+  private page<T extends 'workouts' | 'exercises' | 'personal_records' | ProgramTable>(
     tbl: T,
     after: PullCursor | null,
     limit: number,

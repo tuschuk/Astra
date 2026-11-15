@@ -60,32 +60,21 @@ workout-notes (LOG-3), B11 supersets-dropsets-timed (LOG-11, LOG-12), B10 set-ty
 LOG-15), B09 logger-screen (LOG-2, NFR-2), B08 active-workout-store (NFR-3), B07
 local-store-and-sync (FND-3), B06 training-math, B05 auth-and-signup. Details in each plan file.
 
-**B34 program-builder** (planning now; branch name from the Build order is `program-builder`):
-`programs`, `program_weeks`, `program_workouts`, `program_exercises` tables with author-only RLS;
-builder UI enforcing week → workout → exercise with sets, reps and target load from library or
-custom exercises. Step DoD: a complete program authors and reopens intact. Covers PRG-1, PRG-2
-(both P1). Depends on B29. Standing inputs for its planner: **nothing program-shaped exists** —
-no tables, no device schema, no screens; this is the first Phase 2 step and the first new
-synced entity family since B07, so the planner must settle: (a) the server schema (four tables,
-author `user_id`, `visibility` left for B39 — ship private-only now with a column that B39
-widens, or add the column later; the planner records which), ordering columns (`position`), the
-target-load unit (kg, like `sets.weight_kg`, display through `useDisplayUnit`), optional
-targets (reps / load / RPE nullable), CHECK limits mirrored once in `@training-math`
-`limits.ts` (the B08/B12/B31 discipline); (b) whether programs are `SyncedTable`s through the
-outbox (offline-first says authoring must work with no signal, so yes — the pattern is B08's
-active-workout store plus B31's `writeLocal` upserts; device schema V12; `TABLE_COLUMNS` and
-`SYNC_ORDER` additions; deletes need the outbox delete op and probably a `sync_tombstones`
-channel widening if a program can be deleted — or soft delete, the B31 precedent, which the
-planner should weigh explicitly); (c) exercise references by device id (library uuidv5 or
-custom uuid — the B31 `ExercisePicker` already returns `{ deviceId, name }`), with the custom's
-soft-delete and the server `on delete` behaviour for `program_exercises.exercise_id` decided;
-(d) the builder UI's home — a Programs entry (Workout tab tile or You tab) → program list →
-program editor (weeks → workouts → exercises, reorder / remove, the B09 logger's
-`ExercisePicker`), kept to authoring and reopening (running a program is B35, visibility is
-B39, Marketplace is B40); (e) the Gate 2 probe: two simulated users in a rolled-back
-transaction — the other user reads / updates / deletes 0 rows (the B31 precedent). No new
-dependency expected; the ERD gains four tables; the flowchart gains the Programs branch and its
-outbox data path. Phase 2 features are P1: the pipeline continues in table order regardless.
+**B34 program-builder — BUILT on branch `program-builder`, awaiting Gate 2** (builder run,
+Nov 15). Migration `20261115193156_programs.sql` applied live (file renamed to the recorded
+version): four tables, author-only RLS via `private.owns_program` + `week_program` /
+`workout_week`, soft deletes, no `visibility` column (B39). The builder already ran the plan's
+§(e) probe (rolled back): user B reads / updates / deletes 0 rows in all four tables, B's inserts
+into A's tree are refused 42501, the CHECKs refuse RPE 11 / 0 sets / an empty name; security
+advisors show nothing new. Device V12 (four tables, **no local FKs** — a review-driven deviation
+so a child downloaded before its parent waits instead of failing the pull); `SYNC_ORDER` gains
+the program tables after `personal_records`; one transport method `pullProgramRows`; four
+standalone pulls after the analyses. `programs/programs.ts` is the one home of reads and writes;
+screens `app/programs.tsx`, `app/program/[id].tsx`, `app/program-workout/[id].tsx`, entered by the
+Workout tab's **Your programs**. Deviations and the review record are in the plan's "Build notes
+and deviations". Gate 2 to-do: rerun the check order, render both diagrams with `mmdc` (the builder
+couldn't), skim the diff, merge, flip B34 / PRG-1 / PRG-2. DEFERRED gained the B34 items
+(programs missing from `export-data`, device check list).
 
 **Dev server for Tristen's phone:** worktree `C:\Users\trist\Astra\Astra-main` on a detached HEAD
 (never `main` — see `docs/PIPELINE.md`), Expo dev server detached on port 8081 (`--lan`,
