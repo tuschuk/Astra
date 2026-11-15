@@ -17,9 +17,10 @@ Do CLAUDE.md workflow steps 4–7:
 
 4. **Code** — implement the plan, following CLAUDE.md rules and any folder-level CLAUDE.md.
 5. **Test** — Jest unit tests per the Testing rules; all relevant tests and lint must pass.
-   Known footgun: if `npx tsc --noEmit` fails only on `router.push` paths in route files you did
-   not touch, the gitignored `.expo/types/router.d.ts` is stale — run
-   `npx expo start --port 8099 --offline` for ~30 s (then stop it) to regenerate it and rerun tsc.
+   Known footgun: running Jest rewrites the gitignored `.expo/types/router.d.ts` with a stale
+   route list, so `npx tsc --noEmit` then fails on `router.push` paths in route files you did not
+   touch. Order your final checks as: `npx expo start --port 8099 --offline` for ~100 s (then stop
+   it) to regenerate the file → `npx tsc --noEmit` → `npx expo lint` → `npx jest`.
    Never commit failing tests — if you cannot get green, commit nothing and report why.
 6. **Review** — invoke the `mattpocock-skills:code-review` skill on the changes with the plan
    file as the originating spec; fix what it finds and re-run affected tests. If the skill is

@@ -115,8 +115,10 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - **Typed-routes root cause found:** running Jest rewrites the gitignored
     `.expo/types/router.d.ts` with a route list that lacks the auth routes and any new ones;
     `expo lint` doesn't touch it. Order for gates and builders: `npx expo start` (~100 s, not
-    30 — 40 s was not enough this run) → `tsc --noEmit` → lint → Jest. Worth folding into the
-    builder prompt / `docs/PIPELINE.md`, or making tsc not depend on the generated file.
+    30 — 40 s was not enough this run) → `tsc --noEmit` → lint → Jest. **Folded into the builder
+    prompt at B09's Gate 2** (Nov 14, 2026); Gate 2 follows the same order. Still open: making
+    tsc not depend on the generated file at all (e.g. a committed route-type stub or a
+    `typecheck` script that regenerates first).
   - **Device check (Tristen):** the whole P0 logging path is now on screen — airplane-mode log
     of a multi-exercise workout, force-kill mid-workout and relaunch (Workout tab offers
     Resume), Finish → saved workout, reconnect → appears once in Supabase. None of the screens
