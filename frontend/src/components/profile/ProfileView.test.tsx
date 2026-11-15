@@ -32,10 +32,11 @@ jest.mock('@/lib/supabase', () => ({
   getSupabase: () => mockSocial.client,
 }));
 
+const mockPush = jest.fn();
 jest.mock('expo-router', () => {
   const { useEffect } = jest.requireActual<typeof import('react')>('react');
   return {
-    useRouter: () => ({ push: jest.fn() }),
+    useRouter: () => ({ push: mockPush }),
     useFocusEffect: (effect: () => void) => useEffect(effect, [effect]),
   };
 });
@@ -130,5 +131,24 @@ describe('ProfileView', () => {
     await renderSignedIn(<ProfileView profileId="pat" />);
     await fireEvent.press(await screen.findByLabelText('Show personal records'));
     expect(await screen.findByText('No PRs to show.')).toBeTruthy();
+  });
+});
+
+describe('ProfileView — Teams (B36, YOU-6)', () => {
+  it('lists the lifter’s teams as links to the team pages', async () => {
+    mockSocial.tables.teams.push({ id: 't', name: 'Iron Tribe', join_mode: 'open', created_by: 'pat' });
+    mockSocial.tables.team_members.push({ team_id: 't', user_id: 'pat', role: 'owner', joined_at: '2026-11-15T10:00:00.000Z' });
+    await renderSignedIn(<ProfileView profileId="pat" />);
+    expect(await screen.findByText('Iron Tribe')).toBeTruthy();
+    // Someone else's role isn't shown — just how the team lets people in.
+    expect(screen.getByText('Open')).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Open team Iron Tribe'));
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/team/[id]', params: { id: 't' } });
+  });
+
+  it('a lifter whose teams the server withholds (or who has none) shows no Teams section', async () => {
+    await renderSignedIn(<ProfileView profileId="pat" />);
+    await screen.findByText('Pat session');
+    expect(screen.queryByText('Teams')).toBeNull();
   });
 });

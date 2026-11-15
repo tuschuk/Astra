@@ -441,3 +441,29 @@ describe('Home feed — order and flair (B24)', () => {
     expect(feedReads()[0][0]).toEqual(['from', 'posts']);
   });
 });
+
+describe('Home — Your teams (B36: TEAM-2, SOC-10)', () => {
+  const team = (id: string, name: string) => ({ id, name, join_mode: 'open', created_by: 'friend', created_at: '2026-11-15T10:00:00.000Z' });
+
+  it('shows a chip per team that opens its page (the Team feed), and an invite chip to Communities', async () => {
+    mockSocial = createFakeSocialClient({
+      teams: [team('t1', 'Dawn Patrol'), team('t2', 'Iron Circle')],
+      team_members: [{ team_id: 't1', user_id: ME, role: 'member', joined_at: '2026-11-15T11:00:00.000Z' }],
+      team_invites: [{ team_id: 't2', user_id: ME }],
+    });
+    await renderSignedIn(<HomeScreen />);
+    await fireEvent.press(await screen.findByLabelText('Open team Dawn Patrol'));
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/team/[id]', params: { id: 't1' } });
+    await fireEvent.press(screen.getByLabelText('1 team invite'));
+    expect(mockPush).toHaveBeenCalledWith('/communities');
+  });
+
+  it('no teams and no invites → no team row at all', async () => {
+    mockSocial = createFakeSocialClient({
+      posts: [rawPost({ id: 'mine', author: me, createdAt: '2026-11-15T10:00:00.000Z', title: 'My session' })],
+    });
+    await renderSignedIn(<HomeScreen />);
+    await screen.findByText('My session');
+    expect(screen.queryByText('Your teams')).toBeNull();
+  });
+});

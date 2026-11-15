@@ -21,6 +21,13 @@
  * viewer's own followers (a re-share card shows the original inside it); on the lifter's own
  * workout cards, Share opens the image share card for the phone's share sheet.
  *
+ * Your teams (B36, TEAM-2 / SOC-10): when the lifter is in any team or holds a team invite, a
+ * "Your teams" row sits under the feed controls — one chip per team, opening that team's page
+ * and its Team feed, and an "N team invites" chip that opens Communities. Read from the server
+ * each time Home comes into view; with no teams, no invites, or no connection the row is simply
+ * absent and the feed is unaffected. The card buttons' wiring is shared with the profile and team
+ * feeds (`usePostListActions`).
+ *
  * Order and flair (B24): under "Your feed", Latest | Hot picks newest first or the server's
  * vote ranking (SOC-11), and a row of flair chips — All plus one per flair on the phone — shows
  * only posts of that flair (SOC-9). Both are remembered on this phone for this account
@@ -46,6 +53,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useAuth } from '@/auth/AuthProvider';
 import { Screen } from '@/components/Screen';
 import { PostCard } from '@/components/social/PostCard';
+import { usePostListActions } from '@/components/social/usePostListActions';
 import { usePostPhotoSource } from '@/components/social/usePostPhotoSource';
 import { Button } from '@/components/ui/Button';
 import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
@@ -57,10 +65,8 @@ import { useAppDatabase } from '@/db/useAppDatabase';
 import { getSupabase } from '@/lib/supabase';
 import { appendPage, feedAuthorIds, loadFeedPage, type FeedCursor, type FeedPost } from '@/social/feed';
 import { getCachedFeedPrefs, loadFeedPrefs, saveFeedPrefs, type FeedPrefs, type FeedSort } from '@/social/feedPrefs';
-import { reportPost as fileReport, type ReportReason, type ReportResult } from '@/social/moderation';
-import { setPostVisibility, visibilityTargetOf, withPostVisibility, type PostVisibilityResult } from '@/social/postPrivacy';
-import { resharePost, type ReshareResult } from '@/social/reshare';
-import { castVote, clearVote, type VoteResult, type VoteValue } from '@/social/votes';
+import { withPostVisibility } from '@/social/postPrivacy';
+import { loadTeamsOf, myInvites, type TeamMembership } from '@/social/teams';
 import { colors, spacing } from '@/theme';
 
 /**
@@ -240,71 +246,38 @@ export default function HomeScreen() {
     }
   }
 
-  /** A card's vote (B23): +1 / −1 is cast, null takes the viewer's vote back. */
-  const vote = useCallback(
-    (postId: string, value: VoteValue | null): Promise<VoteResult> => {
-      if (!me) return Promise.resolve({ ok: false, reason: 'failed' });
-      return value === null ? clearVote(client, me, postId) : castVote(client, me, postId, value);
-    },
-    [client, me],
-  );
-
   /**
-   * Another lifter's card's ⋯ → report (B27): files the report for the founder's queue. A block
-   * or mute needs no wiring here — it is made from a profile, and the next feed load simply lacks
-   * those rows (the server's security rules drop them).
+   * Every card button's wiring (B23–B28), shared with the profile and team feeds
+   * (`usePostListActions`). After a privacy change the feed's own list is updated, so a card
+   * rebuilt after scrolling shows the new audience; the post stays on the lifter's own feed
+   * whatever they pick. A block or mute needs no wiring here — it is made from a profile, and the
+   * next feed load simply lacks those rows. A re-share shows on the next load.
    */
-  const reportPost = useCallback(
-    (postId: string, reason: ReportReason, details: string): Promise<ReportResult> =>
-      fileReport(client, me, postId, reason, details),
-    [client, me],
+  const onVisibilityChanged = useCallback(
+    (postId: string, next: WorkoutVisibility) =>
+      setState((prev) => (prev.status === 'ready' ? { ...prev, posts: withPostVisibility(prev.posts, postId, next) } : prev)),
+    [],
   );
+  const actions = usePostListActions({ client, db, me, onVisibilityChanged });
 
-  /**
-   * An own card's "who can see this" choice (B26): changes the post on the server (its workout
-   * follows there) and the phone's copies, then the feed's own list, so a card rebuilt after
-   * scrolling shows the new audience. The post stays on the lifter's own feed whatever they
-   * pick — an owner always sees their own posts — so nothing vanishes in front of them.
-   */
-  const changeVisibility = useCallback(
-    async (post: FeedPost, next: WorkoutVisibility): Promise<PostVisibilityResult> => {
-      if (!me) return { ok: false, reason: 'failed' };
-      const result = await setPostVisibility(client, db, me, visibilityTargetOf(post), next);
-      if (result.ok) {
-        setState((prev) => (prev.status === 'ready' ? { ...prev, posts: withPostVisibility(prev.posts, post.id, next) } : prev));
-      }
-      return result;
-    },
-    [client, db, me],
-  );
-
-  /**
-   * Another lifter's card's Re-share (B28): one new re-share post on the server, straight away
-   * (online-only, like votes). It shows on this feed — and the viewer's followers' — on the next
-   * load, which happens the next time Home comes into view or on a pull.
-   */
-  const reshare = useCallback(
-    (post: FeedPost): Promise<ReshareResult> =>
-      me ? resharePost(client, me, post) : Promise.resolve({ ok: false, reason: 'failed' }),
-    [client, me],
-  );
-
-  /** An own workout card's Share (B28): the image share card for that workout. */
-  const shareWorkout = useCallback(
-    (workoutId: string) => router.push({ pathname: '/share-card/[id]', params: { id: workoutId } }),
-    [router],
-  );
-
-  /** A card's comments button (B23): the post's comments screen. */
-  const openComments = useCallback(
-    (postId: string) => router.push({ pathname: '/post-comments/[id]', params: { id: postId } }),
-    [router],
-  );
-
-  /** A card's author header (B25): that lifter's profile. */
-  const openProfile = useCallback(
-    (userId: string) => router.push({ pathname: '/profile/[id]', params: { id: userId } }),
-    [router],
+  // B36 (TEAM-2, SOC-10): the lifter's teams and pending invites, as chips above the feed.
+  const [teamRow, setTeamRow] = useState<{ teams: TeamMembership[]; invites: number } | null>(null);
+  useFocusEffect(
+    useCallback(() => {
+      if (!me) return;
+      let cancelled = false;
+      Promise.all([loadTeamsOf(client, me), myInvites(client, me)])
+        .then(([teams, invites]) => {
+          if (!cancelled) setTeamRow({ teams, invites: invites.length });
+        })
+        .catch((error: unknown) => {
+          // The feed below shows its own connection message; the chip row just stays away.
+          console.warn('Home: teams could not be loaded', error);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [client, me]),
   );
 
   const header = (
@@ -334,6 +307,30 @@ export default function HomeScreen() {
               selected={flairId ?? ALL_FLAIRS}
               onSelect={(value) => choose({ ...prefs, flairId: value === ALL_FLAIRS ? null : value })}
             />
+          </ScrollView>
+        </View>
+      ) : null}
+      {/* B36: one chip per team → its page (and the Team feed); an invite chip → Communities. */}
+      {teamRow && (teamRow.teams.length > 0 || teamRow.invites > 0) ? (
+        <View style={styles.teams}>
+          <SectionLabel size="small">Your teams</SectionLabel>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.teamRow}>
+            {teamRow.teams.map(({ team }) => (
+              <Button
+                key={team.id}
+                label={team.name}
+                variant="ghost"
+                accessibilityLabel={`Open team ${team.name}`}
+                onPress={() => router.push({ pathname: '/team/[id]', params: { id: team.id } })}
+              />
+            ))}
+            {teamRow.invites > 0 ? (
+              <Button
+                label={teamRow.invites === 1 ? '1 team invite' : `${teamRow.invites} team invites`}
+                variant="outline"
+                onPress={() => router.push('/communities')}
+              />
+            ) : null}
           </ScrollView>
         </View>
       ) : null}
@@ -417,13 +414,13 @@ export default function HomeScreen() {
             post={item}
             viewerId={me}
             photoSource={photoSource}
-            onVote={vote}
-            onChangeVisibility={changeVisibility}
-            onOpenComments={openComments}
-            onOpenProfile={openProfile}
-            onReport={reportPost}
-            onReshare={reshare}
-            onShareWorkout={shareWorkout}
+            onVote={actions.vote}
+            onChangeVisibility={actions.changeVisibility}
+            onOpenComments={actions.openComments}
+            onOpenProfile={actions.openProfile}
+            onReport={actions.reportPost}
+            onReshare={actions.reshare}
+            onShareWorkout={actions.shareWorkout}
           />
         )}
         ListHeaderComponent={header}
@@ -462,6 +459,14 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   flairRow: {
+    paddingRight: spacing.md,
+  },
+  teams: {
+    marginTop: spacing.md,
+    gap: spacing.xs,
+  },
+  teamRow: {
+    gap: spacing.sm,
     paddingRight: spacing.md,
   },
   footer: {

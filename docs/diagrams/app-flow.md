@@ -104,7 +104,24 @@ flowchart TD
   StartSess --> StartWO
   StartSess --> MutWO
   StartSess -->|"opens on the prefilled session"| Logger
-  Tabs --> Communities["Communities<br/>Teams and Gyms<br/>today: two sections, each an empty state"]
+  Tabs --> Communities["Communities (app/(tabs)/communities.tsx, B36: TEAM-1)<br/>Teams: Invites (Join / Decline) · Your teams (TeamListItem → team page) ·<br/>Create a team · Find teams (searchTeams, debounced; Join on rows I can join now);<br/>offline → TEAMS_OFFLINE + Retry; reloads on focus<br/>Gyms: still a placeholder card (B50)"]
+  Communities -->|"Create a team: router.push('/team/new')"| NewTeamScr["New team (app/team/new.tsx, B36)<br/>name 1–80 via assertValidTeamName (says when too long);<br/>Create team → createTeam → router.replace team/[id]; Back"]
+  Communities -->|"tap a team: router.push('/team/[id]')"| TeamScr["Team page (app/team/[id]/index.tsx, B36: TEAM-1, TEAM-2)<br/>name + mode; Join team / 'You're invited — Join' / closed line / Leave team (not the owner);<br/>owner only: Who can join chips (Open | Invite only → setJoinMode) + Invite lifters;<br/>Members (tap → profile) and Team feed (PostCards, 20 a page, pull to refresh)<br/>— both only for members or open teams; missing → 'isn't available'; offline → Retry"]
+  NewTeamScr --> TeamScr
+  Home -->|"Your teams chip (B36, SOC-10): router.push('/team/[id]');<br/>'N team invites' chip → Communities"| TeamScr
+  ProfileView -->|"Teams section row (B36, YOU-6): router.push('/team/[id]')"| TeamScr
+  TeamScr -->|"Invite lifters (owner): router.push('/team/[id]/invite')"| InviteScr["Invite lifters (app/team/[id]/invite.tsx, B36)<br/>owner only (else 'Only the team's owner…'); searchLifters (debounced);<br/>per row Invite / Invited (tap cancels) or 'Member'"]
+  TeamScr -->|"Team feed: loadFeedPage(client, me, roster ids, 'latest', null, after)"| FeedQ
+  TeamScr -->|"card buttons via usePostListActions (same as Home / profile)"| PostActions["usePostListActions (components/social, B36)<br/>vote · report · change own post's audience · re-share ·<br/>Share card · open comments · open profile"]
+  Home --> PostActions
+  ProfileView --> PostActions
+  Communities --> TeamsMod
+  NewTeamScr --> TeamsMod
+  TeamScr --> TeamsMod
+  InviteScr --> TeamsMod
+  Home -->|"on focus: loadTeamsOf(me) + myInvites(me)"| TeamsMod
+  ProfileView -->|"on focus: loadTeamsOf(profileId)"| TeamsMod
+  TeamsMod["social/teams.ts (B36) — online only, never mirrored<br/>createTeam · loadTeamsOf · loadTeam · loadTeamMembers · searchTeams ·<br/>joinTeam · leaveTeam · setJoinMode · myInvites · teamInvitees ·<br/>inviteToTeam · removeInvite; 42501 → calm sentence"] -->|"select / insert / update / delete teams, team_members, team_invites (RLS decides)"| DB
   Tabs --> Library["Library<br/>browse every launch exercise as a card"]
   Tabs -->|profile button| You["You (app/(tabs)/you.tsx, B25: YOU-1/2/3)<br/>ProfileView for me + gear button → Settings"]
   You --> ProfileView
@@ -390,7 +407,7 @@ flowchart TD
   MathMod -->|"epleyE1rm, weightForReps, workingWeightFromRpe, percentOfOneRm,<br/>workingWeightFromPercent, loadBar, lbToKg / kgToLb, roundToIncrement, displayWeight (B16)"| ToolKit
   MathMod -.->|"not wired yet: session volume display"| Workout
 
-  class Market,Communities scaffold
+  class Market scaffold
   class Seed,Catalog,DB,Store,LocalDB,RackStore data
 ```
 
@@ -648,8 +665,19 @@ flowchart TD
    program is edited mid-run, the tab offers whatever session now stands at the run's place;
    if the rest of it was deleted, it says there is no next session. The run syncs, so another
    phone of the lifter's shows the same next session.
-25. Everything else is a placeholder that renders its final layout with inert controls
-   (Marketplace, Communities).
+25. **Teams (B36, TEAM-1, TEAM-2, SOC-10 and YOU-6 Teams parts) — needs a connection.**
+   Communities → **Create a team** → a name (1–80 characters) → the new team's page; you are its
+   **owner** and it starts **open**. Anyone can find it under **Find teams** and tap **Join**. On
+   the team page the owner's **Who can join** switch makes it **Invite only**: then only lifters
+   the owner invited (**Invite lifters** → search → **Invite**) can join — they see the invite on
+   Communities and as an "N team invites" chip on Home, and **Join** (the invite is used up) or
+   **Decline**. Only the owner sees the switch and the server refuses anyone else. Members can
+   **Leave**; the owner can't. The page lists the members and the **Team feed** — the members'
+   posts as the usual cards, showing only what you could see anyway. An invite-only team you
+   aren't in shows just its name. Home shows a **Your teams** chip per team (→ its page), and
+   every profile has a **Teams** section of the lifter's teams you may see.
+26. Everything else is a placeholder that renders its final layout with inert controls
+   (Marketplace, and the Gyms half of Communities).
 
 ## Data path today
 
@@ -978,7 +1006,17 @@ flowchart TD
   change), Avatar (B25: the public-bucket photo, else LetterAvatar — the initial badge),
   and `usePostPhotoSource` (B25: the viewer-token photo fetch Home and profiles share).
 - `components/profile/ProfileView.tsx` (B25) is the whole profile body, used by the You tab and
-  `profile/[id]`.
+  `profile/[id]`; since B36 it shows the lifter's Teams section.
+- `components/social/usePostListActions.ts` (B36) is the one wiring of a post card's buttons
+  (vote, report, audience chip, re-share, Share card, comments, author) — Home, ProfileView and the
+  team page all use it.
+- `components/teams/TeamListItem.tsx` (B36) is one team row (name, "Open" / "Invite only", an
+  optional role, optional Join / Decline buttons) for Communities and the profile.
+- **Teams** (B36): `social/teams.ts` is the one home of team reads and writes — online only, like
+  votes; teams are never stored on the phone, so no device table, outbox or sync change. Every
+  rule (who may join, switch, invite, leave, see a roster) is the server's RLS; the module maps
+  refusals to sentences and retries "am I already a member?" after a refused join (a double tap on
+  an invite-only team). The Team feed is `loadFeedPage` with the roster's ids.
 - `components/auth/` holds SignInForm, SignUpForm, BirthdateInput and their shared layout styles.
   The route files in `app/(auth)/` only wire them to the router.
 - `components/workout/` holds EntryCard (one exercise in the logger), ExercisePicker (the

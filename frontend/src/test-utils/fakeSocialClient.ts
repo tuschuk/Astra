@@ -43,6 +43,16 @@
  * `posts` by id. The server's re-share trigger (chains, self re-shares, the flair stamp) and the
  * read rule that hides a re-share whose original you can't see are not imitated — probed live.
  *
+ * B36 adds `teams`, `team_members` and `team_invites`, and the server pieces the Teams screens
+ * lean on: a team insert gets a server id, `join_mode` 'open' and its owner's membership row (the
+ * creation trigger) and answers `.select(…).single()`; a member insert into an invite-only team
+ * without an invite is refused 42501 (the join policy), a repeat join or invite is 23505, and a
+ * join uses the invite up (the consume trigger); an owner's own membership row can't be deleted
+ * (the leave policy — silently, like RLS); `.delete(…).select(…)` answers with the removed rows.
+ * Reads nest `team:teams(…)` on memberships and invites, and `profile:profiles…(…)` on
+ * memberships. Owner-only rights (the mode switch, inviting) and roster visibility are NOT
+ * imitated — the fake has no signed-in identity; those were probed live (rolled back) at B36.
+ *
  * What it does NOT do: row-level security or general embedding. Posts are seeded already shaped
  * the way the server's embed returns them (author, flair and workout nested in), and the follow
  * insert imitates the one RLS refusal the app handles (a block in either direction). Server-side
@@ -79,6 +89,12 @@ export interface FakeSocialTables {
   mutes: Row[];
   /** Report rows as the app inserts them: `{ reporter_id, target_kind, target_id, reason, details }` (B27). */
   reports: Row[];
+  /** Team rows: `{ id, name, join_mode, created_by, created_at }` (B36). */
+  teams: Row[];
+  /** Membership rows: `{ team_id, user_id, role, joined_at }` (B36). */
+  team_members: Row[];
+  /** Invite rows: `{ team_id, user_id }` (B36). */
+  team_invites: Row[];
 }
 
 /** What a request can name: the tables, plus the computed `post_scores` and (B24) `post_hot_scores` views. */
@@ -198,10 +214,30 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     personal_records: [...(seed.personal_records ?? [])],
     mutes: [...(seed.mutes ?? [])],
     reports: [...(seed.reports ?? [])],
+    teams: [...(seed.teams ?? [])],
+    team_members: [...(seed.team_members ?? [])],
+    team_invites: [...(seed.team_invites ?? [])],
   };
   const requests: FakeCall[][] = [];
   let offline = options.offline ?? false;
   let commentCounter = 0;
+  let teamCounter = 0;
+
+  /**
+   * (B36) PostgREST's embeds on the team tables, for the two the app asks for: a membership or
+   * invite row's `team:teams(…)`, and a membership row's `profile:profiles…(…)`.
+   */
+  function withTeamEmbeds(table: FakeSource, row: Row, select: unknown): Row {
+    if (typeof select !== 'string') return row;
+    const out: Row = { ...row };
+    if ((table === 'team_members' || table === 'team_invites') && select.includes('team:teams(')) {
+      out.team = tables.teams.find((t) => t.id === row.team_id) ?? null;
+    }
+    if (table === 'team_members' && select.includes('profile:profiles')) {
+      out.profile = tables.profiles.find((p) => p.id === row.user_id) ?? null;
+    }
+    return out;
+  }
 
   /** The `post_scores` view, computed now: every post's net score and comment count. */
   function postScores(): Row[] {
@@ -373,11 +409,42 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
           return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } };
         }
       }
+      if (table === 'teams') {
+        // B36: the server's defaults, then the creation trigger's owner row.
+        teamCounter += 1;
+        const team: Row = {
+          id: `team-${teamCounter}`,
+          join_mode: 'open',
+          created_at: new Date(Date.UTC(2026, 10, 15, 21, 0, teamCounter)).toISOString(),
+          ...row,
+        };
+        rows.push(team);
+        tables.team_members.push({ team_id: team.id, user_id: team.created_by, role: 'owner', joined_at: team.created_at });
+        return { data: single ? team : null, error: null };
+      }
+      if (table === 'team_members') {
+        // B36: the join policy (open, or invited; members only) and the primary key.
+        const team = tables.teams.find((t) => t.id === row.team_id);
+        const invited = tables.team_invites.some((i) => i.team_id === row.team_id && i.user_id === row.user_id);
+        const role = row.role ?? 'member';
+        if (!team || role !== 'member' || (team.join_mode !== 'open' && !invited)) {
+          return { data: null, error: { code: '42501', message: 'new row violates row-level security policy for table "team_members"' } };
+        }
+        if (rows.some((x) => x.team_id === row.team_id && x.user_id === row.user_id)) {
+          return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "team_members_pkey"' } };
+        }
+        teamCounter += 1;
+        rows.push({ role, joined_at: new Date(Date.UTC(2026, 10, 15, 22, 0, teamCounter)).toISOString(), ...row });
+        // The consume trigger: joining uses the invite up.
+        tables.team_invites = tables.team_invites.filter((i) => !(i.team_id === row.team_id && i.user_id === row.user_id));
+        return { data: null, error: null };
+      }
       // B27: each table's primary / unique key, refused with Postgres's 23505 like the server.
       const uniqueKeys: Partial<Record<FakeSource, string[]>> = {
         blocks: ['blocker_id', 'blocked_id'],
         mutes: ['muter_id', 'muted_id'],
         reports: ['reporter_id', 'target_kind', 'target_id'],
+        team_invites: ['team_id', 'user_id'],
       };
       const key = uniqueKeys[table];
       if (key && rows.some((x) => key.every((k) => x[k] === row[k]))) {
@@ -408,8 +475,12 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     }
     if (isDelete) {
       if (table === 'post_hot_scores') throw new Error('fake: a view cannot be deleted from');
-      tables[table] = rows.filter((r) => !matching.includes(r));
-      return { data: null, error: null };
+      // B36: the leave policy never lets an owner's own row go — silently, as RLS does.
+      const removed = table === 'team_members' ? matching.filter((r) => r.role !== 'owner') : matching;
+      tables[table] = rows.filter((r) => !removed.includes(r));
+      // `.delete(…).select(…)` (B36) answers with the removed rows.
+      const returning = calls.some(([m]) => m === 'select');
+      return { data: returning ? removed : null, error: null };
     }
     const sorted = [...matching].sort((x, y) => {
       for (const { column, ascending } of orders) {
@@ -430,6 +501,10 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       });
     }
     if (table === 'comments') out = out.map(withAuthor);
+    if (table === 'team_members' || table === 'team_invites') {
+      const select = calls.find(([m]) => m === 'select')?.[1];
+      out = out.map((r) => withTeamEmbeds(table, r, select));
+    }
     return { data: out, error: null };
   }
 

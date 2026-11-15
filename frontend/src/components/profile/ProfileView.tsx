@@ -10,6 +10,10 @@
  *     they equal the real number of follows;
  *   - on your own profile, **Edit profile**; on someone else's, **Follow / Following** — after a
  *     follow or unfollow the counts are read again, so the number always matches the button;
+ *   - (B36, YOU-6) a **Teams** section — the lifter's teams as rows ("Open" / "Invite only", and
+ *     on your own profile your role), each opening that team's page. The server decides which of
+ *     someone else's teams you see: their open teams, and invite-only teams you share. No teams
+ *     to show → no section;
  *   - three tabs: **Posts** (their posts as feed cards, newest first, twenty at a time — the server
  *     decides which ones the viewer may see), **History** (every finished workout, newest first,
  *     paging back to the very first one), and **PRs** (current records per exercise, e.g.
@@ -45,7 +49,9 @@ import { Screen } from '@/components/Screen';
 import { Avatar } from '@/components/social/Avatar';
 import { FollowButton } from '@/components/social/FollowButton';
 import { PostCard, UNNAMED_EXERCISE } from '@/components/social/PostCard';
+import { usePostListActions } from '@/components/social/usePostListActions';
 import { usePostPhotoSource } from '@/components/social/usePostPhotoSource';
+import { TeamListItem } from '@/components/teams/TeamListItem';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
@@ -62,17 +68,14 @@ import {
   blockUser,
   muteUser,
   relationTo,
-  reportPost as fileReport,
   unblockUser,
   unmuteUser,
   type Relation,
-  type ReportReason,
-  type ReportResult,
   type SafetyResult,
 } from '@/social/moderation';
 import { personLabels } from '@/social/names';
 import { getCachedOwnProfile, loadOwnProfile, saveOwnProfile, type OwnProfileIdentity } from '@/social/ownProfileCache';
-import { setPostVisibility, visibilityTargetOf, withPostVisibility, type PostVisibilityResult } from '@/social/postPrivacy';
+import { withPostVisibility } from '@/social/postPrivacy';
 import {
   loadProfileHeader,
   loadProfilePrs,
@@ -82,8 +85,7 @@ import {
   type ProfileHeader,
   type ProfileWorkout,
 } from '@/social/profile';
-import { resharePost, type ReshareResult } from '@/social/reshare';
-import { castVote, clearVote, type VoteResult, type VoteValue } from '@/social/votes';
+import { loadTeamsOf, type TeamMembership } from '@/social/teams';
 import { formatPrLine, workoutDateLabel, workoutDetailsLabel } from '@/workout/format';
 import { listPastWorkouts, type PastWorkoutSummary } from '@/workout/history';
 import { allCurrentPrs } from '@/workout/prs';
@@ -183,8 +185,11 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
   const relation = relationState?.forId === profileId ? relationState.value : null;
   const [safetyBusy, setSafetyBusy] = useState(false);
   const [safetyMessage, setSafetyMessage] = useState<string | null>(null);
+  // (B36) The lifter's teams, tagged with whose they are.
+  const [teamsState, setTeams] = useState<{ forId: string; value: TeamMembership[] } | null>(null);
+  const teams = teamsState?.forId === profileId ? teamsState.value : [];
   // Each reload gets a number per list; an answer that lands after a newer reload is dropped.
-  const generation = useRef({ header: 0, posts: 0, history: 0, prs: 0, relation: 0 });
+  const generation = useRef({ header: 0, posts: 0, history: 0, prs: 0, relation: 0, teams: 0 });
   const pageInFlight = useRef(false);
 
   useEffect(() => {
@@ -314,12 +319,30 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
     [loadPosts, loadHistory, loadPrs],
   );
 
+  /**
+   * (B36, YOU-6) The teams this lifter is in, for the Teams section. The server returns what the
+   * viewer may see: all of your own; of someone else's, their open teams and invite-only teams
+   * you share. A failed read just leaves the section away (the header shows the connection line).
+   */
+  const loadTeams = useCallback(async () => {
+    if (!me) return;
+    const mine = ++generation.current.teams;
+    try {
+      const memberships = await loadTeamsOf(client, profileId);
+      if (mine === generation.current.teams) setTeams({ forId: profileId, value: memberships });
+    } catch (error: unknown) {
+      if (mine !== generation.current.teams) return;
+      console.warn('Profile: teams could not be loaded', error);
+    }
+  }, [client, me, profileId]);
+
   // Fresh every time the profile comes into view (first open, back from Edit profile or a workout).
   useFocusEffect(
     useCallback(() => {
       void loadHeader();
       void loadRelation();
-    }, [loadHeader, loadRelation]),
+      void loadTeams();
+    }, [loadHeader, loadRelation, loadTeams]),
   );
   useFocusEffect(
     useCallback(() => {
@@ -379,45 +402,17 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
     }
   }
 
-  /** A post card's vote (B23): +1 / −1 is cast, null takes the viewer's vote back. */
-  const vote = useCallback(
-    (postId: string, value: VoteValue | null): Promise<VoteResult> => {
-      if (!me) return Promise.resolve({ ok: false, reason: 'failed' });
-      return value === null ? clearVote(client, me, postId) : castVote(client, me, postId, value);
-    },
-    [client, me],
-  );
-
   /**
-   * An own post card's "who can see this" choice (B26): the server post (and its workout, moved
-   * by the server) plus the phone's copies, then the Posts tab's own list, so a card rebuilt
-   * after scrolling shows the new audience. Only the lifter's own cards offer it.
+   * Every post card button's wiring (B23–B28), shared with Home and the team feed
+   * (`usePostListActions`). After an own card's privacy change the Posts tab's list is updated,
+   * so a card rebuilt after scrolling shows the new audience.
    */
-  const changeVisibility = useCallback(
-    async (post: FeedPost, next: WorkoutVisibility): Promise<PostVisibilityResult> => {
-      if (!me) return { ok: false, reason: 'failed' };
-      const result = await setPostVisibility(client, db, me, visibilityTargetOf(post), next);
-      if (result.ok) {
-        setPosts((prev) => (prev.status === 'ready' ? { ...prev, items: withPostVisibility(prev.items, post.id, next) } : prev));
-      }
-      return result;
-    },
-    [client, db, me],
+  const onVisibilityChanged = useCallback(
+    (postId: string, next: WorkoutVisibility) =>
+      setPosts((prev) => (prev.status === 'ready' ? { ...prev, items: withPostVisibility(prev.items, postId, next) } : prev)),
+    [],
   );
-
-  /** Another lifter's post card's Re-share (B28): sent straight to the server, like a vote. */
-  const reshare = useCallback(
-    (post: FeedPost): Promise<ReshareResult> =>
-      me ? resharePost(client, me, post) : Promise.resolve({ ok: false, reason: 'failed' }),
-    [client, me],
-  );
-
-  /** Another lifter's post card's ⋯ → report (B27). */
-  const reportPost = useCallback(
-    (postId: string, reason: ReportReason, details: string): Promise<ReportResult> =>
-      fileReport(client, me, postId, reason, details),
-    [client, me],
-  );
+  const actions = usePostListActions({ client, db, me, onVisibilityChanged });
 
   /**
    * (B27) Mute / unmute / block / unblock, then re-read everything — the server's security rules
@@ -551,6 +546,20 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
         </View>
       ) : null}
 
+      {teams.length > 0 ? (
+        <View style={styles.teams}>
+          <SectionLabel>Teams</SectionLabel>
+          {teams.map(({ team, role }) => (
+            <TeamListItem
+              key={team.id}
+              team={team}
+              role={own ? role : null}
+              onPress={() => router.push({ pathname: '/team/[id]', params: { id: team.id } })}
+            />
+          ))}
+        </View>
+      ) : null}
+
       <View style={styles.sections}>
         <ChoiceChips options={SECTION_OPTIONS} selected={section} onSelect={setSection} fill />
       </View>
@@ -625,12 +634,12 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
           post={item.post}
           viewerId={me}
           photoSource={photoSource}
-          onVote={vote}
-          onChangeVisibility={changeVisibility}
-          onReport={reportPost}
-          onReshare={reshare}
-          onShareWorkout={(workoutId) => router.push({ pathname: '/share-card/[id]', params: { id: workoutId } })}
-          onOpenComments={(postId) => router.push({ pathname: '/post-comments/[id]', params: { id: postId } })}
+          onVote={actions.vote}
+          onChangeVisibility={actions.changeVisibility}
+          onReport={actions.reportPost}
+          onReshare={actions.reshare}
+          onShareWorkout={actions.shareWorkout}
+          onOpenComments={actions.openComments}
         />
       );
     }
@@ -742,6 +751,10 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     alignItems: 'center',
     gap: spacing.xs,
+  },
+  teams: {
+    marginTop: spacing.xl,
+    gap: spacing.sm,
   },
   sections: {
     marginTop: spacing.xl,

@@ -45,6 +45,10 @@
  *   program_exercises.target_weight_kg numeric(6, 2) check (>= 0)                    → 0 ≤ w < 10000
  *   program_exercises.target_rpe       numeric(3, 1) check (between 1 and 10)        → 1 … 10
  *
+ * And the `teams` table (B36, `20261115212541_teams.sql`):
+ *
+ *   teams.name text not null check (char_length(name) between 1 and 80)    → 1 … 80 characters
+ *
  * The upper bounds come from the column types (a value bigger than the column holds is refused
  * just like a broken CHECK). Weight and RPE are checked after rounding to their column's
  * decimals — see `roundWeightKgForStorage` / `roundRpeForStorage`.
@@ -265,6 +269,23 @@ export function assertValidProgramTargets(fields: ProgramTargetsToCheck): void {
  */
 export function assertValidProgramPosition(position: number): void {
   assertWholeInRange(position, 0, MAX_SMALLINT, 'position');
+}
+
+/** Longest name of a team (`teams.name`, CHECK between 1 and 80). */
+export const MAX_TEAM_NAME_LENGTH = 80;
+
+/**
+ * Throws a `RangeError` unless `name` is a name the server will store for a team: 1 to 80
+ * characters, counted the server's way. Pass it already trimmed, so a name of only spaces is
+ * refused as empty. Teams are created online, so this mostly lets the create form say "too long"
+ * before the request instead of after a refusal (B36).
+ */
+export function assertValidTeamName(name: string): void {
+  const length = textLength(name);
+  if (length < 1) throw new RangeError('name must not be empty');
+  if (length > MAX_TEAM_NAME_LENGTH) {
+    throw new RangeError(`name must be at most ${MAX_TEAM_NAME_LENGTH} characters, got ${length}`);
+  }
 }
 
 /**
