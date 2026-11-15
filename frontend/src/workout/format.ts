@@ -2,7 +2,7 @@
  * Turning workout data into the short text the logger screens show, and turning what the
  * lifter typed back into numbers.
  *
- * Why this exists: the Workout tab, the logger and the saved-workout screen all print sets
+ * Why this exists: the Workout tab, the logger, the saved-workout screen and the feed all print sets
  * ("8 × 185 lb"), dates and durations the same way, and all read the reps / weight boxes the
  * same way. Keeping that here means one spelling everywhere and plain functions that are easy
  * to test. No weight math lives here: converting kg to the lifter's unit is `displayWeight`
@@ -63,7 +63,7 @@ export function formatDuration(seconds: number): string {
  *   - the score of a scored WOD: after " · " ("20:00 · 7 rounds + 12 reps"), or alone when it
  *     is all the set says ("7 rounds + 12 reps").
  * "—" when nothing at all was entered. Every screen that lists sets — the logger, the saved
- * workout, and the feed when it arrives — prints them through this one function.
+ * workout, and the Home feed's post cards (B20) — prints them through this one function.
  */
 export function formatSet(set: PrintableSet, unit: WeightUnit): string {
   const warmup = set.is_warmup ? 'W · ' : '';
@@ -226,6 +226,20 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 export function workoutDateLabel(startedAt: string): string {
   const d = new Date(startedAt);
   return `${WEEKDAYS[d.getDay()]}, ${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+}
+
+/**
+ * When a feed post was shared (B20), as its card says it: "Today", "Yesterday", or the date
+ * ("Sat, Nov 14, 2026") for anything older — all in the phone's own time zone, by calendar day
+ * rather than by 24-hour stretch. `now` is passed in by tests; screens leave it out.
+ */
+export function postDateLabel(createdAt: string, now: Date = new Date()): string {
+  const posted = new Date(createdAt);
+  const dayKey = (d: Date) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  if (dayKey(posted) === dayKey(now)) return 'Today';
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  if (dayKey(posted) === dayKey(yesterday)) return 'Yesterday';
+  return workoutDateLabel(createdAt);
 }
 
 /**

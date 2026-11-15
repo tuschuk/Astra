@@ -20,13 +20,9 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 
 import { TABLE_COLUMNS, type MirroredTable, type MirrorRowByTable, type RowByTable, type WorkoutAnalysisRow } from '@/db/dao';
 import { parseUnit } from '@/db/userSettings';
+import { throwIfError } from '@/lib/throwIfError';
 
 import type { PullCursor, SyncTransport, TombstoneRow } from './transport';
-
-/** Throws the request's error, if it had one, as a normal Error. */
-function throwIfError(error: { message: string } | null, what: string): void {
-  if (error) throw new Error(`${what}: ${error.message}`);
-}
 
 /**
  * The "after this bookmark" filter: a later timestamp, or the same timestamp

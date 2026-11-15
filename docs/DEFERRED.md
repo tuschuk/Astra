@@ -290,3 +290,26 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - **Flaky test seen:** `src/workout/useAutosaveText.test.ts` (saves once, with the final text,
     after typing settles) failed once in a full run, passed alone twice and in the next full
     run. Timing under load; untouched by B19. Worth making its timers deterministic.
+- B20 posts-and-feed follow-ups (`posts-and-feed`):
+  - **Device check (Tristen):** Home with no follows shows Find lifters + Log a workout; Find
+    lifters search, Follow / Following flip, Back → Home reloads; airplane mode → "The feed needs
+    a connection" + Retry. A feed with posts needs rows inserted by SQL until B21 (finish-to-post)
+    ships — e.g. as two test accounts: a `posts` row for one account's finished workout, the
+    other following it. Check card layout at phone width (header row with flair chip, long
+    names).
+  - **Live PostgREST not exercised by the builder:** the embed select (`FEED_SELECT`, incl.
+    `workouts!inner` and nested `exercise:exercises(name)`), the keyset `or()` filter and the
+    quoted / escaped `ilike` search filter are pinned by unit tests against the fake client and
+    the RLS was probed in SQL, but no request went through the real REST API with a user token.
+    Gate 2 or the device run should confirm a feed load and a search containing `_` / `%`.
+  - **Author in-list in the URL:** `.in('user_id', me + followees)` grows with the follow list;
+    switch to a server-side view only when a measured follow list makes the URL a problem (G10).
+  - **Custom exercises print as "Custom exercise"** on other lifters' cards (their customs are
+    hidden by exercises RLS). Widening exercises read to "visible when used in a workout I can
+    see" is a later decision.
+  - **Not built (later steps per the plan):** post creation / flair picker (B21), votes and
+    `upvotes_only` enforcement (B23), image posts (B22), profile counts and avatars (B25), tapping
+    a card through to the workout, realtime feed.
+  - Review judgement calls left: `beforeCursorFilter` mirrors sync's `afterCursorFilter` by hand
+    (different column and direction); kept as two small named functions.
+  - `mmdc` was not permitted for the headless builder; neither diagram was render-checked.
