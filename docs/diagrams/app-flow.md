@@ -236,7 +236,7 @@ flowchart TD
     History -->|Back| Logger
     Logger -->|Add exercise| Picker
     Picker -->|tap an exercise| Logger
-    Logger -->|"floating 'Tool Kit' button (always on screen): ONE tap"| ToolKit
+    Logger -->|"floating 'Tool Kit' button (always on screen): ONE tap<br/>→ openToolKit: prefill first (B43), then open; a failed read still opens"| TkPrefill
     ToolKit -->|"Close / system back: logger still mounted underneath, exactly as left"| Logger
     Logger -->|Finish| EmptyQ
     EmptyQ -->|"yes: 'Nothing logged yet'<br/>Discard workout / Keep lifting"| Logger
@@ -286,10 +286,15 @@ flowchart TD
     ToolKit --> PctC
     ToolKit --> PlateC
     OneRmC & RpeC & PctC & PlateC <-->|"restore on open / write as typed"| TkSession
+    TkPrefill["toolkit/prefill.ts (B43, TK-6) — logger opens only, never the tab tiles:<br/>focusedEntry = exercise of the newest logged set (else the last added);<br/>source = its newest set (warm-ups / drops too); 1RM = stored e1rm book, else epleyE1rm(set);<br/>seeds: 1RM ← weight + reps · RPE ← 1RM + rep chip + RPE chip (isChartRpe only)<br/>· %1RM ← 1RM (percent never) · Plates ← target in the RACK's unit; no 0s;<br/>applyToolKitPrefill: per calculator, once per (entry, set, values) — typed-over boxes survive a reopen"]
+    TkPrefill -->|"updateToolKitSession (only calculators whose prefill changed)"| TkSession
+    TkPrefill -->|"then setToolKitOpen(true)"| ToolKit
     OneRmC & RpeC & PctC & PlateC --> TkInputs
   end
   PlateC <-->|"toolkit/plateRack.ts: load (cached; damaged → defaults),<br/>save on every edit (fire-and-forget)"| RackStore[("kv-store key astra.toolkit.plateRack<br/>JSON v1: chosen unit (null = display unit) + one rack per unit;<br/>this phone only, not synced, not per account")]
   DispUnit -->|"unit (weight calculators; plate loader's first rack)"| ToolKit
+  LocalDB -->|"currentPrs(user, exercise): personal_records rows (device only, offline)"| TkPrefill
+  RackStore -->|"loadPlateRacks: racks.unit ?? display unit = the target's unit"| TkPrefill
   Logger -->|"Discard (asks first) / back"| Workout
   Saved -->|"Delete confirmed: router.replace"| Workout
   EditWO_UI -->|"Delete workout confirmed: router.replace"| Workout
@@ -439,6 +444,7 @@ flowchart TD
   MathMod -->|"displayWeight (format.ts) in the unit from useDisplayUnit"| Logger
   MathMod -->|"recordBooks, beatsRecord, roundToIncrement (B13)"| FinishWO
   MathMod -->|"recordBooks, roundToIncrement (B14)"| Recompute
+  MathMod -->|"displayWeight, epleyE1rm, isChartRpe (rpe.ts, B43; also guards percentOfOneRm),<br/>MAX_EPLEY_REPS, MIN/MAX_RPE_REPS"| TkPrefill
   MathMod -->|"epleyE1rm, weightForReps, workingWeightFromRpe, percentOfOneRm,<br/>workingWeightFromPercent, loadBar, lbToKg / kgToLb, roundToIncrement, displayWeight (B16)"| ToolKit
   MathMod -.->|"not wired yet: session volume display"| Workout
 
@@ -547,6 +553,12 @@ flowchart TD
    weight → what to put on each side, the total that loads, and whether it is exact, short (the
    rack can't make it) or under the bar; the rack (kg or lb plates, each unit its own) is edited
    right there and remembered on this phone. Typed numbers are remembered until the app restarts.
+   **Opened from the logger (B43, TK-6), the calculators arrive filled in** from the exercise in
+   progress — the one with the most recently logged set, or the one just added: 1RM gets that
+   set's weight and reps; RPE gets the lifter's stored best e1RM (or, with no record yet, the
+   set's own estimate) and chips on the set's reps and RPE; %1RM gets the same 1RM (the percent
+   is left to the lifter); Plates gets the set's weight in the rack's unit. Anything typed over a
+   filled-in number stays until something new is logged. Tab-tile opens are never prefilled.
 12. **Run a timer (B17, TK-5), with no signal needed.** The Tool Kit's **Timer** (also a Workout
    tab tile) is a gym wall clock: pick **Stopwatch** (counts up), **Countdown** (a rest timer —
    one-tap 0:30 … 5:00 presets or minutes + seconds), **EMOM** (an interval, default 1:00, for
@@ -881,6 +893,17 @@ flowchart TD
   logged and ignored, and an in-memory cache makes reopening instant. Limits there (≤ 20 per
   side, ≤ 12 sizes, plates and bar ≤ 100, target ≤ 2000, in the rack's unit) bound the solver's
   work.
+- **Tool Kit prefill (B43, TK-6).** The logger's floating button runs `openToolKit`
+  (`app/active-workout.tsx`): `toolkit/prefill.ts` `focusedEntry` picks the exercise from the
+  snapshot already on screen, then two device-only reads run together — `workout/prs.ts`
+  `currentPrs` (SQLite `personal_records`) and `toolkit/plateRack.ts` `loadPlateRacks` (for the
+  rack's unit) — and `buildToolKitPrefill` (pure) turns them into box text via `displayWeight`
+  (`epleyE1rm` as the 1RM fallback, `isChartRpe` gating the RPE chip). `applyToolKitPrefill`
+  writes each calculator into `toolkit/session.ts` only when its fingerprint (entry id, set id,
+  values) differs from the last one written, so typed-over values survive reopening while a
+  new or fixed set, a unit change or a new exercise refills just the calculators affected. Any
+  read failure is logged and the sheet opens unprefilled. The sheet and calculators were not
+  changed; the Workout tab tiles open exactly as before.
 - **Tool Kit timer (B17).** `components/toolkit/TimerScreen.tsx` only draws; the one timer lives
   in `toolkit/timerStore.ts`, a module-level store (read with `useSyncExternalStore`), so it
   keeps running while the Modal is closed. Its state is the per-mode set-up text plus a run of

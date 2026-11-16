@@ -22,7 +22,9 @@
  *   - **Discard**: after a confirmation, delete the workout from the phone;
  *   - **Tool Kit** (B16): the red button floating bottom-right — always on screen however far
  *     the list is scrolled — opens the calculators (1RM, RPE, %1RM, plates) in a panel over
- *     the logger. Closing it lands back on the logger exactly as it was.
+ *     the logger. It opens filled in from the exercise in progress — its last logged set and
+ *     the lifter's stored best e1RM (TK-6, B43) — and a number typed over a filled-in one
+ *     stays until something new is logged. Closing it lands back on the logger as it was.
  *
  * Everything is saved to the phone the moment it is done, so leaving this screen (or the app
  * being killed) loses nothing: the Workout tab offers Resume. Opened with nothing in progress
@@ -49,7 +51,10 @@ import { WorkoutDetailsFields } from '@/components/workout/WorkoutDetailsFields'
 import { useAppDatabase } from '@/db/useAppDatabase';
 import { useCustomExercises } from '@/library/useCustomExercises';
 import { useDisplayUnit } from '@/settings/displayUnit';
+import { loadPlateRacks } from '@/toolkit/plateRack';
+import { applyToolKitPrefill, buildToolKitPrefill, focusedEntry } from '@/toolkit/prefill';
 import { clearSessionWorkout, resumeSessionWorkout } from '@/workout/activeWorkoutSession';
+import { currentPrs } from '@/workout/prs';
 import { supersetPlacement, totalSets, workoutDateLabel } from '@/workout/format';
 import { useSessionWorkout, useWorkoutSnapshot } from '@/workout/useActiveWorkout';
 import { AutosaveRegistryContext, createAutosaveRegistry } from '@/workout/useAutosaveText';
@@ -168,6 +173,30 @@ export default function ActiveWorkoutScreen() {
     }, 'The workout couldn’t be discarded. Try again.');
   }
 
+  /**
+   * Opens the Tool Kit, first filling its calculators from the exercise in progress and the
+   * lifter's stored PRs for it (TK-6, `toolkit/prefill.ts`). Both reads are of this phone's own
+   * storage, so it works with no signal; if either fails the Tool Kit still opens, just
+   * without the prefill — the Tool Kit must never be blocked.
+   */
+  async function openToolKit(): Promise<void> {
+    try {
+      const entry = snapshot ? focusedEntry(snapshot.entries) : null;
+      if (entry && db && userId) {
+        const exerciseId = entry.exercise_id;
+        const [prs, racks] = await Promise.all([
+          exerciseId ? currentPrs(db, userId, exerciseId) : Promise.resolve([]),
+          loadPlateRacks(),
+        ]);
+        // The plate screen works in the rack's unit (the one last chosen there, else the display unit).
+        applyToolKitPrefill(buildToolKitPrefill(entry, prs, unit, racks.unit ?? unit));
+      }
+    } catch (caught) {
+      console.warn('Logger: could not prefill the Tool Kit', caught);
+    }
+    setToolKitOpen(true);
+  }
+
   /** Finish — unless nothing has been logged, when the only choices are discard or keep going. */
   function onFinish(): void {
     if (!snapshot) return;
@@ -253,7 +282,7 @@ export default function ActiveWorkoutScreen() {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Open Tool Kit"
-        onPress={() => setToolKitOpen(true)}
+        onPress={() => void openToolKit()}
         style={({ pressed }) => [
           styles.toolKitButton,
           { bottom: insets.bottom + spacing.lg },

@@ -274,3 +274,27 @@ remounting `SheetBody` per open, `currentPrs`'s shape and sorting, `getCachedPla
   skipped by key) — harmless, no guard needed.
 - **Scope verdict:** right as written. The three standing-input adjustments (deviations 1–3)
   sharpen the sketch rather than widen the step; nothing else moved.
+
+## Build notes and deviations (builder run)
+
+1. **`sourceKey` is `entryId:setId-or-none`, and the apply-once rule runs per calculator.** The
+   plan's key was `exerciseId:setId-or-none`, applied to the whole prefill at once. Built: each
+   calculator keeps its own fingerprint — `sourceKey` plus the values it would write — and is
+   written only when that fingerprint changes. Why: `updateSet` (fixing a typo on the source
+   set) and a unit change (display unit, or the plate loader's rack toggle) must refill the
+   boxes they affect, which a set-id-only key missed; but a whole-prefill key that included the
+   values would let a rack-unit flip rewrite *every* calculator and wipe a typed-over 1RM (the
+   Spec review's one defect, fixed). Entry id instead of exercise id also separates the same
+   exercise added twice. Logging a set with identical numbers still refills (new set id).
+2. **`isChartRpe` added to `@training-math` (`rpe.ts`), and `percentOfOneRm` now uses it.** The
+   plan put the half-step RPE gate in `prefill.ts` as a UI check and listed "any new
+   `@training-math` helper" as out of scope. The Standards review flagged it as a mirrored copy
+   of `percentOfOneRm`'s own range check (CLAUDE.md: "a mirrored copy is a bug"); the rule —
+   which RPE values the chart covers — now has one home, with its own test. No behaviour
+   change for any existing caller.
+3. **Review findings not acted on (judgement calls):** moving the screen's read-and-apply
+   orchestration into `prefill.ts` (the plan placed it in the screen deliberately; it is covered
+   by the route tests); bundling `(displayUnit, rackUnit)`; the small `wholeIn` repetition;
+   guarding a double tap (the plan's grilling covered it — the second apply is a no-op). The
+   handler's `db` / `userId` guard skips prefill entirely when either is missing; unreachable in
+   practice because the logger renders only its loading state until both exist.

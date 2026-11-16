@@ -8,6 +8,12 @@
  *     every open, so this is `toolkit/session.ts` at work, not luck);
  *   - a Workout tab tile opens the Tool Kit straight at its calculator (or the timer).
  *
+ * And B43's (TK-6): opened mid-workout, each of the four calculators arrives filled in from the
+ * exercise in progress (its last set) and the lifter's stored records (the e1RM book, made here
+ * by finishing an earlier session); a typed-over value survives a reopen until the next set is
+ * logged; the plate target follows the rack's unit; a tab-tile open is never prefilled; and a
+ * failed read still opens the panel.
+ *
  * And the B17 timer's: a countdown started in the panel keeps running after the panel is closed
  * (the panel's contents are thrown away), so reopening it a minute later shows a minute less.
  *
@@ -19,14 +25,21 @@
 import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
 import { fireEvent, screen } from '@testing-library/react-native';
-import { epleyE1rm, lbToKg } from '@training-math';
+import { displayWeight, epleyE1rm, lbToKg } from '@training-math';
 import KeyValueStore from 'expo-sqlite/kv-store';
 
 import type { SqlDriver } from '@/db/driver';
 import { libraryExerciseId } from '@/library/uuidv5';
-import { createPreparedDb, renderSignedIn, SIGNED_IN_USER_ID } from '@/test-utils/loggerTestKit';
-import { PLATE_RACK_KEY, resetPlateRackCache } from '@/toolkit/plateRack';
+import { createPreparedDb, lb, renderSignedIn, SIGNED_IN_USER_ID, steadyOptions } from '@/test-utils/loggerTestKit';
+import {
+  DEFAULT_PLATE_RACKS,
+  PLATE_RACK_KEY,
+  resetPlateRackCache,
+  serializePlateRacks,
+} from '@/toolkit/plateRack';
+import { resetToolKitPrefill } from '@/toolkit/prefill';
 import { resetToolKitSession } from '@/toolkit/session';
+import * as prsModule from '@/workout/prs';
 import type { TimerAlertsPort } from '@/toolkit/timerAlerts';
 import { resetTimerStore } from '@/toolkit/timerStore';
 import { startActiveWorkout } from '@/workout/activeWorkout';
@@ -70,6 +83,7 @@ afterEach(async () => {
   resetTimerStore();
   clearSessionWorkout();
   resetToolKitSession();
+  resetToolKitPrefill();
   resetPlateRackCache();
   await KeyValueStore.removeItem(PLATE_RACK_KEY);
   jest.restoreAllMocks();
@@ -128,6 +142,128 @@ describe('Tool Kit (B16 definition of done)', () => {
     await fireEvent.press(screen.getByLabelText('Close'));
     await fireEvent.press(screen.getByLabelText('Open RPE calculator'));
     expect(screen.getByText('Target reps')).toBeTruthy();
+  });
+});
+
+describe('Tool Kit prefill (B43 / TK-6 definition of done)', () => {
+  const BENCH = libraryExerciseId('bench_press');
+
+  /** A finished earlier bench session (245 lb × 3), so the lifter has stored bench records. */
+  async function finishEarlierBench(): Promise<void> {
+    const earlier = await startActiveWorkout(db, SIGNED_IN_USER_ID, steadyOptions('2026-11-10T09:00:00.000Z'));
+    const entry = await earlier.addExercise(BENCH);
+    await earlier.logSet(entry.id, lb(3, 245));
+    await earlier.finish();
+    clearSessionWorkout();
+  }
+
+  /** The stored best-e1RM record for bench, as the 1RM boxes should show it (lb). */
+  async function storedE1rmText(): Promise<string> {
+    const record = (await prsModule.currentPrs(db, SIGNED_IN_USER_ID, BENCH)).find((r) => r.kind === 'e1rm');
+    if (!record) throw new Error('expected a stored e1RM record');
+    return String(displayWeight(record.value_kg, 'lb'));
+  }
+
+  it('a mid-workout open arrives prefilled in each calculator; typing over a value sticks until the next set', async () => {
+    await finishEarlierBench();
+    const e1rm = await storedE1rmText();
+    // Today: bench 225 lb × 5 @ RPE 8.
+    const store = await startActiveWorkout(db, SIGNED_IN_USER_ID);
+    const entry = await store.addExercise(BENCH);
+    await store.logSet(entry.id, lb(5, 225, { rpe: 8 }));
+
+    await renderSignedIn(<ActiveWorkoutScreen />);
+    await screen.findByLabelText('Remove set 1 of Bench Press');
+    await fireEvent.press(screen.getByLabelText('Open Tool Kit'));
+    await screen.findByRole('header', { name: 'Tool Kit' });
+
+    // 1RM calculator: the last set.
+    expect(screen.getByLabelText('Weight (lb)').props.value).toBe('225');
+    expect(screen.getByLabelText('Reps').props.value).toBe('5');
+    // RPE calculator: the stored e1RM (not the set's weight), chips on the set's 5 @ 8.
+    await fireEvent.press(screen.getByLabelText('RPE calculator'));
+    expect(screen.getByLabelText('1RM (lb)').props.value).toBe(e1rm);
+    expect(screen.getByLabelText('5 reps').props.accessibilityState).toMatchObject({ selected: true });
+    expect(screen.getByLabelText('RPE 8').props.accessibilityState).toMatchObject({ selected: true });
+    // %1RM calculator: the same 1RM, percent left for the lifter.
+    await fireEvent.press(screen.getByLabelText('Intensity calculator'));
+    expect(screen.getByLabelText('1RM (lb)').props.value).toBe(e1rm);
+    expect(screen.getByLabelText('Percent of 1RM (%)').props.value).toBe('');
+    // Plate loader: the set's weight as the target.
+    await fireEvent.press(screen.getByLabelText('Plate loader'));
+    expect((await screen.findByLabelText('Target (lb)')).props.value).toBe('225');
+
+    // Typed over, closed, reopened with nothing new logged: the lifter's number stands.
+    await fireEvent.changeText(screen.getByLabelText('Target (lb)'), '235');
+    await fireEvent.press(screen.getByLabelText('Close'));
+    await fireEvent.press(screen.getByLabelText('Open Tool Kit'));
+    expect((await screen.findByLabelText('Target (lb)')).props.value).toBe('235');
+    await fireEvent.press(screen.getByLabelText('Close'));
+
+    // The next set is logged on the logger: the reopened Tool Kit follows it.
+    await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), '3');
+    await fireEvent.changeText(screen.getByLabelText('Weight in lb for Bench Press'), '245');
+    await fireEvent.changeText(screen.getByLabelText('RPE for Bench Press'), '9.5');
+    await fireEvent.press(screen.getByLabelText('Log set'));
+    await screen.findByLabelText('Remove set 2 of Bench Press');
+    await fireEvent.press(screen.getByLabelText('Open Tool Kit'));
+    expect((await screen.findByLabelText('Target (lb)')).props.value).toBe('245');
+    await fireEvent.press(screen.getByLabelText('RPE calculator'));
+    expect(screen.getByLabelText('3 reps').props.accessibilityState).toMatchObject({ selected: true });
+    expect(screen.getByLabelText('RPE 9.5').props.accessibilityState).toMatchObject({ selected: true });
+  });
+
+  it('fills the plate target in the rack’s unit when it differs from the display unit', async () => {
+    resetPlateRackCache();
+    await KeyValueStore.setItem(PLATE_RACK_KEY, serializePlateRacks({ ...DEFAULT_PLATE_RACKS, unit: 'kg' }));
+    const store = await startActiveWorkout(db, SIGNED_IN_USER_ID);
+    const entry = await store.addExercise(BENCH);
+    await store.logSet(entry.id, lb(5, 225));
+
+    await renderSignedIn(<ActiveWorkoutScreen />);
+    await screen.findByLabelText('Remove set 1 of Bench Press');
+    await fireEvent.press(screen.getByLabelText('Open Tool Kit'));
+    await fireEvent.press(await screen.findByLabelText('Plate loader'));
+    // 225 lb as saved (kg), shown in the kg rack's unit.
+    const savedKg = store.getSnapshot().entries[0]?.sets[0]?.weight_kg ?? 0;
+    expect((await screen.findByLabelText('Target (kg)')).props.value).toBe(String(displayWeight(savedKg, 'kg')));
+  });
+
+  it('with no set logged, the exercise just added fills the 1RM boxes from its stored record', async () => {
+    await finishEarlierBench();
+    const e1rm = await storedE1rmText();
+    const store = await startActiveWorkout(db, SIGNED_IN_USER_ID);
+    await store.addExercise(BENCH);
+
+    await renderSignedIn(<ActiveWorkoutScreen />);
+    await screen.findByLabelText('Reps for Bench Press');
+    await fireEvent.press(screen.getByLabelText('Open Tool Kit'));
+    await fireEvent.press(await screen.findByLabelText('Intensity calculator'));
+    expect(screen.getByLabelText('1RM (lb)').props.value).toBe(e1rm);
+    await fireEvent.press(screen.getByLabelText('1RM calculator'));
+    expect(screen.getByLabelText('Weight (lb)').props.value).toBe('');
+  });
+
+  it('a Workout tab tile open applies no prefill', async () => {
+    await finishEarlierBench();
+    await renderSignedIn(<WorkoutScreen />);
+    await fireEvent.press(await screen.findByLabelText('Open RPE calculator'));
+    expect(screen.getByLabelText('1RM (lb)').props.value).toBe('');
+  });
+
+  it('still opens, unprefilled, when the records can’t be read', async () => {
+    const store = await startActiveWorkout(db, SIGNED_IN_USER_ID);
+    const entry = await store.addExercise(BENCH);
+    await store.logSet(entry.id, lb(5, 225));
+    await renderSignedIn(<ActiveWorkoutScreen />);
+    await screen.findByLabelText('Remove set 1 of Bench Press');
+
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    jest.spyOn(prsModule, 'currentPrs').mockRejectedValueOnce(new Error('disk on fire'));
+    await fireEvent.press(screen.getByLabelText('Open Tool Kit'));
+    expect(await screen.findByRole('header', { name: 'Tool Kit' })).toBeTruthy();
+    expect(screen.getByLabelText('Weight (lb)').props.value).toBe('');
+    expect(warn).toHaveBeenCalledWith('Logger: could not prefill the Tool Kit', expect.any(Error));
   });
 });
 

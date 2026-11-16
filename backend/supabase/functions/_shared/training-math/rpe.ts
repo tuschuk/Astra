@@ -20,6 +20,16 @@ export const MIN_RPE = 6;
 export const MAX_RPE = 10;
 
 /**
+ * True when the RPE chart covers `rpe`: 6 to 10 in half steps (6, 6.5 … 10). Why it exists: a
+ * logged RPE can hold any one-decimal value (7.3 is a legal entry), but the chart — and the RPE
+ * calculator's chips — only know half steps, so anything that hands a logged RPE to the chart
+ * asks here first rather than restating the rule.
+ */
+export function isChartRpe(rpe: number): boolean {
+  return Number.isFinite(rpe) && rpe >= MIN_RPE && rpe <= MAX_RPE && Number.isInteger(rpe * 2);
+}
+
+/**
  * What percentage of a 1RM a set of `reps` at `rpe` should be.
  * Inputs: whole reps 1–12; RPE 6–10 in steps of 0.5. Output: a percentage, e.g. 5 @ RPE 8 → 81.08.
  * How: reps left in the tank = 10 − RPE; treat the set as (reps + reps left) all-out reps; Epley
@@ -28,7 +38,7 @@ export const MAX_RPE = 10;
 export function percentOfOneRm(reps: number, rpe: number): number {
   assertWholeInRange(reps, MIN_RPE_REPS, MAX_RPE_REPS, 'reps');
   assertFinite(rpe, 'rpe');
-  if (rpe < MIN_RPE || rpe > MAX_RPE || !Number.isInteger(rpe * 2)) {
+  if (!isChartRpe(rpe)) {
     throw new RangeError(`rpe must be ${MIN_RPE}–${MAX_RPE} in steps of 0.5, got ${rpe}`);
   }
   const repsInReserve = MAX_RPE - rpe;
