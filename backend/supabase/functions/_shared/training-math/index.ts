@@ -14,6 +14,7 @@ export { KG_PER_LB, displayWeight, kgToLb, lbToKg, roundToIncrement } from './un
 export type { WeightUnit } from './units.ts';
 export { MAX_EPLEY_REPS, epleyE1rm, weightForReps } from './e1rm.ts';
 export {
+  isChartRpe,
   MAX_RPE,
   MAX_RPE_REPS,
   MIN_RPE,

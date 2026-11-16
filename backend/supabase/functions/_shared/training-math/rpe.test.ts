@@ -2,7 +2,14 @@
 import { describe, expect, it } from '@jest/globals';
 
 import { epleyE1rm } from './e1rm.ts';
-import { MAX_RPE, MAX_RPE_REPS, MIN_RPE, percentOfOneRm, workingWeightFromRpe } from './rpe.ts';
+import { isChartRpe, MAX_RPE, MAX_RPE_REPS, MIN_RPE, percentOfOneRm, workingWeightFromRpe } from './rpe.ts';
+
+describe('isChartRpe', () => {
+  it('accepts 6 to 10 in half steps and nothing else', () => {
+    for (const rpe of [6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10]) expect(isChartRpe(rpe)).toBe(true);
+    for (const rpe of [5.5, 7.3, 10.5, 0, Number.NaN, Number.POSITIVE_INFINITY]) expect(isChartRpe(rpe)).toBe(false);
+  });
+});
 
 describe('percentOfOneRm', () => {
   it('gives 100% for 1 rep at RPE 10', () => {

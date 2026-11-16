@@ -787,3 +787,17 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - The version-2 recompute wave re-requests every existing analysis row, ten per sync; watch
     read sizes on accounts with many workouts.
   - Trend lines are not on share cards or posts.
+- **B43 tool-kit-prefill** (built, awaiting Gate 2):
+  - **Device check (Tristen):** mid-workout, log a set (e.g. 225 × 5 @ 8) on an exercise with
+    stored PRs, tap the floating Tool Kit button → 1RM shows 225 / 5; RPE shows the stored e1RM
+    with chips on 5 and 8; %1RM shows the same 1RM with the percent empty; Plates shows a 225
+    target (in the rack's unit if it differs). Type over one box, close, reopen → it stuck; log
+    the next set, reopen → the new set's numbers. Add a new exercise with no sets → only its
+    1RM boxes change. Airplane mode → all the same. Judge whether the open feels instant.
+  - Carry-over is by design: moving to an exercise with no sets refills only the 1RM boxes, so
+    the previous exercise's weight / plate target stay beside the new 1RM. Revisit on device
+    evidence (a "from your last set of …" caption is the recorded option).
+  - Focus is "newest logged set", not the input box last touched; revisit on device evidence.
+  - Workout tab tiles are never prefilled, even with a workout in progress.
+  - `mmdc` render of the app-flow diagram was declined by the permission layer for the builder
+    — Gate 2.
