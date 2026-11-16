@@ -432,3 +432,31 @@ attacked and what changed:
   for Tristen's device verification; a column only SQL can set is not a shipped feature). The
   reader-side UI, Marketplace surfaces and the payload client wrapper are explicitly left to
   B40.
+
+## Build record and deviations (builder, B39)
+
+- **Migration** `backend/supabase/migrations/20261115235525_program_visibility.sql` (file renamed to
+  the version Supabase recorded), applied live. As planned, plus a restated `revoke`/`grant` on the
+  re-based `team_program_payload` (harmless: `create or replace` keeps grants anyway).
+- **Live probe (rolled back, SQL claims):** every DoD case came out as predicted. See the ERD's
+  "Program visibility" section for the list. The **HTTP pass with throwaway JWTs** (and the
+  no-token / embed cases) was not run by the builder. It is left to Gate 2 (see DEFERRED).
+- **Words (deviation in form only):** chip labels are `Only you` / `Followers` / `Team` /
+  `Published`, each with a full meaning sentence (the plan's list mixed labels and meanings). The
+  hint reads "Pick at least one team, or only you can see this."
+- **Added after review: shares with Teams the author has left.** The plan says such shares
+  stand and the author "can unshare any time", but the Team list only shows current Teams, so the
+  app could not end them. The section now shows "Still shared with N teams you left" with **Stop
+  sharing**, which unshares them all. The pick-a-team hint counts only Teams that are listed.
+- **Review fixes in the section:** a late answer from the Team list read is dropped when the
+  lifter has left Team or closed the page; a ref guard stops two taps in one frame from both
+  starting; a chip tap clears an old share refusal.
+- **Copies start private:** `createProgramFromPayload` (B37) writes `visibility: 'private'` (the
+  type now requires the field; a copy is the member's own new program).
+- **Fake social client** gains a `refuse` option (test-only), so the 42501 mapping can be tested.
+  The fake has no identity, so it can't judge RLS itself.
+- **The sync round-trip test** sits in `programs.test.ts` (push → server row → second phone pulls
+  `visibility`) rather than a separate sync test file. It covers the same ground.
+- Review findings recorded rather than fixed (in DEFERRED): dormant shares stay readable as ids by
+  team members; `owns_program` ignores `deleted_at` for shares; error-code helpers stay in
+  `social/teams.ts`.

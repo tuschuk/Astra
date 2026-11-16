@@ -38,6 +38,19 @@ jest.mock('@/db/database', () => ({
   openAppDatabase: () => mockOpenDatabase(),
 }));
 
+// (B39) The program page's visibility section holds a server client for its Team list; these
+// tests never choose Team, so an offline fake is enough.
+jest.mock('@/lib/supabase', () => {
+  const { createFakeSocialClient } = jest.requireActual<typeof import('@/test-utils/fakeSocialClient')>(
+    '@/test-utils/fakeSocialClient',
+  );
+  const fake = createFakeSocialClient({}, { offline: true });
+  return {
+    ...jest.requireActual<typeof import('@/lib/supabase')>('@/lib/supabase'),
+    getSupabase: () => fake.client,
+  };
+});
+
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: jest.fn(() => true) };
 let mockParams: { id?: string } = {};
 jest.mock('expo-router', () => {

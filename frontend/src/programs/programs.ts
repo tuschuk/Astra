@@ -42,6 +42,7 @@ import {
   type ProgramExerciseRow,
   type ProgramRow,
   type ProgramTable,
+  type ProgramVisibility,
   type ProgramWeekRow,
   type ProgramWorkoutRow,
   type RowByTable,
@@ -257,10 +258,53 @@ export async function createProgram(
     id: (options.newId ?? newUuid)(),
     user_id: userId,
     name: clean,
+    // Born private: the lifter shares a program deliberately, never by default.
+    visibility: 'private',
     deleted_at: null,
     created_at: now,
     updated_at: now,
   };
+  await writeLocal(db, 'programs', [row], { now });
+  return row;
+}
+
+/**
+ * The words the program page shows for each visibility level: a short chip label and one
+ * sentence saying who can see the program. One table so the screen and its tests agree. (Kept
+ * apart from the workout/post `VISIBILITY_WORDS` because the levels differ: programs have Team and
+ * Published, posts don't.)
+ */
+export const PROGRAM_VISIBILITY_WORDS: { [V in ProgramVisibility]: { label: string; meaning: string } } = {
+  private: { label: 'Only you', meaning: 'Only you can see this program.' },
+  followers: { label: 'Followers', meaning: 'Your followers can see this program.' },
+  team: { label: 'Team', meaning: 'Members of the Teams you share it with can see this program.' },
+  published: {
+    label: 'Published',
+    meaning: 'Anyone on Astra can see this program — it will be listed on the Marketplace (coming soon).',
+  },
+};
+
+/** The visibility levels in the order the chips show them, most private first. */
+export const PROGRAM_VISIBILITY_ORDER: readonly ProgramVisibility[] = ['private', 'followers', 'team', 'published'];
+
+/**
+ * Changes who besides the lifter may see one of their live programs, and returns the saved row.
+ * Saved on the phone at once and queued for upload, so it works with no signal; the server's
+ * security rules are what actually enforce the choice once it syncs. Refuses (throws) a program
+ * that is not the lifter's or is deleted. Which Teams a 'team' program is shared with is a
+ * separate, online-only list (`social/programShares.ts`).
+ */
+export async function setProgramVisibility(
+  db: SqlDriver,
+  userId: string,
+  programId: string,
+  visibility: ProgramVisibility,
+  options: ProgramWriteOptions = {},
+): Promise<ProgramRow> {
+  if (!PROGRAM_VISIBILITY_ORDER.includes(visibility)) throw new RangeError(`Unknown program visibility ${visibility}`);
+  const now = options.now ?? new Date().toISOString();
+  const current = await requireLive(db, 'programs', userId, programId);
+  const row: ProgramRow = { ...current, visibility, updated_at: now };
   await writeLocal(db, 'programs', [row], { now });
   return row;
 }

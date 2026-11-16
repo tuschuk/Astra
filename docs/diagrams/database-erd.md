@@ -38,6 +38,10 @@ the two payload functions; see "Team coaching"),
 `20261115232206_team_moderation.sql` (B38, applied live — owner removal of members, the
 `on_team_member_removed` cleanup trigger, `team_feed_hides`, owner deletion of pushes and of the
 team; see "Team moderation"),
+`20261115235525_program_visibility.sql` (B39, applied live — `programs.visibility`, the
+`program_visibility` enum, `program_team_shares`, `private.program_visible`, the widened `programs`
+read policy, `private.program_tree_json` and the `program_payload` function; see "Program
+visibility"),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -109,6 +113,13 @@ erDiagram
   teams ||--o{ team_feed_hides : "owner's hidden posts (cascade, B38)"
   posts ||--o{ team_feed_hides : "post_id hidden from that team's feed (cascade)"
   profiles ||--o{ team_feed_hides : "hidden_by the owner (cascade)"
+  programs ||--o{ program_team_shares : "shared with these Teams when visibility = team (cascade, B39)"
+  teams ||--o{ program_team_shares : "team_id the program is shared with (cascade)"
+  program_team_shares {
+    uuid program_id PK, FK "the author's program"
+    uuid team_id PK, FK "a team the author was in when sharing"
+    timestamptz created_at
+  }
 
   auth_users {
     uuid id PK "managed by Supabase Auth"
@@ -328,8 +339,9 @@ erDiagram
 
   programs {
     uuid id PK "client-generated (authored offline, B34)"
-    uuid user_id FK "the author; the only person who can read or change it"
+    uuid user_id FK "the author; the only person who can change it"
     text name "1-100 chars"
+    program_visibility visibility "private (default), followers, team, published (B39)"
     timestamptz deleted_at "soft delete; null while live"
     timestamptz created_at
     timestamptz updated_at
@@ -466,6 +478,44 @@ existing `private.is_team_owner`; nothing widens what anyone can read.
   coach's 1; member and coach team deletes 0, owner 1 → every team-scoped row gone, posts,
   workouts and the program kept.
 
+## Program visibility (B39)
+
+Migration `20261115235525_program_visibility.sql`. Who besides its author may see a program.
+
+- **`programs.visibility`** (enum `program_visibility`: `private` default, `followers`, `team`,
+  `published`). Every pre-B39 program is private. Only the author can change it (the B34 update
+  policy is untouched). Synced to the phone like any program column.
+- **The rule lives once:** `private.program_visible(pid, owner, vis, deleted)` (definer). The author
+  always (soft-deleted rows included, so a delete still syncs to their other phones); nobody else
+  ever sees a deleted program; `published` → any signed-in user; `followers` → a follower of the
+  author with no block either way; `team` → a member of any team in `program_team_shares` for that
+  program. Blocks do **not** cut `team` (team content addresses the team, the `team_posts`
+  precedent) or `published` (a public shelf). Mutes play no part. `private` has no arm.
+- **`programs` select policy** is now `visible programs are readable` =
+  `program_visible(id, user_id, visibility, deleted_at)`. **The three child tables' policies stay
+  author-only** — the phone pulls them unfiltered, so widening them would fill readers' mirrors
+  with other authors' rows. The parent is safe to widen because the phone filters its programs
+  download to the signed-in lifter.
+- **`program_team_shares`** (program, team). Insert: the author (`owns_program`) and only a team
+  they are a member of. Read: the author, or members of that team. Delete: the author. No update.
+  Online-only (not mirrored). Shares stand when the author later leaves the team, and stay (inert)
+  when visibility moves off `team`.
+- **`public.program_payload(p_program)`** (definer, `stable`, EXECUTE revoked from public/anon,
+  granted to authenticated): the program's live tree as JSON — the same shape as
+  `team_program_payload` — when `program_visible` admits the caller, else null. This is how a
+  non-author reads a shared program's content (online; no app screen calls it until B40).
+- **`private.program_tree_json(pid)`** — the one tree builder (gate-free, `private` only). Both
+  `program_payload` and `team_program_payload` build through it; `team_program_payload`'s gate is
+  unchanged (a pushed or assigned program stays team-readable whatever its visibility).
+- Live-probed at B39 (one rolled-back DO block; author A, B, C, team T with A and B, team T2 with
+  C): private → B row 0 / payload null; followers → follower B 1 / tree, non-follower C 0 / null,
+  blocked B 0 / null; team → share by A to T lands, A sharing to T2 (not a member) and C sharing A's
+  program both 42501, member B 1 / tree and sees the share row, B's unshare deletes 0, non-member C
+  0 / null, B after leaving T 0 / null; published → B and C 1 / tree, B's update of A's visibility
+  0 rows; published + soft-deleted → C 0 / null while A still reads the row; B's bare reads of the
+  three child tables 0 rows at every level; a private program pushed to T still returns its tree
+  through `team_program_payload` (B37 unregressed).
+
 ## Team coaching (B37)
 
 Migration `20261115222643_team_coaching.sql`. Online-only like the rest of Teams.
@@ -587,10 +637,11 @@ the phone authors offline and uploads through the outbox like any training row.
   Live-probed at B34 (rolled back): a second user reads 0 rows by id and unfiltered, updates and
   deletes 0 rows, and inserting a week or slot into the first user's program — or a program under
   the first user's id — is refused (42501); RPE 11, 0 sets and an empty name are refused by CHECKs.
-- **No `visibility` column yet** — private is the only state; B39 adds it. **Warning for B39:** the
-  phone downloads the three child tables unfiltered and relies on these select rules returning only
-  the caller's own rows; letting others read children through a visible program would pull other
-  authors' rows into the device mirror (see the migration's header comment).
+- **Visibility arrived in B39** (see "Program visibility"): the `programs` read rule widened; the
+  children's did not. **Standing warning:** the phone downloads the three child tables unfiltered
+  and relies on their select rules returning only the caller's own rows; letting others read
+  children directly would pull other authors' rows into the device mirror. Others read content
+  through `program_payload` instead.
 - **Deletes are soft.** The app never sends a `DELETE` for a program row: removing a program, week,
   workout or slot stamps that one row's `deleted_at` and upserts it (children are left alone). A row
   is live when its own stamp and every ancestor's are null, which is how the app reads the tree. No
@@ -1049,7 +1100,10 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `post_hot_scores` (view, B24) | `security_invoker`: the posts you may read, each ranked by the votes you may read on it | — |
 | `mutes` (B27) | only rows where you are the muter | manage your own mute list |
 | `moderators` (B27) | only your own row | nobody — service role / migration only |
-| `programs`, `program_weeks`, `program_workouts`, `program_exercises` (B34) | only the program's author (`private.owns_program`) | only the program's author: insert, update, delete — the app soft-deletes |
+| `programs` (B34, B39) | per `private.program_visible`: the author always; others when live and `published`, or `followers` and they follow the author (no block), or `team` and they're in a team it's shared with | only the program's author: insert, update (including `visibility`), delete — the app soft-deletes |
+| `program_weeks`, `program_workouts`, `program_exercises` (B34) | only the program's author (`private.owns_program`) — deliberately NOT widened by B39 | only the program's author: insert, update, delete — the app soft-deletes |
+| `program_team_shares` (B39) | the program's author, and members of the shared team | insert only the author, only to a team they're in; delete only the author; no updates |
+| `program_payload` (function, B39) | signed-in users `program_visible` admits; null otherwise | — |
 | `program_runs` (B35) | only your own (`user_id = auth.uid()`) | insert, update, delete only your own — the app never deletes, it stamps `ended_at` |
 | `teams` (B36) | any signed-in user (discoverable) | insert only as yourself (`created_by`); update only the owner (`private.is_team_owner`), and only `name` / `join_mode` (column grant); delete only the owner (B38; everything team-scoped cascades) |
 | `team_members` (B36) | your own rows; the whole roster if you are a member; any open team's roster | insert only yourself, only as `member`, only when the team is open or you hold an invite; update (B37) only the owner, only `role`, never the owner row, only to `coach` / `member`; delete your own row (leave) or, as the owner, anyone's (B38 removal) — never the owner's row |
@@ -1117,7 +1171,8 @@ synced both ways, downloaded table by table on their own bookmarks
 (`pull_cursor:programs`, `…:program_weeks`, `…:program_workouts`, `…:program_exercises`), after
 the analyses and before tombstones; version 13 (B35) added `program_runs` (same columns, no local
 foreign keys, downloaded on `pull_cursor:program_runs` after the four program tables) and the bare
-column `workouts.program_workout_id`. **Upload order since B35** (`SYNC_ORDER`): `exercises`,
+column `workouts.program_workout_id`; version 14 (B39) added `programs.visibility` (text, default
+`private`; `program_team_shares` is not mirrored). **Upload order since B35** (`SYNC_ORDER`): `exercises`,
 `programs`, `program_weeks`, `program_workouts`, `workouts`, `workout_exercises`, `sets`,
 `personal_records`, `program_exercises`, `program_runs` (then `workouts` once more) — programs go
 before workouts so a session started from a program never reaches the server ahead of the

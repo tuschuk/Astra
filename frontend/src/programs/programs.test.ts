@@ -37,6 +37,9 @@ import {
   getProgram,
   listPrograms,
   moveProgramExercise,
+  PROGRAM_VISIBILITY_ORDER,
+  PROGRAM_VISIBILITY_WORDS,
+  setProgramVisibility,
   readProgramTree,
   readProgramWorkout,
   removeProgramExercise,
@@ -120,6 +123,7 @@ describe('programs', () => {
       id: 'b0000000-0000-4000-8000-000000000001',
       user_id: USER,
       name: 'PPL',
+      visibility: 'private',
       deleted_at: null,
       created_at: T0,
       updated_at: T0,
@@ -168,6 +172,55 @@ describe('programs', () => {
     const [row] = await getRowsByIds(db, 'programs', [program.id]);
     expect(row.name).toBe('Mine');
     expect(row.deleted_at).not.toBeNull();
+  });
+});
+
+describe('visibility (PRG-4, B39)', () => {
+  it('changes who can see a program on the phone, queues it, and every read carries it', async () => {
+    const program = await createProgram(db, USER, 'Shared', opts);
+    await pushOutbox(db, new FakeServer()); // empty the queue so only the change is pending
+    const later = '2026-11-15T11:00:00.000Z';
+    const saved = await setProgramVisibility(db, USER, program.id, 'followers', { now: later });
+    expect(saved).toMatchObject({ id: program.id, visibility: 'followers', updated_at: later });
+    expect((await pendingRows(db, 'programs')).map((p) => p.rowId)).toEqual([program.id]);
+    expect((await getProgram(db, USER, program.id))?.visibility).toBe('followers');
+    expect((await readProgramTree(db, USER, program.id))?.program.visibility).toBe('followers');
+    expect((await listPrograms(db, USER))[0].program.visibility).toBe('followers');
+    // A rename keeps the choice (it copies the whole row).
+    await renameProgram(db, USER, program.id, 'Renamed', opts);
+    expect((await getProgram(db, USER, program.id))?.visibility).toBe('followers');
+  });
+
+  it('refuses someone else’s, a deleted program, and an unknown level', async () => {
+    const mine = await createProgram(db, USER, 'Mine', opts);
+    const theirs = await createProgram(db, OTHER, 'Theirs', opts);
+    await expect(setProgramVisibility(db, USER, theirs.id, 'published')).rejects.toThrow();
+    await expect(setProgramVisibility(db, USER, mine.id, 'everyone' as never)).rejects.toThrow(RangeError);
+    await deleteProgram(db, USER, mine.id, opts);
+    await expect(setProgramVisibility(db, USER, mine.id, 'published')).rejects.toThrow();
+    const rows = await getRowsByIds(db, 'programs', [mine.id, theirs.id]);
+    expect(rows.map((r) => r.visibility)).toEqual(['private', 'private']);
+  });
+
+  it('the words table names every level, in chip order', () => {
+    expect(PROGRAM_VISIBILITY_ORDER).toEqual(['private', 'followers', 'team', 'published']);
+    expect(PROGRAM_VISIBILITY_ORDER.map((v) => PROGRAM_VISIBILITY_WORDS[v].label)).toEqual([
+      'Only you',
+      'Followers',
+      'Team',
+      'Published',
+    ]);
+  });
+
+  it('rides the sync both ways: uploaded, and pulled onto the author’s other phone', async () => {
+    const server = new FakeServer();
+    const program = await createProgram(db, USER, 'Team block', opts);
+    await setProgramVisibility(db, USER, program.id, 'team', opts);
+    await pushOutbox(db, server);
+    expect(server.tables.programs.get(program.id)).toMatchObject({ visibility: 'team' });
+    const phone2 = await prepareDatabase(createNodeSqliteDriver());
+    await pullChanges(phone2, server, USER);
+    expect((await getProgram(phone2, USER, program.id))?.visibility).toBe('team');
   });
 });
 

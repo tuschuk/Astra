@@ -257,12 +257,28 @@ describe('migrate', () => {
 
     await migrate(db);
 
-    expect(SCHEMA_VERSION).toBe(13);
-    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 13 });
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: SCHEMA_VERSION });
     expect(await db.getFirstAsync('select id, program_workout_id from workouts')).toEqual({ id: 'w', program_workout_id: null });
     expect(await db.getFirstAsync('select count(*) as n from program_runs')).toEqual({ n: 0 });
     const columns = await db.getAllAsync<{ name: string }>('pragma table_info(program_runs)');
     expect(columns.map((c) => c.name).sort()).toEqual([...TABLE_COLUMNS.program_runs].sort());
+  });
+
+  it('B39: upgrades a version-13 phone to version 14 — its programs gain visibility, all private', async () => {
+    const db = createNodeSqliteDriver();
+    for (const migration of MIGRATIONS.slice(0, 13)) await db.execAsync(migration);
+    await db.execAsync('pragma user_version = 13');
+    await db.runAsync(
+      "insert into programs (id, user_id, name, created_at, updated_at) values ('p', 'u', 'Block', 't', 't')",
+    );
+
+    await migrate(db);
+
+    expect(SCHEMA_VERSION).toBe(14);
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 14 });
+    expect(await db.getFirstAsync('select id, name, visibility from programs')).toEqual({ id: 'p', name: 'Block', visibility: 'private' });
+    const columns = await db.getAllAsync<{ name: string }>('pragma table_info(programs)');
+    expect(columns.map((c) => c.name).sort()).toEqual([...TABLE_COLUMNS.programs].sort());
   });
 
   it('upgrades a version-1 phone through every later version (sets.score), keeping the sets already there', async () => {

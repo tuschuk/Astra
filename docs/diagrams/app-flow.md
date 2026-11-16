@@ -84,13 +84,18 @@ flowchart TD
   Tabs --> Market["Marketplace<br/>programs (MKT-1..5)<br/>today: featured-section skeleton, placeholder cards"]
   Tabs --> Workout["Workout tab (on focus: re-read astra.db + readActiveRun)<br/>no draft, no run: Start empty workout · Start from a program (→ ProgramPickerSheet, B35)<br/>no draft, run active (B35): card 'Running · program name · Next: Week N · workout name',<br/>Start next session (primary) · Start empty workout · Stop program (asks first);<br/>run with no session left: 'This program has no next session.' + Stop<br/>draft on phone (run card hidden): Resume workout / Discard (asks first)<br/>Tool Kit tiles: 1RM / RPE / %1RM / Plates / Timer open the Tool Kit at that tool (B16, B17)<br/>Past workouts: newest 100 finished, date + duration + counts<br/>Your programs (B34, always enabled) → /programs"]
   Workout -->|"Your programs: router.push('/programs')"| ProgramsScr["Programs (app/programs.tsx, B34)<br/>listPrograms on focus: my live programs, newest first,<br/>name + '2 weeks · 6 workouts'; empty state explains a program;<br/>New program → NewProgramForm (Modal; name 1–100 via assertValidProgramName,<br/>Create disabled until valid) → createProgram → router.push program/[id]; Back"]
-  ProgramsScr -->|"tap a program: router.push('/program/[id]')"| ProgramScr["Program page = editor (app/program/[id].tsx, B34, PRG-2)<br/>readProgramTree on focus; name box autosaves (renameProgram);<br/>one card per week 'Week N': its workouts ('Day A' / 'Workout N' + 'N exercises'),<br/>Add workout · Remove week (asks first) · per workout Remove (asks first);<br/>Add week; Delete program (asks first) → Back;<br/>unknown / deleted / someone else's id → 'isn't one of yours'"]
+  ProgramsScr -->|"tap a program: router.push('/program/[id]')"| ProgramScr["Program page = editor (app/program/[id].tsx, B34, PRG-2)<br/>readProgramTree on focus; name box autosaves (renameProgram);<br/>B39 (PRG-4) Who can see this: ProgramVisibilitySection<br/>(chips Only you · Followers · Team · Published + meaning line → setProgramVisibility, offline);<br/>one card per week 'Week N': its workouts ('Day A' / 'Workout N' + 'N exercises'),<br/>Add workout · Remove week (asks first) · per workout Remove (asks first);<br/>Add week; Delete program (asks first) → Back;<br/>unknown / deleted / someone else's id → 'isn't one of yours'"]
   ProgramScr -->|"tap a workout: router.push('/program-workout/[id]')"| ProgWorkoutScr["Program workout editor (app/program-workout/[id].tsx, B34, PRG-1)<br/>readProgramWorkout on focus: 'Program · Week N', name box autosaves (blank = Workout N);<br/>ProgramExerciseCard per slot: name + '3 × 8 @ 135 lb · RPE 8' (useDisplayUnit),<br/>Sets / Reps / weight-in-unit / RPE boxes → Save targets (refusals shown on the card),<br/>Up / Down (renumbers the workout's slots), Remove (asks first);<br/>Add exercise → the logger's ExercisePicker (library + my live customs) → 3 sets to start;<br/>a workout in a removed week / program → not found"]
   ProgWorkoutScr -->|"Add exercise"| Picker
+  ProgramScr --> VisSection["ProgramVisibilitySection (components/programs, B39)<br/>chips → onSelect (page writes setProgramVisibility); with Team chosen only:<br/>my Teams (loadTeamsOf) ticked by listProgramShares → tap shares / unshares;<br/>'Still shared with N teams you left' + Stop sharing; no teams → 'Join a team…';<br/>none ticked → 'Pick at least one team…'; offline → TEAMS_OFFLINE (chips still work)"]
+  VisSection --> SharesMod["social/programShares.ts (B39) — online only<br/>listProgramShares · shareProgramWithTeam (23505 = done; 42501 → 'only teams you're in /<br/>wait for it to sync') · unshareProgramFromTeam"]
+  SharesMod -->|"program_team_shares (RLS: author, to a team they're in)"| DB
+  VisSection -->|"loadTeamsOf"| TeamsMod
+  DB -.->|"rpc program_payload(p_program): a shared program's tree for anyone program_visible admits —<br/>NO app caller yet (B40 Marketplace is the first); probed through the API only"| DB
   ProgramsScr --> ProgramsMod
   ProgramScr --> ProgramsMod
   ProgWorkoutScr --> ProgramsMod
-  ProgramsMod["programs/programs.ts (B34): the ONE home of program reads + writes<br/>create / rename / delete program; add / remove week; add / rename / remove workout;<br/>add / update / move / remove exercise slot — every write checks the node is mine and live<br/>all the way up (an edit never resurrects a deleted row), validates through @training-math limits,<br/>converts lb → kg (roundWeightKgForStorage); deletes are SOFT (stamp that one row's deleted_at);<br/>readProgramTree / readProgramWorkout / listPrograms walk down from the program filtering<br/>deleted_at at every level, order (position, id), name slots from library + my customs<br/>(unknown → 'Deleted exercise')"]
+  ProgramsMod["programs/programs.ts (B34): the ONE home of program reads + writes<br/>create (born private) / rename / delete program; B39 setProgramVisibility + PROGRAM_VISIBILITY_WORDS; add / remove week; add / rename / remove workout;<br/>add / update / move / remove exercise slot — every write checks the node is mine and live<br/>all the way up (an edit never resurrects a deleted row), validates through @training-math limits,<br/>converts lb → kg (roundWeightKgForStorage); deletes are SOFT (stamp that one row's deleted_at);<br/>readProgramTree / readProgramWorkout / listPrograms walk down from the program filtering<br/>deleted_at at every level, order (position, id), name slots from library + my customs<br/>(unknown → 'Deleted exercise')"]
   ProgramsMod -->|"writeLocal('programs' / 'program_weeks' / 'program_workouts' / 'program_exercises') — saved + queued; works offline"| WriteLocal
   Workout -->|"Start from a program: open sheet"| PickerSheet["ProgramPickerSheet (components/programs, B35, a Modal)<br/>listPrograms on open: name + size; a program with no workouts listed but disabled<br/>('No workouts yet — add some first'); none → Your programs button;<br/>tap → startProgramRun → close, tab re-reads; Cancel"]
   PickerSheet -->|"Your programs (empty state)"| ProgramsScr
@@ -665,7 +670,13 @@ flowchart TD
    Tapping a workout opens its editor: **Add exercise** uses the logger's picker (any library or own
    custom exercise) and starts it at 3 sets; each exercise has Sets / Reps / weight (kg or lb) /
    RPE boxes and **Save targets**, plus move up / down and remove. Everything saves on the phone at
-   once, reopens exactly as left, and syncs to the lifter's other phones; nobody else can see it.
+   once, reopens exactly as left, and syncs to the lifter's other phones. (B39, PRG-4) **Who can
+   see this** under the name: **Only you** (every program starts here), **Followers**, **Team** or
+   **Published** — a tap saves on the phone, offline too, and the server enforces it once synced.
+   Choosing **Team** (needs a connection) lists the lifter's Teams to tick; a share with a Team
+   they've since left shows as "Still shared with N teams you left" with **Stop sharing**.
+   Others can't open a shared program in the app yet — the server's `program_payload` is ready
+   for the Marketplace (B40).
 24. **Run a program (B35, PRG-3, LOG-1), with no signal needed.** On the Workout tab, **Start from
    a program** lists the lifter's programs (one with no workouts is shown but can't be picked);
    picking one starts running it at its first session. The tab then shows the program and
@@ -1062,6 +1073,11 @@ flowchart TD
   a member-owned program in one transaction (the only new write path is the ordinary
   `writeLocalRowsTx`); `workout/startPushedWorkout.ts` starts one pushed workout in the logger.
   `app/session/[id].tsx` is the read-only, online view of anyone's workout the server lets you see.
+- **Program visibility** (B39): `programs.visibility` is an ordinary synced column (device schema
+  V14, `TABLE_COLUMNS.programs`), set through `setProgramVisibility` in `programs/programs.ts`.
+  `social/programShares.ts` is the online-only home of `program_team_shares`;
+  `components/programs/ProgramVisibilitySection.tsx` is the program page's control. No sync-engine
+  change: the phone still pulls only its own programs, and the child tables stay author-only.
 - `components/auth/` holds SignInForm, SignUpForm, BirthdateInput and their shared layout styles.
   The route files in `app/(auth)/` only wire them to the router.
 - `components/workout/` holds EntryCard (one exercise in the logger), ExercisePicker (the

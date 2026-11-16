@@ -373,8 +373,20 @@ create index program_runs_user_idx on program_runs (user_id);
 alter table workouts add column program_workout_id text;
 `;
 
+/**
+ * Version 14 (B39): program visibility. Mirrors the server's `…_program_visibility.sql`:
+ *   - `programs.visibility` — who besides the author may see the program: 'private' (only them),
+ *     'followers', 'team' (the Teams they shared it with) or 'published' (anyone). Every program
+ *     already on the phone becomes private, matching the server's default. The lifter changes it
+ *     offline like any other program edit and it syncs. Which Teams a program is shared with is
+ *     NOT stored on the phone — that list lives online only (`social/programShares.ts`).
+ */
+const V14 = `
+alter table programs add column visibility text not null default 'private';
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13];
+export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

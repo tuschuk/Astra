@@ -685,3 +685,32 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     B → confirm → B gone from the roster; B's phone: team page shows Join team. A: switch to Invite
     only, B can't rejoin. A: Remove on a coach's push. A: Delete team → confirm → Communities; B's
     Home chip for the team is gone. Judge the marker / Hide button layout at phone width.
+- **B39 program-visibility** (built, awaiting Gate 2):
+  - **Live HTTP pass with throwaway JWTs** (the step DoD's "through the API") is Gate 2's: the
+    builder ran the rolled-back SQL claims probe (every level positive and negative, mirror
+    safety, B37 regression — recorded in the ERD) but not the HTTP pass, the no-token 401 on
+    `/rest/v1/rpc/program_payload`, or the PostgREST embed case (`programs?select=*,program_weeks(*)`
+    as a non-author → empty children).
+  - **No reader-facing screen** for someone else's shared program and no client wrapper for
+    `program_payload` — B40 (Marketplace) is the first consumer.
+  - **Shares stand when the author leaves a team** (plan's product call); the app shows "Still
+    shared with N teams you left" with Stop sharing. Automatic cleanup waits for evidence.
+  - **`program_team_shares` read lets team members see which program ids are shared with their
+    team even while the program is no longer `team`** (dormant shares). Ids only — row and payload
+    stay hidden. Narrow the read to `visibility = 'team'` if it ever matters.
+  - **`owns_program` ignores `deleted_at`**, so an author can share a soft-deleted program; inert
+    (non-authors never see deleted programs).
+  - **Block filtering of `published` programs** — a B40 client-side option if wanted.
+  - **`export-data`** still exports no program tables (standing item; `visibility` rides `'*'`
+    selects when it lands).
+  - **Review smells left as-is:** Postgres error-code helpers (`codeOf`, `RLS_REFUSED`,
+    `TeamResult`) imported from `social/teams.ts` (the `teamCoaching.ts` precedent); the four levels
+    spelled in the SQL enum, the TS type and the order list; the device column has no CHECK (the
+    `setProgramVisibility` guard and the server enum are the walls).
+  - **Device check (Tristen):** a program page → Who can see this → each chip in airplane mode,
+    kill + reopen → still chosen; reconnect → `programs.visibility` in Supabase. Team (online) →
+    tick a team → a `program_team_shares` row; a second account in that team calls
+    `program_payload` (or, after B40, opens it on device). Leave the team → "Still shared with 1
+    team you left" → Stop sharing. Judge the section at phone width.
+  - Mermaid render of both diagrams was not run by the builder (`mmdc` declined by the permission
+    layer) — Gate 2 should render them once.
