@@ -19,17 +19,27 @@
  * with a "Go to the Workout tab" button so the lifter reads it. A program with no workouts can't
  * be started or saved and says so.
  *
+ * (B41 — MKT-3) On a PUBLISHED program, under the facts line: the vote arrows around its net
+ * score (tap to vote up or down, tap the lit one to take it back — exactly as on a feed post; the
+ * score moves at once and back with a message if refused), and a comments button ("3 comments" /
+ * "Comment") that opens `/program-comments/[id]`. Coming back to the page reads it again, so the
+ * numbers are the server's. A program shared only with followers or a team shows neither — the
+ * server takes votes and comments on published programs only.
+ *
  * Reading the program needs a connection (no signal → the standard message with Retry); a
  * program that is gone or no longer published says "no longer available". The copy and the run
  * are saved on the phone and work from then on offline, like any program the lifter built.
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
 import { useAuth } from '@/auth/AuthProvider';
 import { ProgramPayloadView } from '@/components/programs/ProgramPayloadView';
 import { Screen } from '@/components/Screen';
+import { commentButtonLabel } from '@/components/social/PostCard';
+import { VoteControl } from '@/components/social/VoteControl';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Body, Heading } from '@/components/ui/Text';
@@ -41,6 +51,7 @@ import { saveAndStartProgram, saveProgramOnly } from '@/programs/saveAndStart';
 import { useDisplayUnit } from '@/settings/displayUnit';
 import { loadProgramPage, programFacts, programFactsLine, type MarketplacePage } from '@/social/marketplace';
 import { personLabels } from '@/social/names';
+import { castProgramVote, clearProgramVote } from '@/social/votes';
 import { colors, spacing } from '@/theme';
 
 /** Shown when the program can't be read for want of a connection (or the read failed). */
@@ -89,11 +100,25 @@ export default function MarketplaceProgramScreen() {
   const [message, setMessage] = useState<string | null>(null);
   const acting = useRef(false);
 
-  // Read the program from the server (again on Retry).
+  // (B41) Coming back to the page (e.g. from its comments) reads it again, so the score and the
+  // comment count are the server's current ones. The first focus is the opening read itself.
+  const firstFocus = useRef(true);
+  useFocusEffect(
+    useCallback(() => {
+      if (firstFocus.current) {
+        firstFocus.current = false;
+        return;
+      }
+      setAttempt((n) => n + 1);
+    }, []),
+  );
+
+  // Read the program from the server (again on Retry and on returning to the page). The page
+  // already shown stays up while a re-read is on its way.
   useEffect(() => {
     if (programId === '') return;
     let current = true;
-    loadProgramPage(client, programId)
+    loadProgramPage(client, programId, me)
       .then((page) => {
         if (current) setLoad({ forId: programId, state: page ? { status: 'ready', page } : { status: 'gone' } });
       })
@@ -104,7 +129,7 @@ export default function MarketplaceProgramScreen() {
     return () => {
       current = false;
     };
-  }, [client, programId, attempt]);
+  }, [client, programId, me, attempt]);
 
   // Is a program already running on this phone? Only decides whether to show REPLACES_RUN.
   useEffect(() => {
@@ -191,6 +216,7 @@ export default function MarketplaceProgramScreen() {
   const facts = programFacts(payload);
   const author = personLabels(summary.author);
   const mine = summary.authorId === me;
+  const commentLabel = commentButtonLabel(state.page.commentCount);
 
   let actions: React.ReactNode;
   if (mine) {
@@ -234,6 +260,34 @@ export default function MarketplaceProgramScreen() {
       </Pressable>
       <Body variant="muted">{programFactsLine(facts)}</Body>
 
+      {/* (B41) Votes and comments — only on a published program: the server takes votes and
+          comments only there, so a program shared with followers or a team offers no doomed tap. */}
+      {summary.visibility === 'published' ? (
+        <View style={styles.social}>
+          <VoteControl
+            score={state.page.score}
+            myVote={state.page.myVote}
+            showDownvote
+            scoreTestID="program-score"
+            onVote={
+              me
+                ? (next) => (next == null ? clearProgramVote(client, me, summary.id) : castProgramVote(client, me, summary.id, next))
+                : undefined
+            }
+          />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={commentLabel}
+            onPress={() => router.push({ pathname: '/program-comments/[id]', params: { id: summary.id } })}
+            style={styles.commentButton}
+            hitSlop={8}
+          >
+            <Ionicons name="chatbubble-outline" size={18} color={colors.muted} />
+            <Body variant="small">{commentLabel}</Body>
+          </Pressable>
+        </View>
+      ) : null}
+
       <View style={styles.actions}>
         {message ? <Body variant="small">{message}</Body> : null}
         {actions}
@@ -258,6 +312,18 @@ const styles = StyleSheet.create({
   },
   authorName: {
     color: colors.accent,
+  },
+  social: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginTop: spacing.md,
+  },
+  commentButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    paddingTop: spacing.xs,
   },
   actions: {
     gap: spacing.sm,

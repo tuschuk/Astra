@@ -79,6 +79,14 @@
  * `-word` and `or` operators are not imitated. Who may read a program (B39's rule) is NOT imitated
  * — seed only what the reader may see; probed live at Gate 2.
  *
+ * B41 adds `program_votes` (`{ program_id, user_id, value, created_at? }`) and `program_comments`
+ * (`{ id, program_id, user_id, body, created_at }`; an insert gets a server id and time and comes
+ * back with its author nested, like `comments`), the computed `program_scores` view (every
+ * program's own columns, its net score over the rolling 7/30/365-day windows and all time, and
+ * its comment count — see `programScoreRows`), the `author:profiles…(…)` embed through that view,
+ * and `.maybeSingle()` on a read (the first matching row, or null). Who may vote or comment —
+ * published programs only, as yourself — is NOT imitated (use `refuse`); probed live at B41.
+ *
  * What it does NOT do: row-level security or general embedding. Posts are seeded already shaped
  * the way the server's embed returns them (author, flair and workout nested in), and the follow
  * insert imitates the one RLS refusal the app handles (a block in either direction). Server-side
@@ -131,10 +139,30 @@ export interface FakeSocialTables {
   program_team_shares: Row[];
   /** Program rows as the server holds them: `{ id, user_id, name, visibility, deleted_at, created_at }` (B40). */
   programs: Row[];
+  /** Program vote rows: `{ program_id, user_id, value, created_at? }` (B41). No `created_at` = cast just now. */
+  program_votes: Row[];
+  /** Program comment rows: `{ id, program_id, user_id, body, created_at }` (B41). */
+  program_comments: Row[];
 }
 
-/** What a request can name: the tables, plus the computed `post_scores` and (B24) `post_hot_scores` views. */
-type FakeSource = keyof FakeSocialTables | 'post_scores' | 'post_hot_scores';
+/** What a request can name: the tables, plus the computed views — `post_scores`, (B24) `post_hot_scores`, (B41) `program_scores`. */
+type FakeSource = keyof FakeSocialTables | 'post_scores' | 'post_hot_scores' | 'program_scores';
+
+/** A day in milliseconds — the `program_scores` windows are counted in days. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * The `program_scores` view's window sums (B41), imitated so the fake ranks Featured programs
+ * the way the server does: a vote counts in a window when it was cast within the last `days`
+ * days (no `days` = all time). TEST USE ONLY — the migration is the one home of this arithmetic,
+ * and this copy must follow it if the windows change.
+ */
+function fakeWindowScore(votes: Row[], days?: number): number {
+  const since = days == null ? -Infinity : Date.now() - days * DAY_MS;
+  return votes
+    .filter((v) => v.created_at == null || Date.parse(String(v.created_at)) >= since)
+    .reduce((sum, v) => sum + Number(v.value), 0);
+}
 
 /**
  * The server's hot score (the `post_hot_scores` view, B24), imitated so the fake ranks the way
@@ -292,6 +320,8 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     team_feed_hides: [...(seed.team_feed_hides ?? [])],
     program_team_shares: [...(seed.program_team_shares ?? [])],
     programs: [...(seed.programs ?? [])],
+    program_votes: [...(seed.program_votes ?? [])],
+    program_comments: [...(seed.program_comments ?? [])],
   };
   const requests: FakeCall[][] = [];
   let offline = options.offline ?? false;
@@ -315,7 +345,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     if (table === 'team_posts' && select.includes('author:profiles')) {
       out.author = tables.profiles.find((p) => p.id === row.author_id) ?? null;
     }
-    if (table === 'programs' && select.includes('author:profiles')) {
+    if ((table === 'programs' || table === 'program_scores') && select.includes('author:profiles')) {
       out.author = tables.profiles.find((p) => p.id === row.user_id) ?? null;
     }
     return out;
@@ -335,6 +365,24 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     return (tables.posts as Row[]).map((p) => {
       const net = tables.votes.filter((v) => v.post_id === p.id).reduce((sum, v) => sum + Number(v.value), 0);
       return { ...p, hot_score: fakeHotScore(net, String(p.created_at)) };
+    });
+  }
+
+  /**
+   * The `program_scores` view, computed now (B41): each program's own columns, its net votes over
+   * the rolling windows (`fakeWindowScore`) and all time, and its comment count.
+   */
+  function programScoreRows(): Row[] {
+    return tables.programs.map((p) => {
+      const votes = tables.program_votes.filter((v) => v.program_id === p.id);
+      return {
+        ...p,
+        score: fakeWindowScore(votes),
+        score_week: fakeWindowScore(votes, 7),
+        score_month: fakeWindowScore(votes, 30),
+        score_year: fakeWindowScore(votes, 365),
+        comment_count: tables.program_comments.filter((c) => c.program_id === p.id).length,
+      };
     });
   }
 
@@ -403,7 +451,9 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     let upsert: { row: Row; onConflict: string[] } | null = null;
     let isDelete = false;
     let single = false;
+    let maybeSingle = false;
     for (const [method, ...args] of calls) {
+      if (method === 'maybeSingle') maybeSingle = true;
       if (method === 'eq' && String(args[0]).includes('.')) {
         const [alias, column] = String(args[0]).split('.');
         embedFilters.push([alias, column, args[1]]);
@@ -449,10 +499,17 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
         return { data: null, error: { code: 'PGRST201', message: "Could not embed because more than one relationship was found for 'post_hot_scores' and 'profiles'" } };
       }
     }
-    // The hot view: every post with its hot score beside it, read-only like the real view.
-    const rows = table === 'post_hot_scores' ? hotRows() : (tables[table] as Row[]);
+    // The views — hot (every post with its hot score) and (B41) program scores — are computed now
+    // and read-only, like the real views.
+    if (table === 'program_scores' && (upsert || insert || update || isDelete)) {
+      throw new Error('fake: a view cannot be written to');
+    }
+    const rows =
+      table === 'post_hot_scores' ? hotRows() : table === 'program_scores' ? programScoreRows() : (tables[table] as Row[]);
     if (upsert) {
       const { row, onConflict } = upsert;
+      const refusal = table in tables ? options.refuse?.[table as keyof FakeSocialTables] : undefined;
+      if (refusal) return { data: null, error: refusal };
       if (table === 'votes') {
         const refused = voteRefusal(row);
         if (refused) return { data: null, error: refused };
@@ -473,7 +530,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
           return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } };
         }
       }
-      if (table === 'comments') {
+      if (table === 'comments' || table === 'program_comments') {
         commentCounter += 1;
         // The server's defaults: a fresh id and "now" (a fixed, ever-later time keeps tests stable).
         row = {
@@ -579,7 +636,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       return { data: returning ? changing.map((r) => ({ id: r.id, user_id: r.user_id })) : null, error: null };
     }
     if (isDelete) {
-      if (table === 'post_hot_scores') throw new Error('fake: a view cannot be deleted from');
+      if (table === 'post_hot_scores' || table === 'program_scores') throw new Error('fake: a view cannot be deleted from');
       // B36: the leave policy never lets an owner's own row go — silently, as RLS does.
       const removed = table === 'team_members' ? matching.filter((r) => r.role !== 'owner') : matching;
       tables[table] = rows.filter((r) => !removed.includes(r));
@@ -617,11 +674,19 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
         return { ...post, my_vote: votes.map((v) => ({ value: v.value })) };
       });
     }
-    if (table === 'comments') out = out.map(withAuthor);
-    if (table === 'team_members' || table === 'team_invites' || table === 'team_posts' || table === 'programs') {
+    if (table === 'comments' || table === 'program_comments') out = out.map(withAuthor);
+    if (
+      table === 'team_members' ||
+      table === 'team_invites' ||
+      table === 'team_posts' ||
+      table === 'programs' ||
+      table === 'program_scores'
+    ) {
       const select = calls.find(([m]) => m === 'select')?.[1];
       out = out.map((r) => withTeamEmbeds(table, r, select));
     }
+    // `.maybeSingle()` (B41): the one matching row, or null when none matched.
+    if (maybeSingle) return { data: out[0] ?? null, error: null };
     return { data: out, error: null };
   }
 
@@ -630,7 +695,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       const calls: FakeCall[] = [['from', table]];
       requests.push(calls);
       const builder: Record<string, unknown> = {};
-      for (const method of ['select', 'eq', 'neq', 'in', 'not', 'or', 'is', 'textSearch', 'order', 'limit', 'insert', 'update', 'upsert', 'delete', 'single']) {
+      for (const method of ['select', 'eq', 'neq', 'in', 'not', 'or', 'is', 'textSearch', 'order', 'limit', 'insert', 'update', 'upsert', 'delete', 'single', 'maybeSingle']) {
         builder[method] = (...args: unknown[]) => {
           calls.push([method, ...args]);
           return builder;

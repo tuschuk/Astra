@@ -15,6 +15,11 @@
  *     contents through `program_payload` — the server function B39 built, which answers only if
  *     the lifter may see the program. The weeks / workouts / exercises tables themselves stay
  *     author-only and are never read here (reading them would return nothing for another author).
+ *     (B41) It also reads the program's score and comment count from the `program_scores` view,
+ *     and the viewer's own vote from `program_votes`.
+ *   - **The Featured section** (B41) reads the `program_scores` view — every program with its
+ *     net votes over the last week, month, year and all time — with the same shelf filters as
+ *     the browse list, ranked by the chosen window.
  *
  * The payload JSON is checked by `parseProgramPayload` (teamCoaching.ts) — the one parser of that
  * shape, shared with the team pushes. The Supabase client is passed in, so tests hand it a fake.
@@ -28,6 +33,7 @@ import { throwIfError } from '@/lib/throwIfError';
 
 import type { PersonName } from './names';
 import { parseProgramPayload, type TeamProgramPayload } from './teamCoaching';
+import type { VoteValue } from './votes';
 
 /** How many programs the browse list shows at first, and how many more each "Show more" adds. */
 export const MARKETPLACE_PAGE_SIZE = 30;
@@ -44,10 +50,41 @@ export interface MarketplaceProgram {
   createdAt: string;
 }
 
-/** A program page: the row's facts and the whole program, or a null payload if it just stopped being visible. */
+/**
+ * A program page: the row's facts and the whole program (a null payload if it just stopped being
+ * visible), plus (B41) its net score, its comment count and the viewer's own vote.
+ */
 export interface MarketplacePage {
   summary: MarketplaceProgram;
   payload: TeamProgramPayload | null;
+  /** Net votes, all time (ups minus downs) — the server's tally. */
+  score: number;
+  commentCount: number;
+  /** The viewer's own vote, or null for none (or nobody signed in). */
+  myVote: VoteValue | null;
+}
+
+/** (B41, MKT-2) The Featured section's four popularity windows. */
+export type FeaturedWindow = 'week' | 'month' | 'year' | 'all';
+
+/**
+ * Which `program_scores` column ranks each window. The windows are ROLLING — the last 7, 30 and
+ * 365 days back from now (a vote counts when it was cast inside the window) — and "all" is every
+ * vote ever. The sums themselves are the server view's; this table only picks the column.
+ */
+export const FEATURED_WINDOW_COLUMNS: Record<FeaturedWindow, 'score_week' | 'score_month' | 'score_year' | 'score'> = {
+  week: 'score_week',
+  month: 'score_month',
+  year: 'score_year',
+  all: 'score',
+};
+
+/** How many programs the Featured section shows per window — a short list by nature. */
+export const FEATURED_LIMIT = 10;
+
+/** One featured program: a browse card's facts plus its net score in the chosen window. */
+export interface FeaturedProgram extends MarketplaceProgram {
+  score: number;
 }
 
 /** The columns a Marketplace read asks for, with the author's names embedded through the foreign key. */
@@ -101,22 +138,79 @@ export async function loadPublishedPrograms(
 }
 
 /**
- * One program page: the program's row and its whole contents. Answers null when the lifter can't
- * see the program (not published to them, deleted, or no such id). `payload` is null when the
- * row read but the contents didn't — it stopped being visible between the two reads — and the
- * page says "no longer available". Serves any program the server lets the lifter see (their own,
- * a team share…), though only the Marketplace links here. Throws on failure.
+ * (B41, MKT-2) The Featured section: the published programs most popular in `window`, at most
+ * `limit` of them, highest net score first; ties go to the newest program (then the larger id, so
+ * the order never wobbles). A window nobody voted in still lists programs — all at 0, newest first.
+ *
+ * It reads THROUGH the server's `program_scores` view, which carries the same columns as a
+ * programs row, so the author embed and the two shelf filters work exactly as in the browse
+ * list. The filters are load-bearing here too: the view shows the lifter their own private and
+ * deleted programs (the author always sees their own), which never belong on a public shelf.
+ * Throws on failure.
  */
-export async function loadProgramPage(client: SupabaseClient, programId: string): Promise<MarketplacePage | null> {
-  const [row, rpc] = await Promise.all([
+export async function loadFeaturedPrograms(
+  client: SupabaseClient,
+  window: FeaturedWindow,
+  limit = FEATURED_LIMIT,
+): Promise<FeaturedProgram[]> {
+  const column = FEATURED_WINDOW_COLUMNS[window];
+  const { data, error } = await client
+    .from('program_scores')
+    .select(`${MARKETPLACE_SELECT},${column}`)
+    .eq('visibility', 'published')
+    .is('deleted_at', null)
+    .order(column, { ascending: false })
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(limit);
+  throwIfError(error, 'Loading the featured programs failed');
+  const rows = (data ?? []) as unknown as (RawMarketplaceProgram & Partial<Record<typeof column, number>>)[];
+  return rows.map((raw) => ({ ...toMarketplaceProgram(raw), score: raw[column] ?? 0 }));
+}
+
+/** A `program_scores` row as the program page asks for it (B41). */
+interface RawProgramScore {
+  score: number | null;
+  comment_count: number | null;
+}
+
+/**
+ * One program page: the program's row and its whole contents, plus (B41) its score, comment count
+ * and the viewer's own vote — four reads side by side. Answers null when the lifter can't see the
+ * program (not published to them, deleted, or no such id). `payload` is null when the row read
+ * but the contents didn't — it stopped being visible between the reads — and the page says "no
+ * longer available". Serves any program the server lets the lifter see (their own, a team
+ * share…), though only the Marketplace links here.
+ *
+ * Inputs: the client, the program, and the viewer's id (`me`, null when signed out — then no vote
+ * is read). The vote read filters on `me` itself: every viewer of a program may read ALL its
+ * votes (the tally is the same for everyone), so the server's rules can't narrow it to "mine".
+ * A missing score row reads as zeros (a quiet page, never a crash). Throws on failure.
+ */
+export async function loadProgramPage(client: SupabaseClient, programId: string, me: string | null): Promise<MarketplacePage | null> {
+  const [row, rpc, scores, mine] = await Promise.all([
     client.from('programs').select(MARKETPLACE_SELECT).eq('id', programId).is('deleted_at', null).limit(1),
     client.rpc('program_payload', { p_program: programId }),
+    client.from('program_scores').select('score,comment_count').eq('id', programId).limit(1),
+    me == null
+      ? Promise.resolve({ data: null, error: null })
+      : client.from('program_votes').select('value').eq('program_id', programId).eq('user_id', me).maybeSingle(),
   ]);
   throwIfError(row.error, 'Loading the program failed');
   throwIfError(rpc.error, 'Loading the program’s workouts failed');
+  throwIfError(scores.error, 'Loading the program’s score failed');
+  throwIfError(mine.error, 'Loading your vote failed');
   const [raw] = (row.data ?? []) as unknown as RawMarketplaceProgram[];
   if (!raw) return null;
-  return { summary: toMarketplaceProgram(raw), payload: parseProgramPayload(rpc.data) };
+  const [score] = (scores.data ?? []) as unknown as RawProgramScore[];
+  const vote = (mine.data as { value?: number } | null)?.value;
+  return {
+    summary: toMarketplaceProgram(raw),
+    payload: parseProgramPayload(rpc.data),
+    score: score?.score ?? 0,
+    commentCount: score?.comment_count ?? 0,
+    myVote: vote === 1 || vote === -1 ? vote : null,
+  };
 }
 
 /** What the program page states about a program's size (MKT-4's "length" and "days per week"). */
