@@ -14,6 +14,9 @@
  *     on your own profile your role), each opening that team's page. The server decides which of
  *     someone else's teams you see: their open teams, and invite-only teams you share. No teams
  *     to show → no section;
+ *   - (B50, YOU-6) a **Gym** section above it — the lifter's one gym as a row opening the gym's
+ *     page. Gym memberships are public to signed-in lifters, so every viewer sees it. No gym →
+ *     no section;
  *   - three tabs (four on your own profile): **Posts** (their posts as feed cards, newest first, twenty at a time — the server
  *     decides which ones the viewer may see), **History** (every finished workout, newest first,
  *     paging back to the very first one), and **PRs** (current records per exercise, e.g.
@@ -62,6 +65,7 @@ import { FollowButton } from '@/components/social/FollowButton';
 import { PostCard, UNNAMED_EXERCISE } from '@/components/social/PostCard';
 import { usePostListActions } from '@/components/social/usePostListActions';
 import { usePostPhotoSource } from '@/components/social/usePostPhotoSource';
+import { GymListItem } from '@/components/gyms/GymListItem';
 import { TeamListItem } from '@/components/teams/TeamListItem';
 import { TrendsSection } from '@/components/profile/TrendsSection';
 import { useTrendData } from '@/components/profile/useTrendData';
@@ -99,6 +103,7 @@ import {
   type ProfileHeader,
   type ProfileWorkout,
 } from '@/social/profile';
+import { gymOf, type Gym } from '@/social/gyms';
 import { loadTeamsOf, type TeamMembership } from '@/social/teams';
 import { formatPrLine, workoutDateLabel, workoutDetailsLabel } from '@/workout/format';
 import { listPastWorkouts, type PastWorkoutSummary } from '@/workout/history';
@@ -216,8 +221,11 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
   // (B36) The lifter's teams, tagged with whose they are.
   const [teamsState, setTeams] = useState<{ forId: string; value: TeamMembership[] } | null>(null);
   const teams = teamsState?.forId === profileId ? teamsState.value : [];
+  // (B50) The lifter's gym (null = none), tagged with whose it is.
+  const [gymState, setGym] = useState<{ forId: string; value: Gym | null } | null>(null);
+  const gym = gymState?.forId === profileId ? gymState.value : null;
   // Each reload gets a number per list; an answer that lands after a newer reload is dropped.
-  const generation = useRef({ header: 0, posts: 0, history: 0, prs: 0, relation: 0, teams: 0, message: 0 });
+  const generation = useRef({ header: 0, posts: 0, history: 0, prs: 0, relation: 0, teams: 0, gym: 0, message: 0 });
   const pageInFlight = useRef(false);
 
   useEffect(() => {
@@ -392,6 +400,23 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
     }
   }, [client, me, profileId]);
 
+  /**
+   * (B50, YOU-6) The gym this lifter belongs to, for the Gym section. Gym memberships are public
+   * to signed-in lifters, so this is the same answer for every viewer. A failed read just leaves
+   * the section away.
+   */
+  const loadGym = useCallback(async () => {
+    if (!me) return;
+    const mine = ++generation.current.gym;
+    try {
+      const value = await gymOf(client, profileId);
+      if (mine === generation.current.gym) setGym({ forId: profileId, value });
+    } catch (error: unknown) {
+      if (mine !== generation.current.gym) return;
+      console.warn('Profile: the gym could not be loaded', error);
+    }
+  }, [client, me, profileId]);
+
   // Fresh every time the profile comes into view (first open, back from Edit profile or a workout).
   useFocusEffect(
     useCallback(() => {
@@ -399,7 +424,8 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
       void loadRelation();
       void loadCanMessage();
       void loadTeams();
-    }, [loadHeader, loadRelation, loadCanMessage, loadTeams]),
+      void loadGym();
+    }, [loadHeader, loadRelation, loadCanMessage, loadTeams, loadGym]),
   );
   useFocusEffect(
     useCallback(() => {
@@ -613,6 +639,13 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
               void loadSection(section);
             }}
           />
+        </View>
+      ) : null}
+
+      {gym ? (
+        <View style={styles.teams}>
+          <SectionLabel accessibilityRole="header">Gym</SectionLabel>
+          <GymListItem gym={gym} onPress={() => router.push({ pathname: '/gym/[id]', params: { id: gym.id } })} />
         </View>
       ) : null}
 

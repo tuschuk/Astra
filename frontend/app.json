@@ -31,7 +31,13 @@
         }
       ],
       "expo-sqlite",
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Astra uses your location to sort the gym directory by distance. Your location is never saved."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

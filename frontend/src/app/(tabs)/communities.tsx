@@ -1,5 +1,5 @@
 /**
- * Communities — Teams (B36: TEAM-1, TEAM-2) and, later, Gyms (GYM-1..GYM-10).
+ * Communities — Teams (B36: TEAM-1, TEAM-2) and Gyms (B50: GYM-1, GYM-2).
  *
  * What it shows, under Teams:
  *   - **Your teams** — every team you are in, with its mode and your role; tap one for its page
@@ -9,19 +9,25 @@
  *   - **Find teams** — type two letters or more to search teams by name; each result opens its
  *     page, and a team you could join right now (open, or invite-only with your invite) has a
  *     Join button right on the row.
- * The Gyms half is still a card explaining what will live there.
  *
- * Teams live on the server, so this screen needs a connection; without one it says so, with
+ * Under Gyms (B50, GYM-2): **Your gym** — the one gym you belong to, as a row that opens its page
+ * (members and Gym feed) — and **Find your gym**, which opens the distance-sorted directory.
+ * With no gym yet, a line explains what a gym is for instead of the row; while your gym can't be
+ * read (no connection) that line is held back, so nobody who has a gym is invited to join one. Gyms have no create or
+ * manage control anywhere: they are places, run by their community (GYM-7).
+ *
+ * Teams and gyms live on the server, so this screen needs a connection; without one it says so, with
  * Retry. Who may join what is decided by the server's security rules (an invite-only team refuses
  * a join without an invite); this screen only asks and shows the answer. Everything reloads when
  * the tab comes back into view (after creating, joining or leaving a team elsewhere).
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 
 import { useAuth } from '@/auth/AuthProvider';
 import { Screen } from '@/components/Screen';
+import { GymListItem } from '@/components/gyms/GymListItem';
 import { TeamListItem } from '@/components/teams/TeamListItem';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
@@ -30,6 +36,7 @@ import { Body, Heading, SectionLabel } from '@/components/ui/Text';
 import { TextField } from '@/components/ui/TextField';
 import { getSupabase } from '@/lib/supabase';
 import { MIN_SEARCH_LENGTH } from '@/social/follows';
+import { gymOf, type Gym } from '@/social/gyms';
 import {
   joinTeam,
   loadTeamsOf,
@@ -64,10 +71,21 @@ export default function CommunitiesScreen() {
   // The latest search answer and the text it answers (`results` null = the search failed).
   const [answer, setAnswer] = useState<{ query: string; results: Team[] | null } | null>(null);
   const tooShort = query.trim().length < MIN_SEARCH_LENGTH;
+  // (B50) Your gym: undefined while unread or unreachable, null when you haven't joined one.
+  const [myGym, setMyGym] = useState<Gym | null | undefined>(undefined);
+  // Each gym read gets a number; an answer that lands after a newer read started is ignored.
+  const gymRead = useRef(0);
 
-  /** Reads your teams and invites. Keeps what's shown if a background re-read fails. */
+  /** Reads your teams and invites, and (B50) your gym. Keeps what's shown if a background re-read fails. */
   const load = useCallback(async () => {
     if (!me) return;
+    // The gym read is separate, so a failure there never blanks the Teams half (or the reverse).
+    const mine = ++gymRead.current;
+    gymOf(client, me)
+      .then((gym) => {
+        if (mine === gymRead.current) setMyGym(gym);
+      })
+      .catch((error: unknown) => console.warn('Communities: your gym could not be loaded', error));
     try {
       const [teams, invites] = await Promise.all([loadTeamsOf(client, me), myInvites(client, me)]);
       setOverview({ status: 'ready', teams, invites });
@@ -219,13 +237,27 @@ export default function CommunitiesScreen() {
         </View>
       )}
 
-      <SectionLabel style={styles.sectionLabel}>Gyms</SectionLabel>
-      <Card>
-        <Body>
-          Join your gym to enter its leaderboard: squat, bench and deadlift PRs, video-verified by
-          the community.
-        </Body>
-      </Card>
+      <View style={styles.sectionHeader}>
+        <SectionLabel>Gyms</SectionLabel>
+        <Button label="Find your gym" variant="ghost" onPress={() => router.push('/gyms')} />
+      </View>
+      {myGym ? (
+        <View style={styles.list}>
+          <SectionLabel size="small">Your gym</SectionLabel>
+          <GymListItem gym={myGym} onPress={() => router.push({ pathname: '/gym/[id]', params: { id: myGym.id } })} />
+        </View>
+      ) : myGym === null ? (
+        <Card>
+          <Body>
+            Join your gym — any gym, no proof of membership — to share a feed with the lifters who
+            train there.
+          </Body>
+        </Card>
+      ) : overview.status === 'error' ? null : (
+        // Not read yet — or unreachable, in which case the Teams half above already shows the
+        // connection message — so no "join a gym" invitation to someone who may have one.
+        <Body variant="muted">Loading your gym…</Body>
+      )}
     </Screen>
   );
 }
@@ -252,9 +284,5 @@ const styles = StyleSheet.create({
   },
   search: {
     marginVertical: spacing.md,
-  },
-  sectionLabel: {
-    marginTop: spacing.xl,
-    marginBottom: spacing.md,
   },
 });

@@ -68,40 +68,18 @@ supersets-dropsets-timed (LOG-11, LOG-12), B10 set-types (LOG-14, LOG-15), B09 l
 (LOG-2, NFR-2), B08 active-workout-store (NFR-3), B07 local-store-and-sync (FND-3), B06
 training-math, B05 auth-and-signup. Details in each plan file.
 
-**B50 gyms-core** (planning now): PostGIS `gyms` table and `gym_members` (one active per user)
-with RLS; distance-sorted directory from the user's location, seeded with a small fixture until
-B51; join and switch; Gym feed from Home; Gym on the profile; no claim or manage flow anywhere.
-Step DoD: joining a second Gym switches the active one, the directory sorts by distance, and no
-claim / manage path exists. Covers GYM-1 (part — the Denver import is B51, Blocked on the data
-source), GYM-2, GYM-7, SOC-10 (Gym half), YOU-6 (Gym half). Depends on B36. Standing inputs
-for its planner: **PostGIS is available on the live project but not installed** (version 3.3.7;
-`create extension postgis with schema extensions;` in the migration — free; `earthdistance` /
-`cube` also available if the planner prefers a lighter path, but the step text and
-`ARCHITECTURE.md` say PostGIS); `gyms (id, name, address, location geography(Point, 4326),
-created_at)` with a GIST index, **readable by any signed-in user and writable by nobody but the
-service role** (GYM-7: community-run, no claim / manage — no insert / update / delete policies
-for users; the seed fixture is inserted by the migration as a handful of Denver-area gyms with
-real-looking coordinates clearly marked fixture, replaced by B51); the distance sort needs a
-definer or invoker RPC (`public.gyms_near(lat, lng, limit)` returning rows with
-`ST_Distance` in metres, ordered — PostgREST cannot order by a computed distance otherwise),
-EXECUTE for authenticated, no secrets; `gym_members (user_id primary key, gym_id, joined_at)` —
-**one active Gym per user is the primary key on `user_id`** (join = upsert, switch = the same
-upsert; leave = delete), owner-only RLS, FK cascades; the **Gym feed** = members' posts filtered
-to the gym's roster through the existing `loadFeedPage` (the Team feed precedent: a filter, no
-visibility change; roster read `gym_members` by `gym_id` — members readable by other members or
-by anyone signed in, the planner records which); Home gains a Gym chip beside the Teams row
-(SOC-10 Gym half); the profile's Gym line links to the gym page (YOU-6 Gym half); **location**
-— `expo-location` is not a dependency yet and is the step's one justified addition (an Expo SDK
-module, free): ask for foreground permission only when the lifter opens the directory (the B47
-"never on launch" posture), degrade to a manual "Denver" fallback or an alphabetical list when
-denied, never store the location server-side (privacy: the user's location is sensitive — send
-it only as RPC parameters, never persist it); the Communities tab's Gyms card becomes the entry;
-the Gate 2 probe — two throwaway users: join a gym (1 row), join another (still 1 row, new
-gym), a third user reads the gym page and roster as the policy says, `gyms_near` returns the
-fixture ordered by distance from a Denver point and the same from a far point, user inserts /
-updates / deletes on `gyms` are refused (42501) — the "no claim / manage path" half proven at the
-API. No new dependency beyond `expo-location`; the ERD gains the two tables, the extension and
-the RPC; the flowchart gains Communities → Gyms → directory → gym page → feed and the Home chip.
+**B50 gyms-core (built on its branch, awaiting Gate 2):** migrations `20261116123049_gyms.sql`
+and `20261116124327_gym_members_no_truncate.sql` are **applied live** (PostGIS in `extensions`,
+`gyms` + a fictional six-gym "Sample Gym · …" fixture, `gym_members` with PK `user_id`,
+restamp trigger, `gyms_near` invoker RPC; grants trimmed to read / join / switch / leave).
+Probed live, SQL and a REST upsert with a throwaway user’s real JWT (cleaned up): sort from two
+origins correct, switch keeps one row and restamps `joined_at`, `joined_at` writes / writes to
+`gyms` / acting for another user / anon all refused. App: `social/gyms.ts`, the directory
+(`app/gyms`, `expo-location` foreground, Denver fallback), the gym page (`app/gym/[id]`: Join /
+Switch with confirm / Leave, Members, Gym feed), Communities’ Gyms half, Home’s row renamed
+**Your groups** with the gym chip first, and the profile’s Gym section. Builder checks: tsc, lint
+and Jest (182 suites / 2007 tests) green; `mmdc` declined by the permission layer. Deviations and
+the review outcome are in the plan file; device checks are in DEFERRED.
 After B50: B51 is Blocked (gym data source), B52 gym-leaderboards (depends on B50, B13), B53
 PR-verification depends on B33 (Blocked), B54 hydration-and-sleep, B55 and B56 Blocked.
 

@@ -87,6 +87,13 @@
  * and `.maybeSingle()` on a read (the first matching row, or null). Who may vote or comment —
  * published programs only, as yourself — is NOT imitated (use `refuse`); probed live at B41.
  *
+ * B50 adds `gyms` (`{ id, name, address }`) and `gym_members` (`{ user_id, gym_id, joined_at }`):
+ * the membership upsert on `user_id` (the primary key — one gym per lifter, so a second join
+ * replaces the first) gets a server join time on a new row and a fresh one when the gym changes
+ * (the restamp trigger); reads nest `gym:gyms(…)` and `profile:profiles…(…)` on memberships. The
+ * directory's `gyms_near` is supplied by the test through `rpc`. That only you may join, switch
+ * or leave as yourself, and that nobody may write `gyms`, are NOT imitated — probed live at B50.
+ *
  * What it does NOT do: row-level security or general embedding. Posts are seeded already shaped
  * the way the server's embed returns them (author, flair and workout nested in), and the follow
  * insert imitates the one RLS refusal the app handles (a block in either direction). Server-side
@@ -143,6 +150,10 @@ export interface FakeSocialTables {
   program_votes: Row[];
   /** Program comment rows: `{ id, program_id, user_id, body, created_at }` (B41). */
   program_comments: Row[];
+  /** Gym rows: `{ id, name, address }` (B50). */
+  gyms: Row[];
+  /** Gym membership rows: `{ user_id, gym_id, joined_at }` — at most one per lifter (B50). */
+  gym_members: Row[];
 }
 
 /** What a request can name: the tables, plus the computed views — `post_scores`, (B24) `post_hot_scores`, (B41) `program_scores`. */
@@ -322,12 +333,15 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     programs: [...(seed.programs ?? [])],
     program_votes: [...(seed.program_votes ?? [])],
     program_comments: [...(seed.program_comments ?? [])],
+    gyms: [...(seed.gyms ?? [])],
+    gym_members: [...(seed.gym_members ?? [])],
   };
   const requests: FakeCall[][] = [];
   let offline = options.offline ?? false;
   let commentCounter = 0;
   let teamCounter = 0;
   let pushCounter = 0;
+  let gymJoinCounter = 0;
 
   /**
    * (B36) PostgREST's embeds on the team tables, for the two the app asks for: a membership or
@@ -344,6 +358,12 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     }
     if (table === 'team_posts' && select.includes('author:profiles')) {
       out.author = tables.profiles.find((p) => p.id === row.author_id) ?? null;
+    }
+    if (table === 'gym_members' && select.includes('gym:gyms(')) {
+      out.gym = tables.gyms.find((g) => g.id === row.gym_id) ?? null;
+    }
+    if (table === 'gym_members' && select.includes('profile:profiles')) {
+      out.profile = tables.profiles.find((p) => p.id === row.user_id) ?? null;
     }
     if ((table === 'programs' || table === 'program_scores') && select.includes('author:profiles')) {
       out.author = tables.profiles.find((p) => p.id === row.user_id) ?? null;
@@ -515,6 +535,18 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
         if (refused) return { data: null, error: refused };
       }
       const existing = rows.find((r) => onConflict.every((k) => r[k] === row[k]));
+      if (table === 'gym_members') {
+        // B50: the server stamps the join time — on a new row, and again when the gym changes.
+        gymJoinCounter += 1;
+        const now = new Date(Date.UTC(2026, 10, 16, 9, 0, gymJoinCounter)).toISOString();
+        if (!existing) {
+          rows.push({ ...row, joined_at: now });
+        } else {
+          if (existing.gym_id !== row.gym_id) existing.joined_at = now;
+          existing.gym_id = row.gym_id;
+        }
+        return { data: null, error: null };
+      }
       if (existing) Object.assign(existing, row);
       else rows.push({ ...row });
       return { data: single ? (existing ?? row) : null, error: null };
@@ -680,7 +712,8 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       table === 'team_invites' ||
       table === 'team_posts' ||
       table === 'programs' ||
-      table === 'program_scores'
+      table === 'program_scores' ||
+      table === 'gym_members'
     ) {
       const select = calls.find(([m]) => m === 'select')?.[1];
       out = out.map((r) => withTeamEmbeds(table, r, select));

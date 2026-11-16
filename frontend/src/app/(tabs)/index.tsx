@@ -22,11 +22,13 @@
  * viewer's own followers (a re-share card shows the original inside it); on the lifter's own
  * workout cards, Share opens the image share card for the phone's share sheet.
  *
- * Your teams (B36, TEAM-2 / SOC-10): when the lifter is in any team or holds a team invite, a
- * "Your teams" row sits under the feed controls — one chip per team, opening that team's page
- * and its Team feed, and an "N team invites" chip that opens Communities. Read from the server
- * each time Home comes into view; with no teams, no invites, or no connection the row is simply
- * absent and the feed is unaffected. The card buttons' wiring is shared with the profile and team
+ * Your groups (B36 Teams, B50 Gym — SOC-10): when the lifter has a gym, is in any team or holds
+ * a team invite, a "Your groups" row sits under the feed controls — first a chip for their gym
+ * (opening the gym's page and its Gym feed), then one chip per team (that team's page and Team
+ * feed), and an "N team invites" chip that opens Communities. Read from the server each time
+ * Home comes into view; with no gym, no teams, no invites, or no connection the row is simply
+ * absent and the feed is unaffected. The gym and the teams are read separately, so one failing
+ * never hides the other. The card buttons' wiring is shared with the profile and team
  * feeds (`usePostListActions`).
  *
  * Order and flair (B24): under "Your feed", Latest | Hot picks newest first or the server's
@@ -67,6 +69,7 @@ import { getSupabase } from '@/lib/supabase';
 import { appendPage, feedAuthorIds, loadFeedPage, type FeedCursor, type FeedPost } from '@/social/feed';
 import { getCachedFeedPrefs, loadFeedPrefs, saveFeedPrefs, type FeedPrefs, type FeedSort } from '@/social/feedPrefs';
 import { withPostVisibility } from '@/social/postPrivacy';
+import { gymOf, type Gym } from '@/social/gyms';
 import { loadTeamsOf, myInvites, type TeamMembership } from '@/social/teams';
 import { colors, spacing } from '@/theme';
 
@@ -263,10 +266,20 @@ export default function HomeScreen() {
 
   // B36 (TEAM-2, SOC-10): the lifter's teams and pending invites, as chips above the feed.
   const [teamRow, setTeamRow] = useState<{ teams: TeamMembership[]; invites: number } | null>(null);
+  // B50 (GYM-2, SOC-10): the lifter's gym, the first chip of the same row; null = none / unread.
+  const [myGym, setMyGym] = useState<Gym | null>(null);
   useFocusEffect(
     useCallback(() => {
       if (!me) return;
       let cancelled = false;
+      gymOf(client, me)
+        .then((gym) => {
+          if (!cancelled) setMyGym(gym);
+        })
+        .catch((error: unknown) => {
+          // Like the teams: the feed shows its own connection message; the chip just stays away.
+          console.warn('Home: your gym could not be loaded', error);
+        });
       Promise.all([loadTeamsOf(client, me), myInvites(client, me)])
         .then(([teams, invites]) => {
           if (!cancelled) setTeamRow({ teams, invites: invites.length });
@@ -312,14 +325,23 @@ export default function HomeScreen() {
           </ScrollView>
         </View>
       ) : null}
-      {/* B36: one chip per team → its page (and the Team feed); an invite chip → Communities. */}
-      {teamRow && (teamRow.teams.length > 0 || teamRow.invites > 0) ? (
-        <View style={styles.teams}>
+      {/* B50: the gym chip → its page (and the Gym feed); B36: one chip per team → its page (and
+          the Team feed); an invite chip → Communities. */}
+      {myGym || (teamRow && (teamRow.teams.length > 0 || teamRow.invites > 0)) ? (
+        <View style={styles.groups}>
           <SectionLabel size="small" accessibilityRole="header">
-            Your teams
+            Your groups
           </SectionLabel>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.teamRow}>
-            {teamRow.teams.map(({ team }) => (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.groupRow}>
+            {myGym ? (
+              <Button
+                label={myGym.name}
+                variant="ghost"
+                accessibilityLabel={`Open your gym ${myGym.name}`}
+                onPress={() => router.push({ pathname: '/gym/[id]', params: { id: myGym.id } })}
+              />
+            ) : null}
+            {(teamRow?.teams ?? []).map(({ team }) => (
               <Button
                 key={team.id}
                 label={team.name}
@@ -328,7 +350,7 @@ export default function HomeScreen() {
                 onPress={() => router.push({ pathname: '/team/[id]', params: { id: team.id } })}
               />
             ))}
-            {teamRow.invites > 0 ? (
+            {teamRow && teamRow.invites > 0 ? (
               <Button
                 label={teamRow.invites === 1 ? '1 team invite' : `${teamRow.invites} team invites`}
                 variant="outline"
@@ -465,11 +487,11 @@ const styles = StyleSheet.create({
   flairRow: {
     paddingRight: spacing.md,
   },
-  teams: {
+  groups: {
     marginTop: spacing.md,
     gap: spacing.xs,
   },
-  teamRow: {
+  groupRow: {
     gap: spacing.sm,
     paddingRight: spacing.md,
   },
