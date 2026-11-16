@@ -67,6 +67,10 @@
  * keeps it — depends on who is acting, which the fake has no notion of; probed live at B38. Who
  * may remove, hide, unhide or delete a team is NOT imitated — probed live at B38.
  *
+ * B39 adds `program_team_shares` (its primary key refuses a repeat share with 23505; a team delete
+ * cascades its shares). Who may share — the author, with a Team they're in — is NOT imitated
+ * (the `refuse` option lets a test stand in for that refusal); probed live at B39.
+ *
  * What it does NOT do: row-level security or general embedding. Posts are seeded already shaped
  * the way the server's embed returns them (author, flair and workout nested in), and the follow
  * insert imitates the one RLS refusal the app handles (a block in either direction). Server-side
@@ -115,6 +119,8 @@ export interface FakeSocialTables {
   team_assignments: Row[];
   /** Feed-hide rows: `{ team_id, post_id, hidden_by }` (B38). */
   team_feed_hides: Row[];
+  /** Program share rows: `{ program_id, team_id }` (B39). */
+  program_team_shares: Row[];
 }
 
 /** What a request can name: the tables, plus the computed `post_scores` and (B24) `post_hot_scores` views. */
@@ -220,6 +226,11 @@ interface FakeOptions {
    * is built in; anything else not listed here answers PGRST202 like a missing function.
    */
   rpc?: Record<string, (params: Record<string, unknown>) => unknown>;
+  /**
+   * (B39) Inserts into these tables are refused with this error, standing in for a security
+   * rule the fake can't judge (it has no signed-in identity) — e.g. sharing with a Team you're not in.
+   */
+  refuse?: Partial<Record<keyof FakeSocialTables, { code: string; message: string }>>;
 }
 
 /**
@@ -245,6 +256,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     team_posts: [...(seed.team_posts ?? [])],
     team_assignments: [...(seed.team_assignments ?? [])],
     team_feed_hides: [...(seed.team_feed_hides ?? [])],
+    program_team_shares: [...(seed.program_team_shares ?? [])],
   };
   const requests: FakeCall[][] = [];
   let offline = options.offline ?? false;
@@ -412,6 +424,8 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     }
     if (insert) {
       let row: Row = insert;
+      const refusal = table in tables ? options.refuse?.[table as keyof FakeSocialTables] : undefined;
+      if (refusal) return { data: null, error: refusal };
       if (table === 'votes') {
         const refused = voteRefusal(row);
         if (refused) return { data: null, error: refused };
@@ -492,6 +506,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
         team_invites: ['team_id', 'user_id'],
         team_assignments: ['team_id', 'user_id', 'program_id'],
         team_feed_hides: ['team_id', 'post_id'],
+        program_team_shares: ['program_id', 'team_id'],
       };
       const key = uniqueKeys[table];
       if (key && rows.some((x) => key.every((k) => x[k] === row[k]))) {
@@ -536,7 +551,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       if (table === 'teams') {
         // B38: every team-scoped table cascades from teams.
         const ids = new Set(removed.map((t) => t.id));
-        for (const child of ['team_members', 'team_invites', 'team_posts', 'team_assignments', 'team_feed_hides'] as const) {
+        for (const child of ['team_members', 'team_invites', 'team_posts', 'team_assignments', 'team_feed_hides', 'program_team_shares'] as const) {
           tables[child] = tables[child].filter((r) => !ids.has(r.team_id));
         }
       }

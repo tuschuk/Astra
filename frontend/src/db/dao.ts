@@ -224,16 +224,28 @@ export interface PostRow {
 }
 
 /**
+ * Who besides its author may see a program (B39), enforced by the server's security rules:
+ * 'private' — only the author; 'followers' — the author's followers (never across a block);
+ * 'team' — members of the Teams the author shared it with; 'published' — anyone signed in (the
+ * Marketplace lists these). The meaning words shown to the lifter live in `programs/programs.ts`.
+ */
+export type ProgramVisibility = 'private' | 'followers' | 'team' | 'published';
+
+/**
  * One of the lifter's training programs (server table `programs`, B34) — the top of the
- * week → workout → exercise tree. Only its author can read or change it (server security rules).
- * Removing a program stamps `deleted_at`; the row stays (soft delete — see `programs/programs.ts`).
+ * week → workout → exercise tree. Only its author can change it; who else can see it is its
+ * `visibility` (server security rules, B39). Others never download it onto their phone — they
+ * read shared programs online. Removing a program stamps `deleted_at`; the row stays (soft
+ * delete — see `programs/programs.ts`).
  */
 export interface ProgramRow {
   id: string;
-  /** The author — the only person who can see it. */
+  /** The author — the only person who can change it. */
   user_id: string;
   /** 1–100 characters. */
   name: string;
+  /** Who besides the author may see it (B39). New programs start 'private'. */
+  visibility: ProgramVisibility;
   /** When it was deleted; null while it is live. */
   deleted_at: string | null;
   created_at: string;
@@ -437,7 +449,7 @@ export const TABLE_COLUMNS: { readonly [T in MirroredTable]: readonly (keyof Mir
     'created_at',
     'updated_at',
   ],
-  programs: ['id', 'user_id', 'name', 'deleted_at', 'created_at', 'updated_at'],
+  programs: ['id', 'user_id', 'name', 'visibility', 'deleted_at', 'created_at', 'updated_at'],
   program_weeks: ['id', 'program_id', 'position', 'deleted_at', 'created_at', 'updated_at'],
   program_workouts: ['id', 'program_week_id', 'name', 'position', 'deleted_at', 'created_at', 'updated_at'],
   program_exercises: [

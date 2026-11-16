@@ -67,7 +67,16 @@ export async function createProgramFromPayload(
   const name = payload.name.trim();
   assertValidProgramName(name);
 
-  const program: ProgramRow = { id: newId(), user_id: userId, name, deleted_at: null, created_at: now, updated_at: now };
+  // A copy is the lifter's own new program, so it starts private whatever the original's setting (B39).
+  const program: ProgramRow = {
+    id: newId(),
+    user_id: userId,
+    name,
+    visibility: 'private',
+    deleted_at: null,
+    created_at: now,
+    updated_at: now,
+  };
   const weeks: ProgramWeekRow[] = [];
   const workouts: ProgramWorkoutRow[] = [];
   const slots: ProgramExerciseRow[] = [];
