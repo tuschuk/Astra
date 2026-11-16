@@ -140,7 +140,11 @@ leaderboard_entries
   are positional (1, 2, 3 — no shared ranks; two 405s show as 1 and 2, the earlier verification
   first). Recorded as the launch reading; shared "T-1" ranks are display polish for later.
 - The client splits the rows into the two divisions and numbers each independently. `limit=200`
-  is a generous top-of-board cap, recorded; keyset paging if a gym ever outgrows it.
+  is a generous top-of-board cap, recorded; keyset paging if a gym ever outgrows it. (Gate 1
+  note: because the cap applies before the client-side split, a gym with more than 200 verified
+  entries for one lift could starve the smaller division of its tail; accepted at launch scale —
+  the recorded fix, if a board ever hits the cap, is one read per lift *and* division with the
+  `division=eq.` filter, not a bigger cap.)
 - The `profile:profiles(…)` embed is the `GYM_MEMBER_SELECT` shape; profiles are public-read
   (B25), so names render for entrants who have since left the gym — which GYM-9 requires
   (an old-board row whose member left must still say who lifted it).
