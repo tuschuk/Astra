@@ -27,6 +27,7 @@ const COMMENT = 'c0000000-0000-4000-8000-000000000001'; // Alex's comment on it
 const OWN_COMMENT = 'c0000000-0000-4000-8000-000000000002'; // Bea's comment on her own post
 const TEAM = 'b0000000-0000-4000-8000-000000000001';
 const TEAM_POST = 'd0000000-0000-4000-8000-000000000001'; // Alex's post to the team
+const MESSAGE = 'e1000000-0000-4000-8000-000000000001'; // Alex's direct message to Bea
 
 const tokenOf = (who: string, n = 0) => `ExponentPushToken[${who.slice(0, 4)}${n}]`;
 
@@ -43,6 +44,9 @@ function fakeWorld() {
   ]);
   const votes = new Map([[`${POST}:${ALEX}`, { value: 1, postAuthorId: BEA }]]);
   const teamPosts = new Map([[TEAM_POST, { authorId: ALEX, teamId: TEAM, teamName: 'Iron Crew' }]]);
+  const messages = new Map<string, { senderId: string; memberIds: [string, string] }>([
+    [MESSAGE, { senderId: ALEX, memberIds: [ALEX, BEA] }],
+  ]);
   const members = [ALEX, BEA, CAL];
   const blocks: [string, string][] = [];
   const mutes: [string, string][] = []; // [muter, muted]
@@ -61,6 +65,7 @@ function fakeWorld() {
     readComment: async (id) => comments.get(id) ?? null,
     readVote: async (post, voter) => votes.get(`${post}:${voter}`) ?? null,
     readTeamPost: async (id) => teamPosts.get(id) ?? null,
+    readMessage: async (id) => messages.get(id) ?? null,
     teamMemberIds: async () => [...members],
     displayName: async (id) => (id === ALEX ? 'Alex' : id === BEA ? 'Bea' : null),
     readSwitches: async (ids) => new Map([...switches].filter(([id]) => ids.includes(id))),
@@ -89,6 +94,7 @@ function fakeWorld() {
     deps,
     switches,
     votes,
+    messages,
     members,
     blocks,
     mutes,
@@ -106,12 +112,13 @@ function fakeWorld() {
   };
 }
 
-/** The four calls the triggers make, one per event, all with Alex as the actor. */
+/** The five calls the triggers make, one per event, all with Alex as the actor. */
 const CALLS: Record<NotifyEvent, unknown> = {
   follow: { event: 'follow', keys: { follower_id: ALEX, followee_id: BEA } },
   comment: { event: 'comment', keys: { id: COMMENT } },
   vote: { event: 'vote', keys: { post_id: POST, user_id: ALEX } },
   team_push: { event: 'team_push', keys: { id: TEAM_POST } },
+  message: { event: 'message', keys: { id: MESSAGE } },
 };
 const EVENTS = Object.keys(CALLS) as NotifyEvent[];
 
@@ -121,6 +128,7 @@ describe('parseNotifyRequest', () => {
     expect(parseNotifyRequest(CALLS.comment)).toEqual({ event: 'comment', commentId: COMMENT });
     expect(parseNotifyRequest(CALLS.vote)).toEqual({ event: 'vote', postId: POST, voterId: ALEX });
     expect(parseNotifyRequest(CALLS.team_push)).toEqual({ event: 'team_push', teamPostId: TEAM_POST });
+    expect(parseNotifyRequest(CALLS.message)).toEqual({ event: 'message', messageId: MESSAGE });
   });
 
   it('refuses unknown events, missing or non-uuid keys, and non-objects', () => {
@@ -150,7 +158,7 @@ describe('handleNotifyRequest — each switch stops exactly its notification', (
     });
   }
 
-  it('sends all four when every switch is on, and a person with no settings row gets the defaults', async () => {
+  it('sends all five when every switch is on, and a person with no settings row gets the defaults', async () => {
     const world = fakeWorld();
     world.switches.delete(BEA);
     for (const event of EVENTS) expect((await handleNotifyRequest(CALLS[event], world.deps)).get(BEA)).toBe('sent');
@@ -219,6 +227,33 @@ describe('handleNotifyRequest — who hears about it', () => {
     const outcome = await handleNotifyRequest(CALLS.team_push, world.deps);
     expect(outcome.get(BEA)).toBe('sent');
     expect(outcome.get(CAL)).toBe('skipped_setting');
+  });
+
+  it('tells only the other member about a message — never the sender', async () => {
+    const world = fakeWorld();
+    const outcome = await handleNotifyRequest(CALLS.message, world.deps);
+    expect([...outcome]).toEqual([[BEA, 'sent']]);
+    expect(world.sent.flat().map((m) => m.to)).toEqual([tokenOf(BEA)]);
+  });
+
+  it('skips a message push when blocked either way, or when Bea muted Alex (the message itself still landed)', async () => {
+    for (const pair of [[BEA, ALEX], [ALEX, BEA]] as [string, string][]) {
+      const world = fakeWorld();
+      world.blocks.push(pair);
+      expect((await handleNotifyRequest(CALLS.message, world.deps)).get(BEA)).toBe('skipped_block');
+    }
+    const muted = fakeWorld();
+    muted.mutes.push([BEA, ALEX]);
+    expect((await handleNotifyRequest(CALLS.message, muted.deps)).get(BEA)).toBe('skipped_mute');
+  });
+
+  it('ignores a message that is gone, and logs no_tokens when Bea has no phone', async () => {
+    const world = fakeWorld();
+    world.messages.clear();
+    expect((await handleNotifyRequest(CALLS.message, world.deps)).size).toBe(0);
+    const noPhone = fakeWorld();
+    noPhone.tokens = [];
+    expect((await handleNotifyRequest(CALLS.message, noPhone.deps)).get(BEA)).toBe('no_tokens');
   });
 
   it('logs no_tokens for a recipient with no phone registered', async () => {
@@ -291,6 +326,7 @@ describe('handleNotifyRequest — what a push says', () => {
       { title: 'New comment', body: 'Alex commented on your post', data: { path: `/post-comments/${POST}` } },
       { title: 'New upvote', body: 'Alex upvoted your post', data: { path: `/post-comments/${POST}` } },
       { title: 'Iron Crew', body: 'Alex posted to Iron Crew', data: { path: `/team/${TEAM}` } },
+      { title: 'New message', body: 'Alex sent you a message', data: { path: `/messages/${ALEX}` } },
     ]);
   });
 
@@ -299,6 +335,15 @@ describe('handleNotifyRequest — what a push says', () => {
     await handleNotifyRequest(CALLS.comment, world.deps);
     expect(Object.keys(world.sent[0][0]).sort()).toEqual(['body', 'data', 'sound', 'title', 'to']);
     expect(Object.keys(world.sent[0][0].data)).toEqual(['path']);
+  });
+
+  it("never carries a direct message's text — the message push has only the fixed fields", async () => {
+    const world = fakeWorld();
+    await handleNotifyRequest(CALLS.message, world.deps);
+    const [push] = world.sent.flat();
+    expect(Object.keys(push).sort()).toEqual(['body', 'data', 'sound', 'title', 'to']);
+    expect(push.body).toBe('Alex sent you a message');
+    expect(Object.keys(push.data)).toEqual(['path']);
   });
 
   it('calls a lifter with no name "Someone"', async () => {

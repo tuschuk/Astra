@@ -30,6 +30,7 @@ import { lbToKg } from '@training-math';
 
 import type { SqlDriver } from '@/db/driver';
 import type { PushState } from '@/notifications/pushRegistration';
+import { setDmPolicy } from '@/settings/dmSettings';
 import { setNotificationSwitch } from '@/settings/notificationSettings';
 import { replaceFlairsTx } from '@/db/flairs';
 import { DEFAULT_USER_SETTINGS, readUserSettingsRow } from '@/db/userSettings';
@@ -46,7 +47,7 @@ import { startActiveWorkout } from '@/workout/activeWorkout';
 import WorkoutScreen from '@/app/(tabs)/workout';
 import ActiveWorkoutScreen from '@/app/active-workout';
 import { EXPORT_OFFLINE } from '@/account/exportData';
-import SettingsScreen, { BODY_DATA_LINE, EXPORT_NOTE, NOTIFICATION_ROWS, PUSH_STATE_LINES } from '@/app/settings';
+import SettingsScreen, { BODY_DATA_LINE, DM_POLICY_NOTE, EXPORT_NOTE, NOTIFICATION_ROWS, PUSH_STATE_LINES } from '@/app/settings';
 import SavedWorkoutScreen from '@/app/workout/[id]';
 
 const mockOpenDatabase = jest.fn<() => Promise<SqlDriver>>();
@@ -278,6 +279,50 @@ describe('Settings — Privacy (B26)', () => {
   });
 });
 
+describe('Settings — Who can message you (B48)', () => {
+  const ANYONE = 'Anyone on Astra can message you';
+  const MUTUAL = 'Only lifters you follow who follow you back can message you';
+
+  /** Waits until the chips can be used (the setting has been read). */
+  async function dmReady(): Promise<void> {
+    await waitFor(() => expect(screen.getByLabelText(ANYONE).props.accessibilityState.disabled).toBe(false));
+  }
+
+  it('shows Anyone selected by default, with the note about existing conversations', async () => {
+    await renderSignedIn(<SettingsScreen />);
+    await dmReady();
+    expect(screen.getByLabelText(ANYONE).props.accessibilityState.selected).toBe(true);
+    expect(screen.getByText(DM_POLICY_NOTE)).toBeTruthy();
+  });
+
+  it('choosing Mutual follows saves exactly dm_policy on the phone, with one upload queued', async () => {
+    await renderSignedIn(<SettingsScreen />);
+    await dmReady();
+    await fireEvent.press(screen.getByLabelText(MUTUAL));
+    await waitFor(async () => expect((await readUserSettingsRow(db, SIGNED_IN_USER_ID))?.dm_policy).toBe('mutual_follows'));
+    expect(await readUserSettingsRow(db, SIGNED_IN_USER_ID)).toMatchObject({
+      ...DEFAULT_USER_SETTINGS,
+      dm_policy: 'mutual_follows',
+    });
+    expect((await pendingRows(db, 'user_settings')).map((p) => p.rowId)).toEqual([SIGNED_IN_USER_ID]);
+    expect(screen.getByLabelText(MUTUAL).props.accessibilityState.selected).toBe(true);
+  });
+
+  it('shows the phone’s stored choice when opened, and a failed save moves the chip back', async () => {
+    await setDmPolicy(db, SIGNED_IN_USER_ID, 'mutual_follows');
+    await renderSignedIn(<SettingsScreen />);
+    await dmReady();
+    expect(screen.getByLabelText(MUTUAL).props.accessibilityState.selected).toBe(true);
+
+    await db.execAsync('drop table outbox');
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    await fireEvent.press(screen.getByLabelText(ANYONE));
+    expect(await screen.findByText('Your messaging setting couldn’t be saved. Try again.')).toBeTruthy();
+    expect(screen.getByLabelText(MUTUAL).props.accessibilityState.selected).toBe(true);
+    warn.mockRestore();
+  });
+});
+
 describe('Settings — Notifications (B47)', () => {
   /** The switch for one row, by its screen-reader label. */
   const switchFor = (label: string) => screen.getByLabelText(`Push notifications for ${label.toLowerCase()}`);
@@ -287,7 +332,7 @@ describe('Settings — Notifications (B47)', () => {
     await waitFor(() => expect(switchFor(NOTIFICATION_ROWS[0].label).props.disabled).toBe(false));
   }
 
-  it('shows all four switches on by default, and stays usable while push is unavailable on this build', async () => {
+  it('shows all five switches on by default, and stays usable while push is unavailable on this build', async () => {
     await renderSignedIn(<SettingsScreen />);
     expect(screen.getByText('Notifications')).toBeTruthy();
     await switchesReady();

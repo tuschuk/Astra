@@ -1,5 +1,5 @@
 /**
- * Tests for the four push-notification switches on the phone (B47), on real SQLite: all on by
+ * Tests for the five push-notification switches on the phone (B47, B48's messages), on real SQLite: all on by
  * default, flipping one changes exactly that one (and nothing else) with one upload line in the
  * same transaction, a failed save stores nothing, and an offline flip survives the app dying and
  * reaches the (fake) server exactly once.
@@ -21,7 +21,7 @@ import { USER_ID } from '@/test-utils/workoutFixtures';
 
 import { readNotificationSwitches, setNotificationSwitch } from './notificationSettings';
 
-const ALL_ON = { notify_follows: true, notify_comments: true, notify_votes: true, notify_team_pushes: true };
+const ALL_ON = { notify_follows: true, notify_comments: true, notify_votes: true, notify_team_pushes: true, notify_messages: true };
 
 describe('notification switches', () => {
   it('are all on when the lifter has no settings row yet', async () => {

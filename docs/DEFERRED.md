@@ -827,4 +827,37 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - Settings re-registers on every visit (one RPC) — fine at launch scale; revisit if measured.
   - `mmdc` render of both updated diagrams was declined by the permission layer — Gate 2.
   - Re-deploy `notify` from the repo (`supabase functions deploy notify --no-verify-jwt`) to swap the
-    comment-trimmed v1 for the commented source (logic identical).
+    comment-trimmed v1 for the commented source (logic identical). (B48 redeployed it as v2 with
+    the message event; still comment-trimmed `handler.ts` / `expoPush.ts` — same note.)
+- **B48 direct-messages (builder):**
+  - **Device check (Tristen), two accounts, both online:** A opens B's profile → Message → writes →
+    B (thread open) sees it appear without refreshing, and vice versa (**the live-delivery half of
+    SOC-12's DoD — a headless session can't hold a websocket open**); Home → Messages lists the
+    thread, newest first, "You: …" on your own last line. B → Settings → Privacy → Who can message
+    you → Mutual follows; a third account C (not mutual) sees no Message button on B's profile.
+    B blocks A → the thread disappears for both and A's send says "You can't message this lifter.";
+    unblock → the history is back. With push set up (`eas init`), a message pushes "<name> sent you
+    a message" (no text) and the tap opens the thread; Settings → Notifications → Messages off
+    stops only that push. Judge the thread at phone width with the keyboard open (the composer
+    sits under a self-scrolling list; no `KeyboardAvoidingView` yet), and kill-and-reopen while
+    the thread is open (Realtime resubscribes on remount).
+  - **Signed-in PostgREST / Realtime not exercised by the builder:** the list's embed select (two
+    hinted `profiles!conversations_user_*_fkey` embeds plus `messages` with
+    `referencedTable` order / limit, and `nullsFirst: false`) and the `postgres_changes`
+    subscription over a real JWT. All the RLS was probed in SQL as throwaway users and the
+    publication was confirmed live. Gate 2: one REST list read with a real token.
+  - **Reporting a message** (plan decision 10): this should land together with B41's
+    program-comment report widening — the `reports.target_kind` CHECK, two policy arms, the stamp
+    trigger and a `moderate` redeploy. Until then, block is the user's tool and the dashboard is
+    the founder's.
+  - **`export-data` does not export messages.** This joins the standing export-widening item
+    (programs, runs) above.
+  - Not built, by scope: read receipts / unread badges, typing indicators, editing or deleting a
+    message, group chats, media in messages, muting a conversation, realtime on the conversation
+    list, a re-read on network reconnect (focus only; plan build record 8), optimistic sends
+    (record 7), paging the list past 100 conversations (record 11).
+  - Review smells left as judgement calls: `setDmPolicy` is the fourth copy of the settings
+    "patch + outbox + notify" sequence (a `saveSettingsPatch` helper would collapse all four);
+    `UNIQUE_VIOLATION` / `RLS_REFUSED` are redeclared beside `teams.ts`'s; the settings row's
+    non-switch columns are spelled in several places (a `SETTABLE_FIELDS` list would gather them).
+  - `mmdc` render of both updated diagrams was declined by the permission layer — Gate 2.

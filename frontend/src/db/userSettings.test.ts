@@ -1,5 +1,5 @@
 /**
- * Tests for the on-device settings row (B15, widened B26 and B47), on real SQLite: read, save,
+ * Tests for the on-device settings row (B15, widened B26, B47 and B48), on real SQLite: read, save,
  * replace, patch one field without touching the others, and reading damaged values back as the
  * defaults.
  */
@@ -9,6 +9,7 @@ import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 
 import { prepareDatabase } from './database';
 import {
+  parseDmPolicy,
   parseNotifySwitch,
   parseNotifySwitches,
   parseUnit,
@@ -27,13 +28,13 @@ function row(
   unit: 'kg' | 'lb',
   updated_at: string,
   progress_pic_visibility: UserSettingsRow['progress_pic_visibility'] = 'private',
-  notify: Partial<Pick<UserSettingsRow, NotifyField>> = {},
+  rest: Partial<Pick<UserSettingsRow, NotifyField | 'dm_policy'>> = {},
 ): UserSettingsRow {
-  return { user_id, unit, progress_pic_visibility, ...ALL_ON, ...notify, updated_at };
+  return { user_id, unit, progress_pic_visibility, dm_policy: 'anyone', ...ALL_ON, ...rest, updated_at };
 }
 
-/** The four B47 switches, all on (the default). */
-const ALL_ON = { notify_follows: true, notify_comments: true, notify_votes: true, notify_team_pushes: true };
+/** The five switches (B47, B48), all on (the default). */
+const ALL_ON = { notify_follows: true, notify_comments: true, notify_votes: true, notify_team_pushes: true, notify_messages: true };
 
 describe('user settings row', () => {
   it('is absent until saved, then reads back exactly', async () => {
@@ -116,21 +117,40 @@ describe('notification switches (B47)', () => {
     expect(parseNotifySwitch('garbage')).toBe(true);
   });
 
-  it('reads all four from a row, and settableFields carries all six settable fields', () => {
+  it('reads all five from a row, and settableFields carries all eight settable fields', () => {
     expect(parseNotifySwitches({ notify_follows: 0, notify_comments: 1, notify_votes: false })).toEqual({
       notify_follows: false,
       notify_comments: true,
       notify_votes: false,
       notify_team_pushes: true,
+      notify_messages: true,
     });
-    const whole = row('u1', 'kg', 't', 'public', { notify_team_pushes: false });
+    const whole = row('u1', 'kg', 't', 'public', { notify_team_pushes: false, dm_policy: 'mutual_follows' });
     expect(settableFields(whole)).toEqual({
       unit: 'kg',
       progress_pic_visibility: 'public',
+      dm_policy: 'mutual_follows',
       notify_follows: true,
       notify_comments: true,
       notify_votes: true,
       notify_team_pushes: false,
+      notify_messages: true,
     });
+  });
+});
+
+describe('direct-message policy (B48)', () => {
+  it("reads only an exact 'mutual_follows' as mutual follows; anything else is 'anyone', the server default", () => {
+    expect(parseDmPolicy('mutual_follows')).toBe('mutual_follows');
+    expect(parseDmPolicy('anyone')).toBe('anyone');
+    expect(parseDmPolicy('nobody')).toBe('anyone');
+    expect(parseDmPolicy(null)).toBe('anyone');
+  });
+
+  it('is saved and read back, and a unit change keeps it', async () => {
+    const db = await prepareDatabase(createNodeSqliteDriver());
+    await db.withTransactionAsync((tx) => patchUserSettingsTx(tx, 'u1', { dm_policy: 'mutual_follows' }, 't1'));
+    await db.withTransactionAsync((tx) => patchUserSettingsTx(tx, 'u1', { unit: 'kg' }, 't2'));
+    expect(await readUserSettingsRow(db, 'u1')).toEqual(row('u1', 'kg', 't2', 'private', { dm_policy: 'mutual_follows' }));
   });
 });

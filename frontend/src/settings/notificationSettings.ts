@@ -1,7 +1,8 @@
 /**
- * The lifter's four push-notification switches on the phone (B47, the Notifications section of
- * Settings — YOU-4): push me when someone follows me, comments on my post, upvotes my post, or
- * posts to one of my Teams. Each is on until the lifter turns it off.
+ * The lifter's five push-notification switches on the phone (B47, the Notifications section of
+ * Settings — YOU-4): push me when someone follows me, comments on my post, upvotes my post,
+ * posts to one of my Teams, or (B48) sends me a direct message. Each is on until the lifter turns
+ * it off.
  *
  * Where they take effect: the server's `notify` function reads the server's copy of these
  * switches each time it decides whether to send a push, so turning one off stops exactly that
@@ -26,11 +27,11 @@ import { enqueueTx } from '@/sync/outbox';
 
 export type { NotifyField };
 
-/** The four switches, on (true) or off (false). */
+/** The five switches, on (true) or off (false). */
 export type NotificationSwitches = Record<NotifyField, boolean>;
 
 /**
- * User `userId`'s four switches, read from the phone. With no settings row yet (a brand-new
+ * User `userId`'s five switches, read from the phone. With no settings row yet (a brand-new
  * install before the first download) every switch is on, the same as the server's default.
  */
 export async function readNotificationSwitches(db: SqlExecutor, userId: string): Promise<NotificationSwitches> {

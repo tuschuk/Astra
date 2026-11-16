@@ -329,24 +329,26 @@ export class FakeServer implements SyncTransport {
 
   /**
    * Creates or changes a user's settings row directly (the signup trigger, or another device).
-   * The progress-pic choice (B26) defaults to 'private' and the four notification switches (B47)
-   * to on — the server columns' defaults; `notify` overrides any of the switches.
+   * The progress-pic choice (B26) defaults to 'private', the DM policy (B48) to 'anyone' and the
+   * five notification switches to on — the server columns' defaults; `rest` overrides any of them.
    */
   seedUserSettings(
     userId: string,
     unit: WeightUnit,
     progressPicVisibility: WorkoutVisibility = 'private',
-    notify: Partial<Pick<UserSettingsFields, NotifyField>> = {},
+    rest: Partial<Pick<UserSettingsFields, NotifyField | 'dm_policy'>> = {},
   ): void {
     this.userSettings.set(userId, {
       user_id: userId,
       unit,
       progress_pic_visibility: progressPicVisibility,
+      dm_policy: 'anyone',
       notify_follows: true,
       notify_comments: true,
       notify_votes: true,
       notify_team_pushes: true,
-      ...notify,
+      notify_messages: true,
+      ...rest,
       updated_at: this.now(),
     });
   }
@@ -365,8 +367,8 @@ export class FakeServer implements SyncTransport {
     this.userSettingsPushes.push({ userId, ...fields });
     this.guard();
     if (this.userSettings.has(userId)) {
-      const { unit, progress_pic_visibility, ...notify } = fields;
-      this.seedUserSettings(userId, unit, progress_pic_visibility, notify);
+      const { unit, progress_pic_visibility, ...rest } = fields;
+      this.seedUserSettings(userId, unit, progress_pic_visibility, rest);
     }
   }
 

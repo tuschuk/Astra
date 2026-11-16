@@ -1,8 +1,9 @@
 /**
- * `notify` — sends the push notifications for follows, comments, upvotes and Team posts (B47).
+ * `notify` — sends the push notifications for follows, comments, upvotes and Team posts (B47), and
+ * for direct messages (B48).
  * The decisions are in `handler.ts`; this file is only wiring.
  *
- * Called by the database, not the app: a trigger on each of the four tables queues
+ * Called by the database, not the app: a trigger on each of the five tables queues
  *   POST /functions/v1/notify   { "event": "...", "keys": { ... } }
  * through pg_net after a row is inserted (…_push_notifications.sql). Deployed WITHOUT the
  * platform's login check (`verify_jwt = false`), because a trigger has no login to send. That is
@@ -64,6 +65,19 @@ function supabaseDeps(db: SupabaseClient): NotifyDeps {
       const row = data as { author_id: string; team_id: string; teams: { name: string } | null } | null;
       return row?.teams ? { authorId: row.author_id, teamId: row.team_id, teamName: row.teams.name } : null;
     },
+    async readMessage(messageId) {
+      // Ids only — the message body is deliberately not selected (it must never reach a push).
+      const { data, error } = await db
+        .from('messages')
+        .select('sender_id,conversations(user_a,user_b)')
+        .eq('id', messageId)
+        .maybeSingle();
+      check(error, 'Reading the message failed');
+      const row = data as { sender_id: string; conversations: { user_a: string; user_b: string } | null } | null;
+      return row?.conversations
+        ? { senderId: row.sender_id, memberIds: [row.conversations.user_a, row.conversations.user_b] }
+        : null;
+    },
     async teamMemberIds(teamId) {
       const { data, error } = await db.from('team_members').select('user_id').eq('team_id', teamId);
       check(error, 'Reading the team members failed');
@@ -80,7 +94,7 @@ function supabaseDeps(db: SupabaseClient): NotifyDeps {
       if (userIds.length === 0) return map;
       const { data, error } = await db
         .from('user_settings')
-        .select('user_id,notify_follows,notify_comments,notify_votes,notify_team_pushes')
+        .select('user_id,notify_follows,notify_comments,notify_votes,notify_team_pushes,notify_messages')
         .in('user_id', [...userIds]);
       check(error, 'Reading notification settings failed');
       for (const row of (data ?? []) as ({ user_id: string } & NotifySwitches)[]) {

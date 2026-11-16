@@ -410,9 +410,11 @@ flowchart TD
     DeleteFn["Edge function delete-account (B32, NFR-6, deployed v2, verify_jwt on)<br/>POST {confirm: 'DELETE'} (else 400) with the user's token → getUser — the only<br/>account it can delete is the caller's; 409 if in moderators;<br/>1 sweep the caller's folder in post-images + avatars, 2 auth.admin.deleteUser<br/>(cascades every row); files first so any failure leaves the login and a retry works"]
     DeleteFn -->|"service role: moderators check, auth.admin.deleteUser → cascade"| DB
     DeleteFn -->|"service role: list + remove own folder"| Bucket
-    NotifyTrig{"B47 AFTER INSERT triggers notify_on_follow / _comment /<br/>_upvote (value = 1 only) / _team_post → private.notify_event:<br/>pg_net POST {event, keys} — keys only, never text; queued at commit"}
-    NotifyFn["Edge function notify (B47, deployed v1, verify_jwt OFF)<br/>trusts nothing in the call: re-reads the row (service role) → actor + recipients<br/>(followee · post author · team members minus author) → per recipient:<br/>self / block / recipient muted actor / switch off / no tokens → logged skip;<br/>else claim notification_log row (unique key = replay gate) → Expo;<br/>ticket DeviceNotRegistered → delete token; always an empty 204"]
-    DB -->|"insert into follows / comments / votes / team_posts"| NotifyTrig
+    NotifyTrig{"B47 AFTER INSERT triggers notify_on_follow / _comment /<br/>_upvote (value = 1 only) / _team_post, B48 notify_on_message → private.notify_event:<br/>pg_net POST {event, keys} — keys only, never text; queued at commit"}
+    NotifyFn["Edge function notify (B47; B48 message event, deployed v2, verify_jwt OFF)<br/>trusts nothing in the call: re-reads the row (service role) → actor + recipients<br/>(followee · post author · team members minus author · the other DM member) → per recipient:<br/>self / block / recipient muted actor / switch off / no tokens → logged skip;<br/>else claim notification_log row (unique key = replay gate) → Expo;<br/>ticket DeviceNotRegistered → delete token; always an empty 204"]
+    DB -->|"insert into follows / comments / votes / team_posts / messages"| NotifyTrig
+    Realtime["Supabase Realtime (B48, part of the project)<br/>publication supabase_realtime = messages only;<br/>postgres_changes INSERT re-checked against messages RLS per subscriber<br/>(only the two members hear; a block stops delivery)"]
+    DB -->|"WAL: insert into messages"| Realtime
     NotifyTrig -->|"net.http_post /functions/v1/notify"| NotifyFn
     NotifyFn -->|"service role: read rows, switches, blocks, mutes, push_tokens;<br/>write notification_log; delete dead tokens"| DB
   end
@@ -422,7 +424,7 @@ flowchart TD
     PushReg["pushRegistration.ts: lazy guarded require('expo-notifications') (own copy, not timerAlerts');<br/>unavailable when no app.json extra.eas.projectId (none yet — Tristen's eas init), Expo Go on Android,<br/>not iOS/Android, or no module; register(ask) → permission (prompt only if ask) →<br/>Android channel 'default' → getExpoPushTokenAsync → rpc register_push_token;<br/>watchTokenChanges re-saves; unregister deletes this token's row (≤ 3 s, swallowed)"]
     AskOnce["askOnce.ts: maybeAskForPushOnce — kv flag astra.push.askedAfterFirstPost;<br/>register(ask:true) once per phone (an 'unavailable' answer doesn't use it up); never throws"]
     UsePush["usePushNotifications (root layout): while signed in,<br/>register(ask:false) at start (never prompts) + watchTokenChanges;<br/>tap listener + getLastNotificationResponseAsync (then cleared)"]
-    TapNav["notificationNav.ts: pushTargetPath — only /profile/&lt;uuid&gt;,<br/>/post-comments/&lt;uuid&gt;, /team/&lt;uuid&gt;; anything else ignored"]
+    TapNav["notificationNav.ts: pushTargetPath — only /profile/&lt;uuid&gt;,<br/>/post-comments/&lt;uuid&gt;, /team/&lt;uuid&gt;, /messages/&lt;uuid&gt; (B48); anything else ignored"]
     AskOnce --> PushReg
     UsePush --> PushReg
     UsePush --> TapNav
@@ -473,6 +475,22 @@ flowchart TD
   MathMod -->|"displayWeight, epleyE1rm, isChartRpe (rpe.ts, B43; also guards percentOfOneRm),<br/>MAX_EPLEY_REPS, MIN/MAX_RPE_REPS"| TkPrefill
   MathMod -->|"epleyE1rm, weightForReps, workingWeightFromRpe, percentOfOneRm,<br/>workingWeightFromPercent, loadBar, lbToKg / kgToLb, roundToIncrement, displayWeight (B16)"| ToolKit
   MathMod -.->|"not wired yet: session volume display"| Workout
+
+  Home -->|"Messages (B48): router.push('/messages')"| MessagesScr["Messages (app/messages/index.tsx, B48, SOC-12)<br/>one row per conversation, newest activity first (never-messaged last):<br/>Avatar, name, newest line ('You: …'), date; empty → how to start one;<br/>re-read on every focus; offline → connection message + Retry; Back"]
+  MessagesScr -->|"row tap: router.push('/messages/[userId]') (the OTHER lifter's id)"| ThreadScr["Thread (app/messages/[userId].tsx, B48)<br/>heading = their name; messages oldest first, mine right / theirs left,<br/>scrolled to the newest; Show older messages (+50); empty → 'Say hello';<br/>composer ≤ 2000 chars (code points; counter + too-long line); Send;<br/>refused → 'You can't message this lifter.'; offline → Retry"]
+  ProfileView -->|"others' profile: Message (B48) — shown when canOpenThread:<br/>rpc can_message_user OR a visible conversation exists;<br/>router.push('/messages/[userId]')"| ThreadScr
+  TapNav -->|"tap a 'sent you a message' push → /messages/&lt;sender id&gt;"| ThreadScr
+  SettingsScr -->|"Privacy → Who can message you chips (B48): setDmPolicy"| DmSet["dmSettings.ts (src/settings, B48):<br/>readDmPolicy (no row → anyone) · setDmPolicy (ONE transaction:<br/>patchUserSettingsTx — only dm_policy — + outbox line row_id = user id, then notify);<br/>the server enforces its own copy; Notifications gains a fifth switch (notify_messages)"]
+  DmSet --> LocalDB
+  subgraph DmMod["Direct messages (src/social, B48) — online only, nothing on the phone"]
+    MsgCalls["messages.ts (client as parameter): conversationWith (pair lookup, smaller id first) ·<br/>getOrCreateConversation (insert; 23505 → re-read; 42501 → refused) ·<br/>sendMessage (phone-made uuid; insert … select single) · listMessages (newest 50+1, shown oldest first) ·<br/>listConversations (one read: both profile embeds + newest message, order last_message_at desc nulls last, ≤ 100) ·<br/>canMessageUser (rpc) · canOpenThread · messageLength / MESSAGE_MAX_LENGTH = 2000 (mirrors the CHECK)"]
+    UseThread["useThread.ts: first read → status; channel('messages:&lt;conversation id&gt;')<br/>.on('postgres_changes', INSERT public.messages conversation_id=eq.id) → mergeMessages (dedupe by id,<br/>so my own send's echo shows once); removeChannel on unmount; reload on focus; showOlder"]
+    UseThread --> MsgCalls
+  end
+  MessagesScr --> MsgCalls
+  ThreadScr --> UseThread
+  MsgCalls -->|"supabase-js as the signed-in user (RLS: membership + no block;<br/>starting a conversation also needs private.can_message)"| DB
+  Realtime -->|"websocket (session token): INSERT payloads for the open conversation"| UseThread
 
   class Market scaffold
   class Seed,Catalog,DB,Store,LocalDB,RackStore data
@@ -832,7 +850,21 @@ flowchart TD
    the server to stop sending to this phone. **Until Tristen runs `npx eas init` (free) the app
    has no Expo project id, so the line reads "aren't set up on this version of the app yet"** —
    the switches still work and the server side is live.
-30. Everything else is a placeholder that renders its final layout with inert controls
+30. **Direct messages (B48, SOC-12) — needs a connection.** Home → **Messages** lists the lifter's
+   conversations, newest first; tap one to open the thread. On someone else's profile,
+   **Message** opens the thread with them — it shows when the server says they may be messaged
+   (their "who can message you" setting and no block either way), or when the two already have a
+   conversation (a reply is always allowed). In a thread, messages read oldest first with the
+   newest in view; the other lifter's new messages appear on their own while the thread is open
+   (Supabase Realtime); Send adds yours (up to 2000 characters). A refused send — a block, or
+   their setting when starting a conversation — says "You can't message this lifter." and nothing
+   more. A block hides the whole conversation from both sides until it is lifted. **Settings →
+   Privacy → Who can message you:** Anyone (default) or Mutual follows; it applies to *new*
+   conversations, saved offline and enforced by the server. **Settings → Notifications** gains
+   **Messages**; the push says "<name> sent you a message", never the words, and opens the
+   thread. Messages are never stored on the phone; offline, both screens show the connection
+   message with Retry.
+31. Everything else is a placeholder that renders its final layout with inert controls
    (the Gyms half of Communities).
 
 ## Data path today
@@ -1175,6 +1207,26 @@ flowchart TD
   `notificationNav.ts`'s validated path → `router.push`) and `askOnce.ts` (the once-per-phone ask
   after the first Post, from `post-workout/[id]` and `new-post`). Token saves are online-only (a
   failure retries at the next start); the switches are offline-first like every setting.
+- **B48 direct messages.** Online only, the votes / comments / Teams posture: `conversations` and
+  `messages` are never mirrored on the phone, so offline the two screens show the connection
+  message and logging / the Tool Kit are untouched. **Send path:** thread screen →
+  `useThread.send` → `social/messages.ts` `sendMessage` → (first message only)
+  `getOrCreateConversation` inserts the pair (smaller id first; the server's insert policy runs
+  `private.can_message` — blocks and the recipient's `dm_policy`) → insert into `messages` with a
+  phone-made uuid → RLS (sender is you, the conversation is visible to you) → the row comes back
+  with the server's `created_at`. **Delivery path:** the insert → Postgres WAL → Supabase Realtime
+  (`messages` is the only table in the `supabase_realtime` publication; RLS re-checked per
+  subscriber) → the open thread's `postgres_changes` channel for that conversation id →
+  `mergeMessages` (the sender's own echo is dropped by id). The same insert fires
+  `notify_on_message` → `notify` → Expo → the other member's phone → tap → `/messages/<sender id>`.
+  The Messages list re-reads on focus (no list subscription). **The setting:** `dm_policy` joins
+  the settings row (device V17, with `notify_messages`): `settings/dmSettings.ts` saves it in one
+  transaction + outbox line and `settableFields` uploads it with the others; enforcement is the
+  server's copy only. The profile's Message button asks `canOpenThread` (the `can_message_user`
+  RPC, or an existing visible conversation). New routes `messages/index` and
+  `messages/[userId]` sit in the signed-in tree. Tests use `test-utils/fakeMessagesClient.ts`
+  (in-memory conversations / messages / profiles with a signed-in identity, a `blocked` and a
+  `canStart` switch, and fake Realtime channels with `emitInsert`).
 - **Still unwired:** follower / following counts don't open lists; another lifter's workout rows
   on a profile aren't tappable; there is no "remove photo"; the Library's catalog cards come from the bundle, not `astra.db` (only Your exercises reads it, B31); a custom can't be created from inside the logger's picker; customs add nothing to the muscle map; posts can't be
   edited, deleted or re-offered from old workouts (photo posts can't be deleted either, so their
