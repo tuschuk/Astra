@@ -103,6 +103,18 @@ claude -p <prompt> --output-format json --permission-mode acceptEdits
   fill whatever is missing (DEFERRED entries, diagrams), commit the work on the step's branch
   as the build commit, and continue Gate 2 as usual. Do not `retry` the execution on a dirty
   tree — the builder prompt assumes a clean branch.
+- **A Gate 1 fix must leave the tree on the step's branch.** The planner ends with the step's
+  branch checked out, and the builder prompt refuses to work (reports "wrong branch", exits 0
+  with nothing built) when `main` is checked out. The B50 Gate 1 session committed a plan fix
+  on the branch and switched back to `main` before approving; the builder stopped at once and
+  the execution ended "success" with nothing built — an execution that succeeded cannot be
+  retried in n8n, and `next` refuses while the branch exists. Recovery: `git checkout
+  <branch>`, then run the builder launcher by hand from the repo root and wait for it:
+  `cmd //c "C:/Users/trist/Astra/Astra/automation/scripts/run-builder.cmd"` (Bash tool;
+  forward slashes — backslashes are eaten by the shell), which reads the saved pick in
+  `automation/state/current-item.json` and writes `automation/state/builder.out.log` with the
+  JSON result (`result`, `total_cost_usd`). The n8n summary for that execution then reports the
+  aborted builder's cost only; add the manual run's cost from the log by hand.
 
 ## Failure handling (v1)
 
