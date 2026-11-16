@@ -8,6 +8,8 @@
  *     in another gym — asked first, naming the gym you'd leave, because you can belong to one gym
  *     at a time), or **Leave gym** (it's yours). Anyone can join any gym; there is no proof of
  *     membership;
+ *   - a **Leaderboard** row (B52) opening the gym's board — each member's best verified squat,
+ *     bench press and deadlift, in a men's and a women's division;
  *   - the **Members** list, newest first (tap a name for their profile);
  *   - the **Gym feed** — the members' posts, newest first, twenty at a time, as the same post
  *     cards Home uses (vote, comment, re-share, report, change your own post's audience).
@@ -26,6 +28,7 @@
  */
 import React, { useCallback, useMemo, useRef, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, StyleSheet, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 
 import { useAuth } from '@/auth/AuthProvider';
@@ -41,13 +44,10 @@ import type { WorkoutVisibility } from '@/db/dao';
 import { useAppDatabase } from '@/db/useAppDatabase';
 import { getSupabase } from '@/lib/supabase';
 import { appendPage, loadFeedPage, type FeedCursor, type FeedPost } from '@/social/feed';
-import { gymOf, GYMS_OFFLINE, joinGym, leaveGym, loadGym, loadGymMembers, type Gym, type GymMember, type GymResult } from '@/social/gyms';
+import { GYM_MISSING, gymOf, GYMS_OFFLINE, joinGym, leaveGym, loadGym, loadGymMembers, type Gym, type GymMember, type GymResult } from '@/social/gyms';
 import { personLabels } from '@/social/names';
 import { withPostVisibility } from '@/social/postPrivacy';
 import { colors, spacing } from '@/theme';
-
-/** The line shown when the gym doesn't exist (a bad link, or a gym the directory no longer lists). */
-export const GYM_MISSING = 'This gym isn’t available.';
 
 /** The gym, its roster and the viewer's own gym (null = none) — or why there is nothing to show. */
 type PageState =
@@ -237,6 +237,16 @@ export default function GymScreen() {
         </Body>
       ) : null}
 
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${gym.name}'s leaderboard`}
+        onPress={() => router.push({ pathname: '/gym/[id]/leaderboard', params: { id: gym.id } })}
+        style={styles.leaderboardRow}
+      >
+        <Body style={styles.memberName}>Leaderboard</Body>
+        <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+      </Pressable>
+
       <View style={styles.members}>
         <SectionLabel accessibilityRole="header">{members.length === 1 ? '1 member' : `${members.length} members`}</SectionLabel>
         {members.length === 0 ? <Body variant="small">No members yet — be the first.</Body> : null}
@@ -333,6 +343,15 @@ const styles = StyleSheet.create({
   },
   message: {
     marginTop: spacing.sm,
+  },
+  leaderboardRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    minHeight: 44,
+    marginTop: spacing.lg,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
   members: {
     marginTop: spacing.xl,

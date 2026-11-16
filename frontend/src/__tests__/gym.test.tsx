@@ -13,12 +13,12 @@ import { fireEvent, screen, waitFor } from '@testing-library/react-native';
 
 import type { SqlDriver } from '@/db/driver';
 import type { FeedPost } from '@/social/feed';
-import { GYMS_OFFLINE } from '@/social/gyms';
+import { GYM_MISSING, GYMS_OFFLINE } from '@/social/gyms';
 import { createFakeSocialClient } from '@/test-utils/fakeSocialClient';
 import { profile, rawPost } from '@/test-utils/feedFixtures';
 import { createPreparedDb, renderSignedIn, SIGNED_IN_USER_ID } from '@/test-utils/loggerTestKit';
 
-import GymScreen, { GYM_MISSING } from '@/app/gym/[id]/index';
+import GymScreen from '@/app/gym/[id]/index';
 
 const mockOpenDatabase = jest.fn<() => Promise<SqlDriver>>();
 jest.mock('@/db/database', () => ({
@@ -127,6 +127,12 @@ describe('gym page', () => {
     await renderSignedIn(<GymScreen />);
     await screen.findByLabelText('Leave gym');
     expect(screen.queryByText(/claim|manage|settings|edit|delete gym/i)).toBeNull();
+  });
+
+  it('the Leaderboard row opens this gym’s board (B52)', async () => {
+    await renderSignedIn(<GymScreen />);
+    await fireEvent.press(await screen.findByLabelText("Open RiNo's leaderboard"));
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/gym/[id]/leaderboard', params: { id: 'rino' } });
   });
 
   it('a gym that doesn’t exist says so', async () => {

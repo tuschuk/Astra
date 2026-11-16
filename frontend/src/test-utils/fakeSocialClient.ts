@@ -94,6 +94,13 @@
  * directory's `gyms_near` is supplied by the test through `rpc`. That only you may join, switch
  * or leave as yourself, and that nobody may write `gyms`, are NOT imitated — probed live at B50.
  *
+ * B52 adds `leaderboard_entries` (`{ id, gym_id, user_id, lift, division, weight_kg, verified_at }`),
+ * seeded by tests as fixture rows (the app never writes the board). A read nests the lifter's
+ * `profile:profiles(…)` and sorts by every `order` key in turn (weight desc, then verified_at,
+ * then id — the board's ranking rule). An insert repeating (gym_id, user_id, lift) is 23505, the
+ * unique key; an upsert on that key replaces the row (B53's future replace-the-best). That nobody
+ * may write the board is NOT imitated — probed live at B52.
+ *
  * What it does NOT do: row-level security or general embedding. Posts are seeded already shaped
  * the way the server's embed returns them (author, flair and workout nested in), and the follow
  * insert imitates the one RLS refusal the app handles (a block in either direction). Server-side
@@ -154,6 +161,8 @@ export interface FakeSocialTables {
   gyms: Row[];
   /** Gym membership rows: `{ user_id, gym_id, joined_at }` — at most one per lifter (B50). */
   gym_members: Row[];
+  /** Board rows: `{ id, gym_id, user_id, lift, division, weight_kg, verified_at }` — one per member per lift per gym (B52). */
+  leaderboard_entries: Row[];
 }
 
 /** What a request can name: the tables, plus the computed views — `post_scores`, (B24) `post_hot_scores`, (B41) `program_scores`. */
@@ -335,6 +344,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     program_comments: [...(seed.program_comments ?? [])],
     gyms: [...(seed.gyms ?? [])],
     gym_members: [...(seed.gym_members ?? [])],
+    leaderboard_entries: [...(seed.leaderboard_entries ?? [])],
   };
   const requests: FakeCall[][] = [];
   let offline = options.offline ?? false;
@@ -362,7 +372,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     if (table === 'gym_members' && select.includes('gym:gyms(')) {
       out.gym = tables.gyms.find((g) => g.id === row.gym_id) ?? null;
     }
-    if (table === 'gym_members' && select.includes('profile:profiles')) {
+    if ((table === 'gym_members' || table === 'leaderboard_entries') && select.includes('profile:profiles')) {
       out.profile = tables.profiles.find((p) => p.id === row.user_id) ?? null;
     }
     if ((table === 'programs' || table === 'program_scores') && select.includes('author:profiles')) {
@@ -636,6 +646,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
         team_assignments: ['team_id', 'user_id', 'program_id'],
         team_feed_hides: ['team_id', 'post_id'],
         program_team_shares: ['program_id', 'team_id'],
+        leaderboard_entries: ['gym_id', 'user_id', 'lift'],
       };
       const key = uniqueKeys[table];
       if (key && rows.some((x) => key.every((k) => x[k] === row[k]))) {
@@ -713,7 +724,8 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       table === 'team_posts' ||
       table === 'programs' ||
       table === 'program_scores' ||
-      table === 'gym_members'
+      table === 'gym_members' ||
+      table === 'leaderboard_entries'
     ) {
       const select = calls.find(([m]) => m === 'select')?.[1];
       out = out.map((r) => withTeamEmbeds(table, r, select));

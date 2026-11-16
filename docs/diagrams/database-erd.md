@@ -62,6 +62,9 @@ messages"),
 live — the `postgis` extension in `extensions`, `gyms` with its fictional six-gym Denver-area
 fixture, `gym_members`, the `gym_members_restamp` trigger, `gyms_near`, and grants trimmed to
 read / join / switch / leave; see "Gyms"),
+`20261116130816_leaderboard_entries.sql` (B52, applied live — `leaderboard_entries`, its CHECKs,
+the one-row-per-member unique index, a read-only policy and revoked write privileges; see "Gym
+leaderboards"),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -134,6 +137,8 @@ erDiagram
   gyms ||--o{ gym_members : "has members (cascade, B50)"
   profiles ||--o| gym_members : "user_id: at most ONE gym per lifter — the PK (cascade)"
   gym_members ||..o{ posts : "Gym feed: posts where user_id in the roster (no FK; posts RLS decides)"
+  gyms ||--o{ leaderboard_entries : "board rows earned at this gym (cascade, B52); stay when the member switches"
+  profiles ||--o{ leaderboard_entries : "user_id: one row per lift per gym (cascade on account deletion)"
   posts ||--o{ team_feed_hides : "post_id hidden from that team's feed (cascade)"
   profiles ||--o{ team_feed_hides : "hidden_by the owner (cascade)"
   programs ||--o{ program_team_shares : "shared with these Teams when visibility = team (cascade, B39)"
@@ -565,6 +570,17 @@ erDiagram
     uuid gym_id FK "indexed"
     timestamptz joined_at "server-owned: default now(), restamped when gym_id changes"
   }
+
+  leaderboard_entries {
+    uuid id PK "server default gen_random_uuid; the board order's last tie-breaker"
+    uuid gym_id FK "the gym the lift was verified at; never moved"
+    uuid user_id FK "indexed; unique (gym_id, user_id, lift) = one row per member per lift"
+    text lift "CHECK: squat | bench | deadlift"
+    text division "CHECK: male | female; stamped at verification, never read from user_body_data"
+    numeric weight_kg "numeric(8,3), CHECK > 0; ranked heaviest first"
+    timestamptz verified_at "when the entry earned its place; earlier wins a tie"
+    timestamptz created_at
+  }
 ```
 
 ## Gyms (B50)
@@ -591,6 +607,30 @@ erDiagram
   `st_distance` on geography, in metres; `max_rows` clamped to 1–100; no radius filter. The
   caller's point is only an argument: nothing stores it. Note `st_makepoint(lng, lat)` — x first;
   probed live from downtown Denver (Capitol Hill first, 1.39 km) and Boulder (Boulder first, 0 m).
+
+## Gym leaderboards (B52)
+
+- **A board row is a verified result, not a PR.** `leaderboard_entries` holds, per gym, each
+  member's best verified weight for squat, bench or deadlift. It has no FK to
+  `personal_records` (those are private and can be demoted when a workout is edited); the weight
+  is its own column.
+- **One row per member per lift per gym:** the unique index `leaderboard_entries_book_idx
+  (gym_id, user_id, lift)`. A second insert is 23505; a newly verified heavier lift replaces the
+  row by upserting on that key (GYM-6 — the writer is B53's, not built yet). Probed live.
+- **Two divisions, absolute weight (GYM-8).** `division` is `male` / `female` (the same spelling as
+  `user_body_data.sex`), stamped on the row when it is verified and frozen; `user_body_data` is
+  never read, joined or widened, so the private body-data row stays private. No bodyweight, age
+  or class column exists. The board read is `?gym_id=eq.&lift=eq.&order=weight_kg.desc,
+  verified_at.asc,id.asc&limit=200` with the lifter's `profile:profiles(username, display_name)`
+  embedded; the app splits the rows into the two divisions and numbers each from 1.
+- **Switching gyms moves nothing (GYM-9).** Rows key on `gym_id`; a switch rewrites only
+  `gym_members`, so the old board keeps the member's rows and the new board has none for them
+  (probed live: 2 rows stayed on RiNo, 0 on Highlands, unchanged again after leaving).
+- **Read-only for everyone.** Select `to authenticated using (true)` — boards are public to
+  signed-in lifters, ex-members' rows included. No insert / update / delete policy, and INSERT,
+  UPDATE, DELETE, TRUNCATE, REFERENCES and TRIGGER are revoked from `authenticated`; anon has
+  nothing (probed live: 42501 for every write, including on your own row). Until B53's
+  server-side writer exists, rows come only from probes — every real board is empty.
 
 ## Direct messages (B48)
 
@@ -1442,6 +1482,7 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `gyms` (B50) | any signed-in user; anon nothing | nobody — no write policies, privileges revoked; rows by migration only (GYM-7) |
 | `gym_members` (B50) | any signed-in user (public membership); anon nothing | insert / update only your own row, and only `user_id` / `gym_id` (column grants — `joined_at` is the server's); delete only your own row |
 | `gyms_near(lat, lng, max_rows)` (function, B50) | signed-in users (`security invoker`: runs under the gyms read rule); anon refused | — |
+| `leaderboard_entries` (B52) | any signed-in user (public boards, ex-members' rows included); anon nothing | nobody — no write policies; insert / update / delete / truncate revoked, even on your own row; rows by migration, probe or (later) B53's server-side writer |
 | `push_tokens` (B47) | only your own | delete only your own; no insert/update policies — writes only through `register_push_token` (signed-in, saves for `auth.uid()`, takes the token over from a previous owner) |
 | `notification_log` (B47) | nobody — RLS on, no policies; the `notify` function (service role) writes and reads it | nobody |
 | `conversations` (B48) | the two members, and not while either has blocked the other (`private.blocked_either`) | insert only a pair you are in, and only when `private.can_message(you, them)` (no block; their `dm_policy` is `anyone` or you follow each other); no update/delete |
@@ -1467,7 +1508,9 @@ they can see rows the caller's own RLS would hide.
   runs, and (B36) their team memberships and invites, and every team they created (with all of
   that team's memberships and invites — members silently lose the team; no ownership transfer),
   and (B47) their push tokens and the notification-log rows addressed to them, and (B50) their
-  gym membership. Deleting a gym (a B51 re-seed) deletes its memberships. A hard-deleted program workout sets `workouts.program_workout_id` to null (the session stays).
+  gym membership, and (B52) their leaderboard entries at every gym (account deletion beats GYM-9's
+  stay-on-the-old-board; a gym *switch* deletes nothing). Deleting a gym (a B51 re-seed) deletes
+  its memberships and its leaderboard entries. A hard-deleted program workout sets `workouts.program_workout_id` to null (the session stays).
   Storage objects are not rows of this graph — the `moderate` function sweeps them.
   Deleting a post cascades to its votes and comments (B23); reports about it stay (no FK, B27).
 - Deleting a workout cascades to its `workout_exercises` and their `sets` (and the records citing

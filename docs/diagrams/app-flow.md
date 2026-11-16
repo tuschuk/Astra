@@ -161,6 +161,11 @@ flowchart TD
   Communities -->|"Your gym row: router.push('/gym/[id]')"| GymScr
   Home -->|"Your groups row, first chip (B50, SOC-10): router.push('/gym/[id]')"| GymScr
   ProfileView -->|"Gym section row (B50, YOU-6): router.push('/gym/[id]')"| GymScr
+  GymScr -->|"Leaderboard row (B52): router.push('/gym/[id]/leaderboard')"| BoardScr["Gym leaderboard (app/gym/[id]/leaderboard.tsx, B52, GYM-8; GYM-3/6/9 parts)<br/>gym name; lift chips Squat · Bench press · Deadlift (ChoiceChips);<br/>always two sections Men / Women: rank · name (→ profile) · weight (formatWeight, viewer's unit);<br/>empty section → 'No verified PRs yet.'; read on focus and per chip, last read kept on screen;<br/>pull to refresh; missing gym → 'isn't available'; offline → GYMS_OFFLINE + Retry;<br/>no submit / edit — every real board is empty until B53 (scaffold data path)"]
+  BoardScr -->|"name tap: router.push('/profile/[id]')"| ProfileView
+  BoardScr -->|"loadGym (title)"| GymsMod
+  BoardScr --> BoardMod["social/leaderboards.ts (B52) — online only, read-only<br/>LIFTS / LIFT_LABELS · DIVISIONS / DIVISION_LABELS ·<br/>loadBoard(gym, lift) · splitBoard (two divisions, positional ranks; never re-sorts)"]
+  BoardMod -->|"select leaderboard_entries + profile:profiles(username, display_name)<br/>gym_id=eq · lift=eq · order weight_kg desc, verified_at asc, id asc · limit 200<br/>(select-only RLS; no client write exists; rows by B53 later)"| DB
   GymScr -->|"Gym feed posts"| FeedQ
   GymScr -->|"card buttons"| PostActions
   GymDirScr --> GymsMod
@@ -892,6 +897,14 @@ flowchart TD
    gym**), as the first chip of Home's **Your groups** row, and as a **Gym** section on your
    profile — and anyone's profile shows theirs (memberships are public to signed-in lifters).
    Nobody can create, claim, edit or manage a gym anywhere in the app or the API.
+   **Leaderboard (B52, GYM-3 / GYM-6 / GYM-9 parts, GYM-8):** the gym page's **Leaderboard** row
+   opens the gym's board. Chips pick **Squat**, **Bench press** or **Deadlift**; the board always
+   shows two sections, **Men** and **Women**, each listing one row per member — place, name
+   (→ profile) and best verified weight in the lifter's unit, heaviest first (absolute weight, no
+   classes; on a tie the earlier verification ranks first). An empty section says "No verified PRs
+   yet." Rows earned at a gym stay on its board after the lifter switches or leaves. Nothing can
+   be submitted here: verified rows only arrive with B53's video verification, so **every real
+   board is empty today** — the screen is wired, but its data path is scaffolding until B53.
 32. Everything else is a placeholder that renders its final layout with inert controls.
 
 ## Data path today
@@ -1312,6 +1325,13 @@ flowchart TD
   Alert. The Gym feed is `loadFeedPage` with the roster's ids, wired through `usePostListActions`.
   `expo-location` (foreground, coarse) is used only by the directory screen; `app.json` carries
   its permission sentence.
+- **Gym leaderboards** (B52): `social/leaderboards.ts` is the one home of the board read — online
+  only, read-only (the app has no function that writes `leaderboard_entries`; the server refuses
+  it anyway). It spells the closed vocabularies once (`LIFTS` + `LIFT_LABELS`, `DIVISIONS` +
+  `DIVISION_LABELS`), `loadBoard` asks for one gym's one lift in the server's ranking order, and
+  `splitBoard` only splits that order into the two divisions and numbers them — it never re-sorts,
+  so the ranking rule lives once (the server's order clause). Weights display through
+  `formatWeight` (`workout/format.ts`, over `@training-math`); no training math is added.
 - **Teams** (B36): `social/teams.ts` is the one home of team reads and writes — online only, like
   votes; teams are never stored on the phone, so no device table, outbox or sync change. Every
   rule (who may join, switch, invite, leave, see a roster) is the server's RLS; the module maps
