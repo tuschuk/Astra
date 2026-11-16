@@ -111,9 +111,13 @@ A tiny `before update` trigger resets `joined_at = now()` when `gym_id` changes,
 since" is honest after a switch (the client never writes timestamps — the B48 server-time
 posture). And the posture is enforced, not polite (settled under grilling, G9): the migration
 revokes table-level INSERT/UPDATE on `gym_members` from `authenticated, anon` and grants back
-only `insert (user_id, gym_id)` and `update (gym_id)` — the B36 deviation's table-revoke +
+only `insert (user_id, gym_id)` and `update (user_id, gym_id)` — the B36 deviation's table-revoke +
 column-grant pattern (a bare column revoke is a no-op) — so `joined_at` has exactly one writer:
-the default and the trigger. `on delete cascade` from `profiles` keeps B32's account deletion complete; cascade
+the default and the trigger. **`user_id` must be in the UPDATE grant** (Gate 1 fix): PostgREST
+builds an upsert as `on conflict (user_id) do update set <every payload column> = excluded.<col>`,
+so the switch arm rewrites `user_id` to itself; with `update (gym_id)` alone every switch would
+fail with 42501. Rewriting `user_id` to itself is harmless, and the update policy's `with check
+(user_id = auth.uid())` still forbids pointing the row at anyone else. `on delete cascade` from `profiles` keeps B32's account deletion complete; cascade
 from `gyms` means a B51 re-seed that deletes fixture rows also drops fixture memberships
 (acceptable: fixture members are test users; recorded for B51's plan).
 
@@ -259,8 +263,11 @@ every column stays `g.`-qualified; `order by distance_m` is safe (the select-lis
    far point (e.g. 40.0150, −105.2705, Boulder) reorders accordingly. Proves the sort **and**
    the (lng, lat) ordering inside the function.
 2. A joins gym 1 → one `gym_members` row. A joins gym 2 → **still one row**, `gym_id` = gym 2,
-   `joined_at` moved forward (the switch trigger). The step DoD at the API. A writing
-   `joined_at` on insert or update → refused (the G9 column grants).
+   `joined_at` moved forward (the switch trigger). The step DoD at the API — **run the switch
+   through the REST upsert (`Prefer: resolution=merge-duplicates`, `on_conflict=user_id`) with
+   the real JWT, not only SQL**, so the column grant under PostgREST's SET list is what is
+   proven. A writing `joined_at` on insert or update → refused (the G9 column grants). A's upsert
+   with `user_id` = B → refused (the update policy's `with check`).
 3. B reads the gym page's pieces: the `gyms` row, the roster (sees A), A's profile gym line
    (`gym_of` read as B). Feed shape: A's public post returned by the member-id posts query; A's
    followers-only post only when B follows A; a non-member's post never.
@@ -361,7 +368,8 @@ every column stays `g.`-qualified; `order by distance_m` is safe (the select-lis
   placeholder card expecting exactly this step. The migration naming / live-apply / rename
   recipe is the standing one. No table named `gyms` exists in any migration.
 - **G9 — "`joined_at` is forgeable: the policies check rows, not columns."** Caught in the
-  second grilling pass. A user could insert a 1999 `joined_at` (cosmetic lie, but the plan's own
+  second grilling pass. (Gate 1 amended the grant to `update (user_id, gym_id)` — see the
+  `gym_members` section — because PostgREST's upsert SETs the conflict column too.) A user could insert a 1999 `joined_at` (cosmetic lie, but the plan's own
   B48 citation says the server owns time). Closed with the B36 deviation pattern: table-level
   revoke of INSERT/UPDATE on `gym_members`, grant back `insert (user_id, gym_id)` and
   `update (gym_id)` only. Two migration lines; also stops any future column sneaking in
