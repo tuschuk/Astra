@@ -46,6 +46,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 import { Avatar } from '@/components/social/Avatar';
 import { ReportSheet } from '@/components/social/ReportSheet';
+import { useOptimisticVote, VoteArrows } from '@/components/social/VoteControl';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
@@ -63,7 +64,7 @@ import {
   type PostVisibilityResult,
 } from '@/social/postPrivacy';
 import { RESHARE_MESSAGES, type ReshareResult } from '@/social/reshare';
-import { nextVote, VOTE_REFUSAL_MESSAGES, voteDelta, type VoteResult, type VoteValue } from '@/social/votes';
+import type { VoteResult, VoteValue } from '@/social/votes';
 import { colors, radii, spacing } from '@/theme';
 import {
   formatDropSet,
@@ -372,10 +373,10 @@ export function commentButtonLabel(count: number): string {
 
 /**
  * The card's footer (B23): the vote arrows around the net score, and the comments button.
- * Holds the shown score and the viewer's vote locally so a tap shows at once ("optimistic"):
- * the score moves by `voteDelta`, the vote is sent, and if the server refuses, both go back and
- * the reason shows under the footer. A fresh feed load (new `post` values) resets both to the
- * server's numbers — the server's tally is always the truth.
+ * The arrows' optimistic logic — the score moves at once, goes back with a message if the server
+ * refuses, and a fresh feed load resets it to the server's numbers — is `useOptimisticVote`
+ * (VoteControl.tsx, B41), shared with the Marketplace program page. The footer keeps its own
+ * layout: the refusal message sits under the whole footer.
  */
 function PostFooter({
   post,
@@ -384,43 +385,12 @@ function PostFooter({
   onReshare,
   onShareWorkout,
 }: Pick<PostCardProps, 'post' | 'onVote' | 'onOpenComments' | 'onReshare'> & { onShareWorkout?: () => void }) {
-  const [vote, setVote] = useState<VoteValue | null>(post.myVote);
-  const [score, setScore] = useState(post.score);
-  const [message, setMessage] = useState<string | null>(null);
-  // A ref, not state: two taps before the next draw must still send only one vote at a time.
-  const sending = useRef(false);
-
-  // A refreshed feed brings new server numbers: show those (React's "adjust state when a prop
-  // changes" pattern — compared during render, no effect).
-  const [server, setServer] = useState({ vote: post.myVote, score: post.score });
-  if (server.vote !== post.myVote || server.score !== post.score) {
-    setServer({ vote: post.myVote, score: post.score });
-    setVote(post.myVote);
-    setScore(post.score);
-  }
-
-  /**
-   * One arrow tapped: move the score now, send the vote, undo it if refused. The undo takes the
-   * same step back (−delta) rather than restoring a snapshot, so a feed refresh that landed
-   * while the vote was in flight isn't overwritten with older numbers.
-   */
-  async function tap(tapped: VoteValue): Promise<void> {
-    if (!onVote || sending.current) return;
-    const before = vote;
-    const after = nextVote(before, tapped);
-    const delta = voteDelta(before, after);
-    setVote(after);
-    setScore((s) => s + delta);
-    setMessage(null);
-    sending.current = true;
-    const result = await onVote(post.id, after);
-    sending.current = false;
-    if (!result.ok) {
-      setVote((v) => (v === after ? before : v));
-      setScore((s) => s - delta);
-      setMessage(VOTE_REFUSAL_MESSAGES[result.reason]);
-    }
-  }
+  const voteState = useOptimisticVote({
+    score: post.score,
+    myVote: post.myVote,
+    onVote: onVote ? (next) => onVote(post.id, next) : undefined,
+  });
+  const { message } = voteState;
 
   // B28: the Re-share confirmation, whether one is on its way, and its one-line result.
   const [confirming, setConfirming] = useState(false);
@@ -452,16 +422,8 @@ function PostFooter({
   return (
     <View style={styles.footerWrap}>
       <View style={styles.footer}>
-        <View style={styles.votes}>
-          <VoteArrow direction="up" lit={vote === 1} onPress={onVote ? () => void tap(1) : undefined} />
-          <View accessible accessibilityLabel={`Score ${score}`} testID="post-score">
-            <Body style={styles.score}>{String(score)}</Body>
-          </View>
-          {/* No downvote control at all on an upvote-only post — the flair row's flag decides. */}
-          {post.flair.upvotesOnly ? null : (
-            <VoteArrow direction="down" lit={vote === -1} onPress={onVote ? () => void tap(-1) : undefined} />
-          )}
-        </View>
+        {/* No downvote control at all on an upvote-only post — the flair row's flag decides. */}
+        <VoteArrows state={voteState} showDownvote={!post.flair.upvotesOnly} enabled={onVote != null} scoreTestID="post-score" />
         <View style={styles.actions}>
           {onShareWorkout ? (
             <Pressable
@@ -533,25 +495,6 @@ function ReshareConfirm({ sending, onConfirm, onCancel }: { sending: boolean; on
         <Button label="Re-share now" onPress={onConfirm} disabled={sending} />
       </View>
     </View>
-  );
-}
-
-/** One vote arrow: red and filled when it is the viewer's vote, outlined otherwise. */
-function VoteArrow({ direction, lit, onPress }: { direction: 'up' | 'down'; lit: boolean; onPress?: () => void }) {
-  const label = direction === 'up' ? 'Upvote' : 'Downvote';
-  const icon =
-    direction === 'up' ? (lit ? 'arrow-up-circle' : 'arrow-up-circle-outline') : lit ? 'arrow-down-circle' : 'arrow-down-circle-outline';
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={label}
-      accessibilityState={{ selected: lit, disabled: !onPress }}
-      disabled={!onPress}
-      onPress={onPress}
-      hitSlop={8}
-    >
-      <Ionicons name={icon} size={26} color={lit ? colors.accent : colors.muted} />
-    </Pressable>
   );
 }
 
@@ -731,16 +674,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-  },
-  votes: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  score: {
-    color: colors.text,
-    minWidth: 24,
-    textAlign: 'center',
   },
   commentButton: {
     flexDirection: 'row',

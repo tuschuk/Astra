@@ -90,7 +90,9 @@ export default function RootLayout() {
  *   workout's exercises and targets), and Teams (B36): team/new (create a team),
  *   team/[id] (a team's page and Team feed) and team/[id]/invite (the owner's
  *   invite search), and marketplace-program/[id] (a published program's page
- *   with Save and Start, B40): the signed-in app — only with a session.
+ *   with Save and Start, B40; votes and a comments button, B41) and
+ *   program-comments/[id] (a published program's comments, B41): the signed-in
+ *   app — only with a session.
  * - (auth): sign-in / sign-up — only without one.
  * When the session appears or disappears, expo-router moves the user to
  * whichever half is now allowed, so screens never navigate on sign-in/out.
@@ -154,6 +156,7 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
           <Stack.Screen name="team/[id]/invite" />
           <Stack.Screen name="session/[id]" />
           <Stack.Screen name="marketplace-program/[id]" />
+          <Stack.Screen name="program-comments/[id]" />
         </Stack.Protected>
         <Stack.Protected guard={!signedIn}>
           <Stack.Screen name="(auth)" />

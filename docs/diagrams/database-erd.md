@@ -44,6 +44,10 @@ read policy, `private.program_tree_json` and the `program_payload` function; see
 visibility"),
 `20261116004257_marketplace_search.sql` (B40, applied live — the generated `programs.search`
 tsvector, its GIN index and the published-browse partial index; see "Marketplace search"),
+`20261116012712_program_votes_comments.sql` and `20261116015334_program_social_reads.sql` (B41,
+both applied live — `program_votes`, `program_comments`, `private.can_view_program`,
+`private.program_published`, the `program_scores` view, and the read policies matched to post
+votes; see "Program votes, comments and Featured"),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -117,6 +121,39 @@ erDiagram
   profiles ||--o{ team_feed_hides : "hidden_by the owner (cascade)"
   programs ||--o{ program_team_shares : "shared with these Teams when visibility = team (cascade, B39)"
   teams ||--o{ program_team_shares : "team_id the program is shared with (cascade)"
+  programs ||--o{ program_votes : "program_id voted on (cascade, B41)"
+  profiles ||--o{ program_votes : "user_id casts; one per program (cascade)"
+  programs ||--o{ program_comments : "program_id commented on (cascade, B41)"
+  profiles ||--o{ program_comments : "user_id writes (cascade)"
+  programs ||..|| program_scores : "view: one row per program + window scores (security_invoker, B41)"
+  program_votes {
+    uuid program_id PK, FK "the program voted on (published when cast)"
+    uuid user_id PK, FK "the voter; PK (program_id, user_id) = one vote per lifter per program"
+    smallint value "+1 or -1 only (no upvote-only rule on programs)"
+    timestamptz created_at "when CAST; kept on a change of mind — the Featured windows count this"
+    timestamptz updated_at
+  }
+  program_comments {
+    uuid id PK "server-generated (gen_random_uuid)"
+    uuid program_id FK "the program commented on (published when written)"
+    uuid user_id FK "the commenter"
+    text body "1-500 chars, at least one non-whitespace character (same CHECK as comments)"
+    timestamptz created_at "conversation order, oldest first"
+    timestamptz updated_at
+  }
+  program_scores {
+    uuid id "= programs.id (VIEW, not a table)"
+    uuid user_id "= programs.user_id (FK kept: embeds author)"
+    text name "= programs.name"
+    program_visibility visibility "= programs.visibility (the shelf filter)"
+    timestamptz created_at "= programs.created_at (tie-break: newest first)"
+    timestamptz deleted_at "= programs.deleted_at (the shelf filter)"
+    int score "net votes, all time; 0 when none"
+    int score_week "net votes cast in the last 7 days"
+    int score_month "net votes cast in the last 30 days"
+    int score_year "net votes cast in the last 365 days"
+    int comment_count "count of program_comments"
+  }
   program_team_shares {
     uuid program_id PK, FK "the author's program"
     uuid team_id PK, FK "a team the author was in when sharing"
@@ -539,6 +576,42 @@ Migration `20261115235525_program_visibility.sql`. Who besides its author may se
   B, as `authenticated`, read 1 row by search with and without the visibility filter (the
   published one), `program_payload` non-null for the published and null for the private; the
   column is `attgenerated = 's'` and non-null on every existing row.
+
+## Program votes, comments and Featured (B41)
+
+Migrations `20261116012712_program_votes_comments.sql` and its fix
+`20261116015334_program_social_reads.sql`. Online-only, like post votes and comments: no device
+mirror, no sync change, nothing in `TABLE_COLUMNS`.
+
+- **Same shapes as the post tables**, keyed by `program_id`: `program_votes` (PK `(program_id,
+  user_id)` = one vote per lifter, a changed mind is an upsert that rewrites the row) and
+  `program_comments` (the same body CHECK as `comments`, mirrored by `commentLimits.ts` — two
+  CHECKs and one module change together). Both have the `moddatetime` trigger. Both arrows: no
+  upvote-only trigger (programs have no flair).
+- **`private.can_view_program(pid)`** (definer, stable) — "may the caller see this program?",
+  answered by `program_visible` through the program row (mirrors `can_view_post`).
+  **`private.program_published(pid)`** (definer, stable) — published and not deleted: the write gate.
+- **Reads** (both tables): your own rows always, or rows on a program you may see whose author you
+  may see (`private.author_visible`, the B27 rule — a blocked-either-way or muted lifter's votes
+  and comments drop out). The own-rows arm exists so a DELETE of your own row always finds it
+  (Postgres gates a DELETE's scan with the select policy).
+  **Writes:** insert (and, votes only, update) only as yourself on a published live program;
+  delete only your own, on any program. No update policy on comments (no editing).
+- **`program_scores`** (view, `security_invoker`) — every program the viewer may read, carrying
+  the programs columns the Marketplace read uses (so the Featured read embeds the author with
+  `profiles!programs_user_id_fkey` and applies the shelf filters on the view), plus `score` (all
+  time), `score_week` / `score_month` / `score_year` (`sum(value) filter (where created_at >=
+  now() - 7 / 30 / 365 days)`) and `comment_count`. Windows are **rolling** and count when a vote
+  was **cast**: flipping a vote rewrites it in place, so it moves (by 2 for up→down) every window
+  it already sat in, never "this week". Like `post_scores`, the sums are the votes *you* may read.
+- **Live-probed at B41 (rolled back):** a vote on a private program, a vote as someone else and a
+  comment on a private program → 42501; 501 chars and whitespace-only → 23514; a non-author sees 0
+  votes / comments / score rows on a private program; an upsert by the same voter keeps 1 row;
+  another user's update of a comment → 0 rows. Planted votes 8 and 400 days back: week 2 vs 1
+  ranked A above B, all time 3 vs 2 ranked B above A; flipping the 400-day vote moved only `score`
+  by 2, flipping a fresh vote flipped the week ranking. After the fix: a blocker sees the blocked
+  lifter's comment and vote drop out (author still sees both); after an unpublish the voter's
+  unvote and comment delete → 1 row each, a flip → 42501.
 
 ## Team coaching (B37)
 
@@ -1128,6 +1201,9 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `program_weeks`, `program_workouts`, `program_exercises` (B34) | only the program's author (`private.owns_program`) — deliberately NOT widened by B39 | only the program's author: insert, update, delete — the app soft-deletes |
 | `program_team_shares` (B39) | the program's author, and members of the shared team | insert only the author, only to a team they're in; delete only the author; no updates |
 | `program_payload` (function, B39) | signed-in users `program_visible` admits; null otherwise | — |
+| `program_votes` (B41) | your own; otherwise votes on a program you may see (`private.can_view_program`) whose voter you may see (`private.author_visible`) | insert and update only as yourself, on a published live program (`private.program_published`); delete only your own |
+| `program_comments` (B41) | your own; otherwise comments on a program you may see whose author you may see (same two helpers) | insert only as yourself, on a published live program; no updates; delete only your own |
+| `program_scores` (view, B41) | `security_invoker`: the programs you may read, each with the votes / comments you may read on it | — |
 | `program_runs` (B35) | only your own (`user_id = auth.uid()`) | insert, update, delete only your own — the app never deletes, it stamps `ended_at` |
 | `teams` (B36) | any signed-in user (discoverable) | insert only as yourself (`created_by`); update only the owner (`private.is_team_owner`), and only `name` / `join_mode` (column grant); delete only the owner (B38; everything team-scoped cascades) |
 | `team_members` (B36) | your own rows; the whole roster if you are a member; any open team's roster | insert only yourself, only as `member`, only when the team is open or you hold an invite; update (B37) only the owner, only `role`, never the owner row, only to `coach` / `member`; delete your own row (leave) or, as the owner, anyone's (B38 removal) — never the owner's row |

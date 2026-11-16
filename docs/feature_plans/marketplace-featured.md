@@ -490,3 +490,51 @@ attacked and what changed:
   extractions (D5, D6 — both are the second-copy extractions the repo's own precedent orders).
   Nothing narrowed: both arrows, the full four windows, comments with the full post-parity
   limits all ship.
+
+## Build deviations (builder run, recorded before commit)
+
+- **X1 — Second migration `20261116015334_program_social_reads.sql` (review fix, D2 amended).**
+  Two read-policy defects in D3's SQL, both found after `…012712_program_votes_comments` was
+  applied, fixed by replacing the two select policies:
+  1. *B27 parity was missing.* Post `votes`/`comments` reads also require
+     `private.author_visible(user_id)` (B27: a blocked-either-way or muted lifter's votes and
+     comments disappear). The plan's "What exists" described the B23 policies only. Program reads
+     now use the same clause, so `program_scores`, like `post_scores`, sums the votes the viewer
+     may see — "exactly as feed posts do".
+  2. *D2/G8's "a lifter can always take their own row back" was false as written.* Postgres
+     applies the select policy to the rows a `DELETE … WHERE` scans; once a program is no longer
+     visible to the voter (unpublished), `clearProgramVote` deleted 0 rows (live-probed). Both
+     select policies gain `user_id = auth.uid() or …` — your own rows reveal nothing you didn't
+     write, and the program itself stays hidden (`program_scores` reads programs under your RLS).
+     Live-probed after the fix: unvote and own-comment delete on an unpublished program → 1 row
+     each; another user's vote → 0; a flip (update) there is still refused 42501 (insert/update
+     stay published-only, as D2 says). Post tables are unchanged (their own analogous
+     after-hide-delete gap is pre-existing and out of scope — recorded in DEFERRED).
+- **X2 — D5 shape: hook + arrows + control, not one component.** `VoteControl.tsx` exports
+  `useOptimisticVote` (the moved state/tap/reset logic), `VoteArrows` (the moved JSX + the moved
+  `VoteArrow`), and `VoteControl` (both plus the refusal line, used by the program page).
+  `PostFooter` uses the hook + `VoteArrows` so its refusal line keeps its place under the whole
+  footer (moving it into the arrows column would have been a layout change). Review fix: a
+  sender that throws now counts as 'failed' and releases the in-flight lock (it used to stay
+  locked); today's senders never throw.
+- **X3 — D6 shape: `CommentsPane` owns its own load + Retry.** Props are `load`, `send`, `me`,
+  optional `onReport` and `placeholder` (the plan said "the already-loaded state plus `onSend`").
+  Owning the load lets both routes be genuinely thin (Back + heading + wiring); the post route
+  re-exports `MORE_COMMENTS_LINE`/`SEND_FAILED_LINE` so its existing tests run unedited.
+- **X4 — The program page also re-reads on focus** (D6 put the focus re-read on the tab only),
+  so the comment count and score are fresh after returning from the comments screen. First focus
+  is skipped (the opening read). The tab does the same.
+- **X5 — Featured hides on an empty shelf** (nothing published → only the browse list's empty
+  message), and the featured card shows "by Alex · ▲ 12" with its own accessibility label
+  ("Open featured program …, score N") so the two lists stay distinguishable. The B40 tab tests
+  were edited for this: their five `findByText('PHUL')` waits now wait on the browse card's label
+  (a featured card carries the same name). The B23 post tests are unedited.
+- **X6 — `PROGRAM_COMMENT_SELECT` / `COMMENT_SELECT` share one author-embed constant** (review
+  fix); `refusal`/`refusalFor` collapsed into one function (review fix, behaviour unchanged).
+- **Not done from review, on purpose:** `commentButtonLabel` stays imported from `PostCard` (G11);
+  `PostComment`/`toPostComment` keep their names for program comments (a rename would edit B23
+  files for taste); `program_votes.user_id` stays unindexed (D3, the B23 D4 reading); the two
+  comments routes keep their small duplicated shell (Back + wiring, ~20 lines).
+- **Live HTTP embed probe not run:** the permission layer declined outbound HTTP from this run,
+  so `program_scores?select=…,author:profiles!programs_user_id_fkey(…)` (risk 1) is Gate 2's. The
+  shape mirrors `post_hot_scores`, which is proven live; the pre-approved fallback stands.

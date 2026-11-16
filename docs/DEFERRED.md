@@ -736,3 +736,35 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     Marketplace shows the connection message; B's copy survives kill + reopen and syncs up.
     Judge the cards, the page and the button block at phone width.
   - `mmdc` render of both diagrams not run by the builder — Gate 2.
+- **B41 marketplace-featured** (built, awaiting Gate 2):
+  - **Live HTTP probe of the Featured read** is Gate 2's (outbound HTTP declined in the builder
+    run): `program_scores?select=id,name,user_id,visibility,created_at,score_week,author:profiles!programs_user_id_fkey(username,display_name)&visibility=eq.published&deleted_at=is.null&order=score_week.desc,created_at.desc,id.desc`
+    with a throwaway JWT → rows with the author embedded (a PGRST200/201 here means the plan's
+    pre-approved fallback: read ids + scores from the view, then rows through `MARKETPLACE_SELECT`).
+    Also the program page's `program_votes?…&user_id=eq.<me>` single-row read.
+  - **Reporting program comments** (D7) — `reports.target_kind` stays `('post','comment')`;
+    widening it is a CHECK migration, two policy arms, the author-stamp trigger and a `moderate`
+    redeploy. Until then the founder removes an abusive program comment from the dashboard.
+  - **Vote arrows on browse / Featured cards** — voting lives on the program page (D6).
+  - **No realtime ranking** — the tab and page re-read on focus (G9); a vote cast by someone else
+    while you watch the tab shows on the next focus.
+  - **Featured windows are rolling 7 / 30 / 365 days** (G3) — calendar windows would be a
+    one-line interval change in `program_scores`. A flipped vote keeps its original `created_at`
+    (risk 4: re-stamping would be gameable).
+  - **`FEATURED_LIMIT = 10`** (G5) — one constant.
+  - **A vote on a program that later stops being published can be removed but not flipped**
+    (G8, amended by X1); no surface lists "my program votes" today.
+  - **Post votes/comments have the same delete-after-hide gap X1 fixed for programs**: once a
+    post is hidden from you, your own `clearVote`/comment delete finds 0 rows (the select policy
+    gates the DELETE's scan). Pre-existing since B23; no surface offers it today. One-clause fix
+    (`user_id = auth.uid() or …` on both select policies) when it matters.
+  - **`program_scores` sums every vote under a per-row `can_view_program` check** — fine at launch
+    scale; measure before indexing or materializing (the "nothing speculative" rule).
+  - Comment paging past 200, editing/threading, votes on comments, notifications (B47) — the B23
+    parity deferrals, unchanged. `programs.description` still not added (no card shows one).
+  - **Device check (Tristen):** A publishes a program → B opens it from the Marketplace, upvotes
+    (arrow lights, score moves), leaves and reopens (still lit), comments → A reads the comment;
+    the tab's Featured section lists it under Week with "▲ 1", chips switch windows; B un-votes →
+    score drops on the next focus of the tab; airplane mode → tab and comments screen show the
+    connection message. Judge the Featured section and the page's social row at phone width.
+  - `mmdc` render of both diagrams not run by the builder — Gate 2.

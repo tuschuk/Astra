@@ -1,14 +1,15 @@
 /**
  * Tests for voting (B23, SOC-4): the score arithmetic of a changed vote, what an arrow tap
  * means, and casting / clearing a vote against the in-memory fake — one vote per lifter per
- * post, and the upvote-only refusal turned into its sentence.
+ * post, and the upvote-only refusal turned into its sentence. (B41) The program arm: the same
+ * one-row-per-lifter upsert on `program_votes`, both arrows, and every refusal as 'failed'.
  */
 import { describe, expect, it } from '@jest/globals';
 
 import { createFakeSocialClient } from '@/test-utils/fakeSocialClient';
 import { profile, rawImagePost, rawPost } from '@/test-utils/feedFixtures';
 
-import { castVote, clearVote, nextVote, voteDelta } from './votes';
+import { castProgramVote, castVote, clearProgramVote, clearVote, nextVote, voteDelta } from './votes';
 
 const author = profile('a', 'author');
 const wod = rawPost({ id: 'wod', author, createdAt: '2026-11-15T08:00:00.000Z' });
@@ -87,5 +88,44 @@ describe('castVote / clearVote', () => {
     const fake = createFakeSocialClient({ posts: [wod] }, { offline: true });
     expect(await castVote(fake.client, 'b', 'wod', 1)).toEqual({ ok: false, reason: 'failed' });
     expect(await clearVote(fake.client, 'b', 'wod')).toEqual({ ok: false, reason: 'failed' });
+  });
+});
+
+describe('castProgramVote / clearProgramVote (B41 — MKT-3)', () => {
+  const programs = [{ id: 'prog', user_id: 'a', name: 'PHUL', visibility: 'published', deleted_at: null, created_at: '2026-11-15T08:00:00.000Z' }];
+
+  it('upserts on (program, lifter): a changed mind rewrites the one row, never adds a second', async () => {
+    const fake = createFakeSocialClient({ programs });
+    expect(await castProgramVote(fake.client, 'b', 'prog', 1)).toEqual({ ok: true });
+    expect(fake.requests[0]).toContainEqual(['upsert', { program_id: 'prog', user_id: 'b', value: 1 }, { onConflict: 'program_id,user_id' }]);
+    expect(await castProgramVote(fake.client, 'b', 'prog', -1)).toEqual({ ok: true });
+    expect(fake.tables.program_votes).toEqual([{ program_id: 'prog', user_id: 'b', value: -1 }]);
+    // Both arrows: a program takes downvotes (no flair, no upvote-only rule).
+    expect(await castProgramVote(fake.client, 'c', 'prog', -1)).toEqual({ ok: true });
+    expect(fake.tables.program_votes).toHaveLength(2);
+    // Post votes are untouched.
+    expect(fake.tables.votes).toEqual([]);
+  });
+
+  it('clearing deletes only my vote on that program', async () => {
+    const fake = createFakeSocialClient({
+      programs,
+      program_votes: [
+        { program_id: 'prog', user_id: 'b', value: 1 },
+        { program_id: 'prog', user_id: 'c', value: 1 },
+      ],
+    });
+    expect(await clearProgramVote(fake.client, 'b', 'prog')).toEqual({ ok: true });
+    expect(fake.tables.program_votes).toEqual([{ program_id: 'prog', user_id: 'c', value: 1 }]);
+  });
+
+  it('every refusal is the failed sentence — even a P0001, which means nothing special on programs', async () => {
+    const refused = createFakeSocialClient({ programs }, { refuse: { program_votes: { code: 'P0001', message: 'x' } } });
+    expect(await castProgramVote(refused.client, 'b', 'prog', -1)).toEqual({ ok: false, reason: 'failed' });
+    const rls = createFakeSocialClient({ programs }, { refuse: { program_votes: { code: '42501', message: 'row-level security' } } });
+    expect(await castProgramVote(rls.client, 'b', 'prog', 1)).toEqual({ ok: false, reason: 'failed' });
+    const offline = createFakeSocialClient({ programs }, { offline: true });
+    expect(await castProgramVote(offline.client, 'b', 'prog', 1)).toEqual({ ok: false, reason: 'failed' });
+    expect(await clearProgramVote(offline.client, 'b', 'prog')).toEqual({ ok: false, reason: 'failed' });
   });
 });

@@ -8,17 +8,22 @@
  *     running program is flagged first; Save to my programs copies without starting; custom
  *     exercises that didn't copy are counted and the page stays put;
  *   - my own program offers the editor, not a copy; an empty program can't be saved or started;
- *     a gone program says so; no connection shows the message and Retry recovers.
+ *     a gone program says so; no connection shows the message and Retry recovers;
+ *   - (B41 — MKT-3) a published program shows its score with my vote lit, both arrows and the
+ *     comment count; a tap moves the score at once and rewrites my one vote row (again takes it
+ *     back); a refusal steps back with the sentence; the comments button opens the program's
+ *     comments, and coming back re-reads the numbers; a followers-only program shows neither.
  */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
-import { fireEvent, screen } from '@testing-library/react-native';
+import { act, fireEvent, screen } from '@testing-library/react-native';
 
 import type { SqlDriver } from '@/db/driver';
 import { libraryExerciseId } from '@/library/uuidv5';
 import { readActiveRun, startProgramRun } from '@/programs/programRuns';
 import { addProgramWorkout, addWeek, createProgram, listPrograms } from '@/programs/programs';
 import type { TeamProgramPayload } from '@/social/teamCoaching';
+import { VOTE_REFUSAL_MESSAGES } from '@/social/votes';
 import { createFakeSocialClient } from '@/test-utils/fakeSocialClient';
 import { profile } from '@/test-utils/feedFixtures';
 import { createPreparedDb, renderSignedIn, SIGNED_IN_USER_ID } from '@/test-utils/loggerTestKit';
@@ -46,10 +51,25 @@ jest.mock('@/lib/supabase', () => ({
 
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: jest.fn(() => true) };
 let mockProgramId = 'p1';
-jest.mock('expo-router', () => ({
-  useRouter: () => mockRouter,
-  useLocalSearchParams: () => ({ id: mockProgramId }),
-}));
+// (B41) Focus callbacks are kept so a test can "come back to the page" with `refocus()`.
+const mockFocusCallbacks: (() => void)[] = [];
+jest.mock('expo-router', () => {
+  const { useEffect } = jest.requireActual<typeof import('react')>('react');
+  return {
+    useRouter: () => mockRouter,
+    useLocalSearchParams: () => ({ id: mockProgramId }),
+    useFocusEffect: (effect: () => void) =>
+      useEffect(() => {
+        mockFocusCallbacks.push(effect);
+        effect();
+      }, [effect]),
+  };
+});
+
+/** The lifter comes back to the page (from its comments, say). */
+async function refocus(): Promise<void> {
+  await act(async () => mockFocusCallbacks[mockFocusCallbacks.length - 1]?.());
+}
 
 const ME = SIGNED_IN_USER_ID;
 const SQUAT = libraryExerciseId('squat');
@@ -246,5 +266,88 @@ describe('Marketplace program page', () => {
     mockSocial.setOffline(false);
     await fireEvent.press(screen.getByLabelText('Retry'));
     expect(await screen.findByText('2 weeks · 2–3 days/week')).toBeTruthy();
+  });
+});
+
+describe('Marketplace program page — votes and comments (B41, MKT-3)', () => {
+  /** The score on screen. */
+  function shownScore(): string {
+    return String(screen.getByTestId('program-score').props.accessibilityLabel);
+  }
+
+  beforeEach(() => {
+    mockFocusCallbacks.length = 0;
+    mockSocial.tables.program_votes.push(
+      { program_id: 'p1', user_id: 'alex', value: 1 },
+      { program_id: 'p1', user_id: 'x', value: 1 },
+      { program_id: 'p1', user_id: ME, value: 1 },
+    );
+    mockSocial.tables.program_comments.push({ id: 'c1', program_id: 'p1', user_id: 'alex', body: 'Run it', created_at: '2026-11-15T10:00:00.000Z' });
+  });
+
+  it('shows the score with my vote lit, both arrows, and the comment count', async () => {
+    await renderSignedIn(<MarketplaceProgramScreen />);
+    await screen.findByText('Barbell Basics');
+    expect(shownScore()).toBe('Score 3');
+    expect(screen.getByLabelText('Upvote').props.accessibilityState.selected).toBe(true);
+    expect(screen.getByLabelText('Downvote')).toBeTruthy();
+    expect(screen.getByText('1 comment')).toBeTruthy();
+  });
+
+  it('a tap moves the score at once and rewrites my one vote row; tapping again takes it back', async () => {
+    await renderSignedIn(<MarketplaceProgramScreen />);
+    await screen.findByText('Barbell Basics');
+    await fireEvent.press(screen.getByLabelText('Downvote'));
+    expect(shownScore()).toBe('Score 1');
+    const mine = () => mockSocial.tables.program_votes.filter((v) => v.user_id === ME);
+    expect(mine()).toEqual([{ program_id: 'p1', user_id: ME, value: -1 }]);
+    await fireEvent.press(screen.getByLabelText('Downvote'));
+    expect(shownScore()).toBe('Score 2');
+    expect(mine()).toEqual([]);
+  });
+
+  it('a refused vote steps back and says so', async () => {
+    mockSocial = createFakeSocialClient(
+      { profiles: [profile('alex', 'alex_lifts', 'Alex')], programs: [...mockSocial.tables.programs] },
+      {
+        rpc: { program_payload: (p) => asServerJson(payloads[String(p.p_program)] ?? null) },
+        refuse: { program_votes: { code: '42501', message: 'row-level security' } },
+      },
+    );
+    await renderSignedIn(<MarketplaceProgramScreen />);
+    await screen.findByText('Barbell Basics');
+    expect(shownScore()).toBe('Score 0');
+    await fireEvent.press(screen.getByLabelText('Upvote'));
+    expect(shownScore()).toBe('Score 0');
+    expect(screen.getByText(VOTE_REFUSAL_MESSAGES.failed)).toBeTruthy();
+  });
+
+  it('the comments button opens the program’s comments; coming back re-reads the numbers', async () => {
+    await renderSignedIn(<MarketplaceProgramScreen />);
+    await fireEvent.press(await screen.findByLabelText('1 comment'));
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/program-comments/[id]', params: { id: 'p1' } });
+    // While away: a second comment and another upvote land.
+    mockSocial.tables.program_comments.push({ id: 'c2', program_id: 'p1', user_id: ME, body: 'Will do', created_at: '2026-11-15T11:00:00.000Z' });
+    mockSocial.tables.program_votes.push({ program_id: 'p1', user_id: 'y', value: 1 });
+    await refocus();
+    expect(await screen.findByText('2 comments')).toBeTruthy();
+    expect(shownScore()).toBe('Score 4');
+  });
+
+  it('a program that isn’t published (shared with followers or a team) shows no votes or comments', async () => {
+    mockSocial.tables.programs.push({
+      id: 'shared',
+      user_id: 'alex',
+      name: 'Followers Only',
+      visibility: 'followers',
+      deleted_at: null,
+      created_at: '2026-11-15T10:00:00.000Z',
+    });
+    payloads.shared = { ...basics, name: 'Followers Only' };
+    mockProgramId = 'shared';
+    await renderSignedIn(<MarketplaceProgramScreen />);
+    await screen.findByText('Followers Only');
+    expect(screen.queryByLabelText('Upvote')).toBeNull();
+    expect(screen.queryByLabelText('Comment')).toBeNull();
   });
 });
