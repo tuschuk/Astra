@@ -323,6 +323,37 @@ every column stays `g.`-qualified; `order by distance_m` is safe (the select-lis
    reversible — but it is the repo's first migration whose SQL can't be eyeballed against an
    existing pattern; the probe is the safety net, and `get_advisors` should run after apply.
 
+## Build deviations and review outcome (builder, Nov 16, 2026)
+
+Applied live as `20261116123049_gyms.sql` (versions match `list_migrations`). Every probe step
+passed — SQL as two synthetic users (rolled back) and the REST upsert with a throwaway user's
+real JWT (deleted afterwards): `gyms_near` from downtown → Capitol Hill first (1 393 m), from
+Boulder → Boulder first (0 m); join → 201, switch → 200 with one row, new `gym_id`, `joined_at`
+moved; re-join same gym → `joined_at` unchanged; upsert with `joined_at` → 42501; upsert for
+another user → 42501 (RLS); `gyms` POST / PATCH / DELETE → 42501; anon `gyms` and `gyms_near` →
+42501; leave → zero rows. `get_advisors` (security) lists nothing new.
+
+1. **Second migration `20261116124327_gym_members_no_truncate.sql`** (review fix): Supabase's
+   default grants left TRUNCATE / REFERENCES / TRIGGER on `gym_members` (and REFERENCES /
+   TRIGGER on `gyms`) for `authenticated`. PostgREST can't issue them, but TRUNCATE skips RLS,
+   so they are revoked; the live grants are now exactly select+delete and column insert/update
+   `(user_id, gym_id)` on `gym_members`, select on `gyms`.
+2. **`app/_layout.tsx`** registers `gyms/index` and `gym/[id]/index` in the signed-in guard — the
+   file table missed it; every route needs it.
+3. **`app.json`** gains the `expo-location` config plugin with the foreground permission sentence
+   (iOS requires one); no background location.
+4. **`components/gyms/GymListItem.tsx`** (+ test) — one gym row shared by the directory,
+   Communities and the profile instead of three inline copies.
+5. **Location timeout** of 10 s on `getCurrentPositionAsync` (the plan's "timed out → Denver").
+6. **Communities while the gym is unreadable** (review fix): the "join a gym" card shows only when
+   the server said "no gym"; offline it is held back (the Teams half shows the connection line).
+7. **Fake social client** gains `gyms` / `gym_members` (upsert on `user_id`, server join time,
+   restamp on switch, `gym:` / `profile:` embeds); `gyms_near` is test-supplied through `rpc`.
+8. The gym page heads its roster "N members", like the team page (the plan's "no member counts"
+   was about directory rows; the count is just the loaded roster's length). Kept.
+9. Not done, recorded in DEFERRED: extracting a shared member-feed hook from the team and gym
+   pages (review judgement call — two copies now).
+
 ## Grilling decisions (settled)
 
 - **G1 — "Does B50 need PostGIS at all, or would `earthdistance`/`cube` (or a haversine in SQL)

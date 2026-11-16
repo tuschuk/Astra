@@ -442,7 +442,7 @@ describe('Home feed — order and flair (B24)', () => {
   });
 });
 
-describe('Home — Your teams (B36: TEAM-2, SOC-10)', () => {
+describe('Home — Your groups (B36 Teams, B50 Gym: TEAM-2, GYM-2, SOC-10)', () => {
   const team = (id: string, name: string) => ({ id, name, join_mode: 'open', created_by: 'friend', created_at: '2026-11-15T10:00:00.000Z' });
 
   it('shows a chip per team that opens its page (the Team feed), and an invite chip to Communities', async () => {
@@ -458,12 +458,40 @@ describe('Home — Your teams (B36: TEAM-2, SOC-10)', () => {
     expect(mockPush).toHaveBeenCalledWith('/communities');
   });
 
-  it('no teams and no invites → no team row at all', async () => {
+  it('no gym, no teams and no invites → no group row at all', async () => {
     mockSocial = createFakeSocialClient({
       posts: [rawPost({ id: 'mine', author: me, createdAt: '2026-11-15T10:00:00.000Z', title: 'My session' })],
     });
     await renderSignedIn(<HomeScreen />);
     await screen.findByText('My session');
-    expect(screen.queryByText('Your teams')).toBeNull();
+    expect(screen.queryByText('Your groups')).toBeNull();
+  });
+
+  it('a gym alone shows the row: its chip comes first and opens the gym page (the Gym feed) — SOC-10', async () => {
+    mockSocial = createFakeSocialClient({
+      teams: [team('t1', 'Dawn Patrol')],
+      team_members: [{ team_id: 't1', user_id: ME, role: 'member', joined_at: '2026-11-15T11:00:00.000Z' }],
+      gyms: [{ id: 'g1', name: 'Sample Gym · RiNo', address: 'River North, Denver, CO' }],
+      gym_members: [{ user_id: ME, gym_id: 'g1', joined_at: '2026-11-16T09:00:00.000Z' }],
+    });
+    await renderSignedIn(<HomeScreen />);
+    expect(await screen.findByText('Your groups')).toBeTruthy();
+    const gymChip = await screen.findByLabelText('Open your gym Sample Gym · RiNo');
+    await screen.findByLabelText('Open team Dawn Patrol');
+    // The gym chip is first in the row.
+    const labels = screen.getAllByRole('button').map((b) => b.props.accessibilityLabel as string | undefined);
+    expect(labels.indexOf('Open your gym Sample Gym · RiNo')).toBeLessThan(labels.indexOf('Open team Dawn Patrol'));
+    await fireEvent.press(gymChip);
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/gym/[id]', params: { id: 'g1' } });
+  });
+
+  it('a gym with no teams still shows the row', async () => {
+    mockSocial = createFakeSocialClient({
+      gyms: [{ id: 'g1', name: 'Sample Gym · RiNo', address: 'River North, Denver, CO' }],
+      gym_members: [{ user_id: ME, gym_id: 'g1', joined_at: '2026-11-16T09:00:00.000Z' }],
+    });
+    await renderSignedIn(<HomeScreen />);
+    expect(await screen.findByLabelText('Open your gym Sample Gym · RiNo')).toBeTruthy();
+    expect(screen.getByText('Your groups')).toBeTruthy();
   });
 });

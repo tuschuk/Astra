@@ -161,3 +161,21 @@ describe('ProfileView — Teams (B36, YOU-6)', () => {
     expect(screen.queryByText('Teams')).toBeNull();
   });
 });
+
+describe('ProfileView — Gym (B50, YOU-6)', () => {
+  it('shows the lifter’s gym as a link to the gym page', async () => {
+    mockSocial.tables.gyms.push({ id: 'g1', name: 'Sample Gym · RiNo', address: 'River North, Denver, CO' });
+    mockSocial.tables.gym_members.push({ user_id: 'pat', gym_id: 'g1', joined_at: '2026-11-16T09:00:00.000Z' });
+    await renderSignedIn(<ProfileView profileId="pat" />);
+    expect(await screen.findByText('Sample Gym · RiNo')).toBeTruthy();
+    expect(screen.getByText('Gym')).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Open gym Sample Gym · RiNo'));
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/gym/[id]', params: { id: 'g1' } });
+  });
+
+  it('a lifter with no gym shows no Gym section', async () => {
+    await renderSignedIn(<ProfileView profileId="pat" />);
+    await screen.findByText('Pat session');
+    expect(screen.queryByText('Gym')).toBeNull();
+  });
+});

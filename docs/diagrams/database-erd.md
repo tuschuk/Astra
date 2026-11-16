@@ -58,6 +58,10 @@ both applied live — `conversations`, `messages`, `private.can_message`, `can_m
 `user_settings.dm_policy` / `notify_messages`, the `last_message_at` and server-time triggers,
 `messages` in the `supabase_realtime` publication, and the fifth push event; see "Direct
 messages"),
+`20261116123049_gyms.sql` and `20261116124327_gym_members_no_truncate.sql` (B50, both applied
+live — the `postgis` extension in `extensions`, `gyms` with its fictional six-gym Denver-area
+fixture, `gym_members`, the `gym_members_restamp` trigger, `gyms_near`, and grants trimmed to
+read / join / switch / leave; see "Gyms"),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -127,6 +131,9 @@ erDiagram
   programs ||--o{ team_assignments : "program_id: the coach's program (cascade)"
   team_members ||..o{ workouts : "coach log access: a coach reads members' workouts (no FK; RLS arm)"
   teams ||--o{ team_feed_hides : "owner's hidden posts (cascade, B38)"
+  gyms ||--o{ gym_members : "has members (cascade, B50)"
+  profiles ||--o| gym_members : "user_id: at most ONE gym per lifter — the PK (cascade)"
+  gym_members ||..o{ posts : "Gym feed: posts where user_id in the roster (no FK; posts RLS decides)"
   posts ||--o{ team_feed_hides : "post_id hidden from that team's feed (cascade)"
   profiles ||--o{ team_feed_hides : "hidden_by the owner (cascade)"
   programs ||--o{ program_team_shares : "shared with these Teams when visibility = team (cascade, B39)"
@@ -544,7 +551,46 @@ erDiagram
     uuid hidden_by FK "who hid it (the owner)"
     timestamptz created_at
   }
+
+  gyms {
+    uuid id PK "server default gen_random_uuid; rows come only from migrations"
+    text name "1 to 120 characters (CHECK)"
+    text address "1 to 200 characters (CHECK)"
+    geography location "extensions.geography(Point, 4326): lng/lat; GiST-indexed"
+    timestamptz created_at
+  }
+
+  gym_members {
+    uuid user_id PK,FK "PK alone: one active gym per lifter; join = switch = upsert on user_id"
+    uuid gym_id FK "indexed"
+    timestamptz joined_at "server-owned: default now(), restamped when gym_id changes"
+  }
 ```
+
+## Gyms (B50)
+
+- **A gym is a place, not a group.** No owner, role, join mode or invite. `gyms` has a select
+  policy for signed-in users and **no insert / update / delete policy for anyone**, and those
+  privileges are revoked too — nobody can create, edit, claim or delete a gym through the API
+  (GYM-7; probed live: 42501). Rows arrive by migration. Today they are a **fictional fixture**
+  (six "Sample Gym · …" rows at real Denver-area points, each commented `FIXTURE — replaced by
+  B51`); B51 replaces them with the real list.
+- **One active gym.** `gym_members.user_id` is the primary key, so a second row can't exist:
+  joining a second gym rewrites the one row's `gym_id` (the app upserts on `user_id`; PostgREST
+  turns that into `on conflict (user_id) do update set user_id, gym_id`). Leave = delete own row.
+- **Membership is public** to signed-in users (select `using (true)`): profiles show anyone's gym
+  and a gym page lists its roster for any visitor. It does not widen post visibility — the Gym
+  feed is the ordinary posts read narrowed to the roster, so `posts` RLS still decides.
+- **Writes are yours only.** Insert / update `with check (user_id = auth.uid())`, update and delete
+  `using (user_id = auth.uid())`. Column grants: `insert (user_id, gym_id)`, `update (user_id,
+  gym_id)` — so `joined_at` has no client writer (a client sending it gets 42501). `user_id` is in
+  the update grant only because the upsert SETs it to itself; the policy stops re-pointing it.
+  TRUNCATE / REFERENCES / TRIGGER are revoked on both tables; anon has nothing on either.
+- **`gyms_near(lat, lng, max_rows default 50)`** (function, `security invoker`, signed-in only)
+  returns `(id, name, address, distance_m)` for every gym, nearest first — PostGIS
+  `st_distance` on geography, in metres; `max_rows` clamped to 1–100; no radius filter. The
+  caller's point is only an argument: nothing stores it. Note `st_makepoint(lng, lat)` — x first;
+  probed live from downtown Denver (Capitol Hill first, 1.39 km) and Boulder (Boulder first, 0 m).
 
 ## Direct messages (B48)
 
@@ -1314,6 +1360,9 @@ when that workout's own analysis is).
   your invite to it**: `on_team_member_created` on `team_members` — see Teams. **Leaving or being
   removed clears your assignments** (and, when removed, your invite): `on_team_member_removed` on
   `team_members` (B38) — see Team moderation.
+- **Switching gyms restarts "member since"** (B50): `gym_members_restamp` (BEFORE UPDATE on
+  `gym_members`, `private.gym_members_restamp()`) sets `joined_at = now()` when `gym_id` changes;
+  re-joining the same gym leaves it alone. See Gyms.
 
 ## Re-shares (B28)
 
@@ -1390,6 +1439,9 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `team_assignments` (B37) | the assignee, and the team's coaches | insert only as `assigned_by` yourself, a coach, your own program, to a team member, never across a block; delete by the assignee or a coach |
 | `team_program_payload`, `team_workout_payload` (functions, B37) | signed-in members of the team, for content pushed to it (or a program assigned to you there) and still live; null otherwise | — |
 | `team_invites` (B36) | invites to you, and the owner sees their team's | insert only the owner, never across a block (`private.blocked_either`); delete by the invitee (decline) or the owner (cancel) |
+| `gyms` (B50) | any signed-in user; anon nothing | nobody — no write policies, privileges revoked; rows by migration only (GYM-7) |
+| `gym_members` (B50) | any signed-in user (public membership); anon nothing | insert / update only your own row, and only `user_id` / `gym_id` (column grants — `joined_at` is the server's); delete only your own row |
+| `gyms_near(lat, lng, max_rows)` (function, B50) | signed-in users (`security invoker`: runs under the gyms read rule); anon refused | — |
 | `push_tokens` (B47) | only your own | delete only your own; no insert/update policies — writes only through `register_push_token` (signed-in, saves for `auth.uid()`, takes the token over from a previous owner) |
 | `notification_log` (B47) | nobody — RLS on, no policies; the `notify` function (service role) writes and reads it | nobody |
 | `conversations` (B48) | the two members, and not while either has blocked the other (`private.blocked_either`) | insert only a pair you are in, and only when `private.can_message(you, them)` (no block; their `dm_policy` is `anyone` or you follow each other); no update/delete |
@@ -1414,7 +1466,8 @@ they can see rows the caller's own RLS would hide.
   and (B34) their programs with every week, workout and slot under them, and (B35) their program
   runs, and (B36) their team memberships and invites, and every team they created (with all of
   that team's memberships and invites — members silently lose the team; no ownership transfer),
-  and (B47) their push tokens and the notification-log rows addressed to them. A hard-deleted program workout sets `workouts.program_workout_id` to null (the session stays).
+  and (B47) their push tokens and the notification-log rows addressed to them, and (B50) their
+  gym membership. Deleting a gym (a B51 re-seed) deletes its memberships. A hard-deleted program workout sets `workouts.program_workout_id` to null (the session stays).
   Storage objects are not rows of this graph — the `moderate` function sweeps them.
   Deleting a post cascades to its votes and comments (B23); reports about it stay (no FK, B27).
 - Deleting a workout cascades to its `workout_exercises` and their `sets` (and the records citing

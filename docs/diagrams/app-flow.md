@@ -123,7 +123,7 @@ flowchart TD
   StartSess --> StartWO
   StartSess --> MutWO
   StartSess -->|"opens on the prefilled session"| Logger
-  Tabs --> Communities["Communities (app/(tabs)/communities.tsx, B36: TEAM-1)<br/>Teams: Invites (Join / Decline) · Your teams (TeamListItem → team page) ·<br/>Create a team · Find teams (searchTeams, debounced; Join on rows I can join now);<br/>offline → TEAMS_OFFLINE + Retry; reloads on focus<br/>Gyms: still a placeholder card (B50)"]
+  Tabs --> Communities["Communities (app/(tabs)/communities.tsx, B36: TEAM-1)<br/>Teams: Invites (Join / Decline) · Your teams (TeamListItem → team page) ·<br/>Create a team · Find teams (searchTeams, debounced; Join on rows I can join now);<br/>offline → TEAMS_OFFLINE + Retry; reloads on focus<br/>Gyms (B50): Your gym (GymListItem → gym page) or, with none, an explainer card<br/>(held back while unreadable); Find your gym → directory; no create / manage control"]
   Communities -->|"Create a team: router.push('/team/new')"| NewTeamScr["New team (app/team/new.tsx, B36)<br/>name 1–80 via assertValidTeamName (says when too long);<br/>Create team → createTeam → router.replace team/[id]; Back"]
   Communities -->|"tap a team: router.push('/team/[id]')"| TeamScr["Team page (app/team/[id]/index.tsx, B36: TEAM-1, TEAM-2)<br/>name + mode; Join team / 'You're invited — Join' / closed line / Leave team (not the owner);<br/>owner only: Who can join chips (Open | Invite only → setJoinMode) + Invite lifters;<br/>Members (tap → profile) and Team feed (PostCards, 20 a page, pull to refresh)<br/>— both only for members or open teams; missing → 'isn't available'; offline → Retry<br/>B37 (TEAM-3, TEAM-5), members only: 'Coaches of this team can see your training log.';<br/>assignment banners (View / Dismiss); Coach's corner = pushes newest 20 (announcement text,<br/>program / workout cards → TeamProgramSheet; author: Remove); coaches (owner ∪ coach):<br/>Announce · Push a program · Push a workout; roster: owner Make coach / Remove coach,<br/>coaches Assign a program + 'Assigned: X' rows with Revoke<br/>B38 (TEAM-4), owner only: Remove from team on non-owner rows (confirmRemoveMember);<br/>Remove on any push; Hide from Team feed under each post → hidden post becomes a<br/>'Hidden from the Team feed' marker with Unhide; Delete team (confirmDeleteTeam →<br/>router.replace('/communities')). Everyone else's list leaves hidden posts out"]
   TeamScr -->|"B38 owner: Remove from team (Alert) → removeMember → page re-read;<br/>Hide / Unhide → hideTeamPost / unhideTeamPost → local hide set (no reload);<br/>Delete team (Alert) → deleteTeam → Communities;<br/>on load with the first feed page: teamFeedHides (fails → feed error)"| TeamsMod
@@ -143,7 +143,7 @@ flowchart TD
   ProfileView -->|"others' History row tap (B37): router.push('/session/[id]')"| SessionScr["Someone's workout (app/session/[id].tsx, B37, TEAM-5)<br/>read-only, online: title, details, notes, supersets, every set (formatDropSet), notes;<br/>unreadable custom → 'Custom exercise'; withheld → 'isn't available'; offline → Retry"]
   SessionScr -->|"loadWorkoutDetail(client, id)"| ProfileQ
   NewTeamScr --> TeamScr
-  Home -->|"Your teams chip (B36, SOC-10): router.push('/team/[id]');<br/>'N team invites' chip → Communities"| TeamScr
+  Home -->|"Your groups row, team chips (B36, SOC-10): router.push('/team/[id]');<br/>'N team invites' chip → Communities"| TeamScr
   ProfileView -->|"Teams section row (B36, YOU-6): router.push('/team/[id]')"| TeamScr
   TeamScr -->|"Invite lifters (owner): router.push('/team/[id]/invite')"| InviteScr["Invite lifters (app/team/[id]/invite.tsx, B36)<br/>owner only (else 'Only the team's owner…'); searchLifters (debounced);<br/>per row Invite / Invited (tap cancels) or 'Member'"]
   TeamScr -->|"Team feed: loadFeedPage(client, me, roster ids, 'latest', null, after)"| FeedQ
@@ -156,6 +156,19 @@ flowchart TD
   InviteScr --> TeamsMod
   Home -->|"on focus: loadTeamsOf(me) + myInvites(me)"| TeamsMod
   ProfileView -->|"on focus: loadTeamsOf(profileId)"| TeamsMod
+  Communities -->|"Find your gym (B50): router.push('/gyms')"| GymDirScr["Gym directory (app/gyms/index.tsx, B50, GYM-1 part)<br/>on open: expo-location foreground permission → coarse position (10 s cap);<br/>refused / failed → downtown Denver + one-line notice; position kept in screen memory only;<br/>rows nearest first: name · address · '2.3 mi' (formatDistance); offline → GYMS_OFFLINE + Retry"]
+  GymDirScr -->|"row tap: router.push('/gym/[id]')"| GymScr["Gym page (app/gym/[id]/index.tsx, B50, GYM-2, GYM-7)<br/>name · address · 'Your gym'; Join this gym · Switch to this gym (confirmSwitchGym Alert,<br/>names the gym you'd leave) · Leave gym; Members (newest first → profiles);<br/>Gym feed: loadFeedPage(member ids, 'latest'), 20 a page, pull to refresh;<br/>no settings / claim / manage control; missing → 'isn't available'; offline → Retry"]
+  Communities -->|"Your gym row: router.push('/gym/[id]')"| GymScr
+  Home -->|"Your groups row, first chip (B50, SOC-10): router.push('/gym/[id]')"| GymScr
+  ProfileView -->|"Gym section row (B50, YOU-6): router.push('/gym/[id]')"| GymScr
+  GymScr -->|"Gym feed posts"| FeedQ
+  GymScr -->|"card buttons"| PostActions
+  GymDirScr --> GymsMod
+  GymScr --> GymsMod
+  Communities -->|"on focus: gymOf(me)"| GymsMod
+  Home -->|"on focus: gymOf(me)"| GymsMod
+  ProfileView -->|"on focus: gymOf(profileId)"| GymsMod
+  GymsMod["social/gyms.ts (B50) — online only, never mirrored<br/>nearbyGyms (rpc gyms_near) · gymOf · loadGym · loadGymMembers ·<br/>joinGym (= switch: upsert user_id + gym_id, onConflict user_id) · leaveGym ·<br/>formatDistance; failures → GYM_FAILED / GYMS_OFFLINE"] -->|"rpc gyms_near(lat, lng) (PostGIS, nearest first; point never stored);<br/>select gyms, gym_members; upsert / delete own gym_members row (RLS + column grants decide;<br/>PK user_id = one gym; restamp trigger on switch); no write to gyms exists"| DB
   TeamsMod["social/teams.ts (B36) — online only, never mirrored<br/>createTeam · loadTeamsOf · loadTeam · loadTeamMembers · searchTeams ·<br/>joinTeam · leaveTeam · setJoinMode · myInvites · teamInvitees ·<br/>inviteToTeam · removeInvite · B38: removeMember · hideTeamPost · unhideTeamPost ·<br/>teamFeedHides · deleteTeam; 42501 / zero rows → calm sentence"] -->|"select / insert / update / delete teams, team_members, team_invites,<br/>team_feed_hides (RLS decides; removal trigger clears assignments / invite;<br/>team delete cascades everything team-scoped)"| DB
   Tabs --> Library["Library<br/>browse every launch exercise as a card"]
   Tabs -->|profile button| You["You (app/(tabs)/you.tsx, B25: YOU-1/2/3)<br/>ProfileView for me + gear button → Settings"]
@@ -789,8 +802,9 @@ flowchart TD
    **Decline**. Only the owner sees the switch and the server refuses anyone else. Members can
    **Leave**; the owner can't. The page lists the members and the **Team feed** — the members'
    posts as the usual cards, showing only what you could see anyway. An invite-only team you
-   aren't in shows just its name. Home shows a **Your teams** chip per team (→ its page), and
-   every profile has a **Teams** section of the lifter's teams you may see.
+   aren't in shows just its name. Home shows a **Your groups** row with a chip per team (→ its
+   page; since B50 the gym's chip comes first), and every profile has a **Teams** section of the
+   lifter's teams you may see.
 26. **Team coaching (B37, TEAM-3, TEAM-5) — needs a connection.** The owner taps **Make coach**
    on a member's row (and **Remove coach** to undo); the owner always counts as a coach. Coaches
    get **Announce**, **Push a program** and **Push a workout** in the team page's **Coach's
@@ -864,8 +878,21 @@ flowchart TD
    **Messages**; the push says "<name> sent you a message", never the words, and opens the
    thread. Messages are never stored on the phone; offline, both screens show the connection
    message with Retry.
-31. Everything else is a placeholder that renders its final layout with inert controls
-   (the Gyms half of Communities).
+31. **Gyms (B50, GYM-1 part, GYM-2, GYM-7; SOC-10 and YOU-6 Gym halves) — needs a connection.**
+   Communities → **Find your gym** opens the directory. It asks for the phone's location (only
+   now, foreground only); with it, gyms are listed nearest first from where the lifter stands,
+   each with its address and distance in miles; without it (or if the phone can't tell in 10 s)
+   the list is sorted from downtown Denver and a line says so. The location is never saved. The
+   list today is a **fictional six-gym fixture** ("Sample Gym · …") until B51 imports the real
+   Denver-area gyms. Tapping a gym opens its page: **Join this gym** (anyone, any gym, no proof);
+   a lifter belongs to one gym at a time, so on another gym's page the button is **Switch to this
+   gym** behind a confirm naming the gym being left; on your own gym, **Leave gym**. The page
+   lists the members (→ profiles) and the **Gym feed** — the members' posts as the usual cards,
+   only what you could see anyway, like a Team feed. Your gym shows on Communities (**Your
+   gym**), as the first chip of Home's **Your groups** row, and as a **Gym** section on your
+   profile — and anyone's profile shows theirs (memberships are public to signed-in lifters).
+   Nobody can create, claim, edit or manage a gym anywhere in the app or the API.
+32. Everything else is a placeholder that renders its final layout with inert controls.
 
 ## Data path today
 
@@ -1268,7 +1295,7 @@ flowchart TD
   change), Avatar (B25: the public-bucket photo, else LetterAvatar — the initial badge),
   and `usePostPhotoSource` (B25: the viewer-token photo fetch Home and profiles share).
 - `components/profile/ProfileView.tsx` (B25) is the whole profile body, used by the You tab and
-  `profile/[id]`; since B36 it shows the lifter's Teams section; since B46 your own profile adds
+  `profile/[id]`; since B36 it shows the lifter's Teams section (and since B50 a Gym section above it); since B46 your own profile adds
   the Trends tab: `TrendsSection` (what the tab shows), `useTrendData` (its state and numbered
   re-reads), `TrendChart` (the SVG drawing) and `chartLayout.ts` (the pure geometry), fed by
   `workout/trendSeries.ts` (device-only reads + the window cut).
@@ -1277,6 +1304,14 @@ flowchart TD
   team page all use it.
 - `components/teams/TeamListItem.tsx` (B36) is one team row (name, "Open" / "Invite only", an
   optional role, optional Join / Decline buttons) for Communities and the profile.
+- **Gyms** (B50): `social/gyms.ts` is the one home of gym reads and writes — online only; gyms
+  are never stored on the phone (no device table, outbox or sync change). The directory's sort is
+  the server's `gyms_near` (PostGIS); join and switch are one upsert on the lifter's single
+  membership row; there is no function that writes `gyms`. `components/gyms/GymListItem.tsx` is
+  one gym row (directory, Communities, profile); `components/gyms/confirmSwitchGym.ts` the switch
+  Alert. The Gym feed is `loadFeedPage` with the roster's ids, wired through `usePostListActions`.
+  `expo-location` (foreground, coarse) is used only by the directory screen; `app.json` carries
+  its permission sentence.
 - **Teams** (B36): `social/teams.ts` is the one home of team reads and writes — online only, like
   votes; teams are never stored on the phone, so no device table, outbox or sync change. Every
   rule (who may join, switch, invite, leave, see a roster) is the server's RLS; the module maps

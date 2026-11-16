@@ -1,7 +1,8 @@
 /**
  * Tests for Communities' Teams half (B36, TEAM-1): Your teams and Invites listed, Join / Decline
  * on an invite (joining uses the invite up), Create a team, Find teams with Join on open teams
- * only, and the offline state with Retry. The Supabase client is the in-memory fake social
+ * only, and the offline state with Retry. (B50) The Gyms half: Your gym opens its page, Find
+ * your gym opens the directory, and no gym → the explainer card. The Supabase client is the in-memory fake social
  * client (which imitates the join policy); the router is a stub.
  */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
@@ -119,10 +120,36 @@ describe('Communities — Teams', () => {
     warn.mockRestore();
   });
 
-  it('renders both the Teams and Gyms sections; Gyms is still its placeholder card', async () => {
+  it('renders both the Teams and Gyms sections; no gym yet → the explainer card and Find your gym', async () => {
     await renderSignedIn(<CommunitiesScreen />);
     expect(screen.getByText('Teams')).toBeTruthy();
     expect(screen.getByText('Gyms')).toBeTruthy();
-    expect(screen.getByText(/Join your gym/)).toBeTruthy();
+    expect(await screen.findByText(/Join your gym/)).toBeTruthy();
+    expect(screen.queryByText('Your gym')).toBeNull();
+    await fireEvent.press(screen.getByLabelText('Find your gym'));
+    expect(mockPush).toHaveBeenCalledWith('/gyms');
+  });
+});
+
+describe('Communities — Gyms (B50, GYM-2)', () => {
+  it('my gym is listed under Your gym and opens its page; no create or manage control exists (GYM-7)', async () => {
+    mockSocial.tables.gyms.push({ id: 'g1', name: 'Sample Gym · RiNo', address: 'River North, Denver, CO' });
+    mockSocial.tables.gym_members.push({ user_id: ME, gym_id: 'g1', joined_at: '2026-11-16T09:00:00.000Z' });
+    await renderSignedIn(<CommunitiesScreen />);
+    expect(await screen.findByText('Your gym')).toBeTruthy();
+    expect(screen.queryByText(/Join your gym/)).toBeNull();
+    await fireEvent.press(screen.getByLabelText('Open gym Sample Gym · RiNo'));
+    expect(mockPush).toHaveBeenCalledWith({ pathname: '/gym/[id]', params: { id: 'g1' } });
+    expect(screen.queryByText(/Create a gym|Claim|Manage/i)).toBeNull();
+  });
+
+  it('offline: never invites a lifter to join a gym (they may have one) — the Teams half shows the connection line', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    mockSocial.setOffline(true);
+    await renderSignedIn(<CommunitiesScreen />);
+    expect(await screen.findByText(TEAMS_OFFLINE)).toBeTruthy();
+    expect(screen.queryByText(/Join your gym/)).toBeNull();
+    expect(screen.getByLabelText('Find your gym')).toBeTruthy();
+    warn.mockRestore();
   });
 });

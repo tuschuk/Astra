@@ -885,3 +885,24 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     are built in three places with two joiners.
   - Diagrams: `mmdc` render not attempted by the builder (app-flow gained prose only, the ERD
     is unchanged), so that is left for Gate 2.
+- **B50 gyms-core (builder):**
+  - **Device walkthrough (Tristen, Built → Done):** Communities → Find your gym. Allow location
+    and check the order makes sense from where you stand; then deny it (or revoke it in Settings)
+    and check the "downtown Denver" line shows. Join a gym, then on another gym's page tap
+    Switch: the confirm should name the old gym, and afterwards Home's "Your groups" row, your
+    profile and Communities all show the new one. Open the gym page from Home's chip and check
+    the Gym feed shows the members' posts. Leave the gym.
+  - **Real gym data is B51** (Blocked on the data source). The six "Sample Gym · …" fixture rows
+    are fictional. Replacing them deletes their memberships (cascade), which is fine because only
+    test users join them.
+  - **Public membership** (anyone signed in can see which gym a lifter belongs to) is the plan's
+    recorded product call (Risk 1). If Tristen wants it visible to fellow members only, the select
+    policy gets one arm, and the profile's Gym section disappears for strangers.
+  - **Review judgement call left:** the gym page copies the team page's feed paging (generation
+    guard, loadMore, footer and empty states). Pull out a shared member-feed hook when a third
+    member-feed surface appears (e.g. B52 leaderboards).
+  - **Not built:** km display for kg users, gym search by name, a map view, Hot sort on the Gym
+    feed, and showing the lifter's own gym on directory rows (plan G12). Each waits for evidence
+    or a product call.
+  - **`mmdc` render** of both updated diagrams was declined by the permission layer, so it is
+    left for Gate 2.
