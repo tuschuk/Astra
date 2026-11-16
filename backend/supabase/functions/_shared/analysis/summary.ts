@@ -40,6 +40,21 @@ export interface AnalysisSet {
   reps: number | null;
   weight_kg: number | null;
   is_warmup: boolean;
+  /**
+   * The lifter's own effort rating for the set (1–10, LOG-10), or null when they didn't give
+   * one. Read only by the trend's intensity measure (`trend.ts`); the summary ignores it.
+   */
+  rpe: number | null;
+}
+
+/**
+ * One of the lifter's earlier finished workouts, as the trend (B42, `trend.ts`) reads it: when
+ * it started (to put sessions in order) and every set logged in it (through its slots).
+ */
+export interface TrendSessionInput {
+  id: string;
+  started_at: string;
+  sets: readonly AnalysisSet[];
 }
 
 /** One `personal_records` row (a record book's current best and the set that holds it). */
@@ -63,6 +78,13 @@ export interface AnalysisInput {
   records: readonly AnalysisRecord[];
   /** Exercise id → its name, for the exercises in the workout (missing = deleted exercise). */
   exerciseNames: Readonly<Record<string, string>>;
+  /**
+   * The lifter's earlier finished workouts the trend compares this one against (B42): up to
+   * `TREND_SCAN_LIMIT` of the newest that started no later than this one, in any order — the
+   * trend rules (`trend.ts`) do the final sorting, filtering and windowing themselves, so the
+   * two readers (server and phone) only have to fetch, never decide.
+   */
+  history: readonly TrendSessionInput[];
 }
 
 /**
@@ -139,7 +161,7 @@ function setsInWorkoutOrder(entries: readonly AnalysisEntry[], sets: readonly An
  * after finishing, those are exactly the PRs the session set — the same rows the saved workout's
  * PR badges read. Throws for an unfinished workout (it has no duration and is never analyzed).
  */
-export function buildSummary(input: AnalysisInput): AnalysisSummary {
+export function buildSummary(input: Omit<AnalysisInput, 'history'>): AnalysisSummary {
   const { workout, entries, records, exerciseNames } = input;
   if (workout.ended_at == null) throw new Error(`Workout ${workout.id} is not finished`);
 

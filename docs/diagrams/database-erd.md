@@ -48,6 +48,8 @@ tsvector, its GIN index and the published-browse partial index; see "Marketplace
 both applied live — `program_votes`, `program_comments`, `private.can_view_program`,
 `private.program_published`, the `program_scores` view, and the read policies matched to post
 votes; see "Program votes, comments and Featured"),
+`20261116023347_analysis_trend.sql` (B42, applied live — the six nullable trend columns on
+`workout_analyses` and their CHECKs; see "Workout analyses"),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -289,6 +291,12 @@ erDiagram
     timestamptz workout_updated_at "workout's updated_at it was computed from"
     timestamptz created_at
     timestamptz updated_at
+    integer trend_sessions "B42: earlier sessions averaged, 5 to 10; null below threshold"
+    numeric trend_volume_avg_kg "B42: their mean volume, 0 or more; null below threshold"
+    numeric trend_rpe_avg "B42: mean of their average RPEs, 1 to 10; null if under 3 have RPE"
+    numeric trend_load_per_rep_avg_kg "B42: mean load per rep, 0 or more; null if under 3 have load"
+    numeric session_rpe_avg "B42: this session's average RPE, 1 to 10, or null"
+    numeric session_load_per_rep_kg "B42: this session's volume per loaded rep, or null"
   }
 
   flairs {
@@ -1091,6 +1099,25 @@ is older than the workout's `updated_at`, the phone asks for the analysis again.
 `new_prs` a JSON array. The function reads as the caller and refuses (404) any workout the caller
 does not own, so another user's public workout can never be analysed over its owner's row.
 
+**The trend (B42, migration `20261116023347_analysis_trend.sql`, engine version 2).** Six
+nullable numbers compare the session with the lifter's own recent history, computed by
+`functions/_shared/analysis/trend.ts` on both the server and the phone. *History* = the owner's
+finished workouts that started strictly before this one (same instant → lower id first), the 40
+newest considered, empty finishes (no sets) dropped, then the 10 newest kept. With **fewer than 5**
+such sessions, `trend_sessions`, `trend_volume_avg_kg`, `trend_rpe_avg` and
+`trend_load_per_rep_avg_kg` are all **null** — the analysis screen shows no trend section. Above
+it: `trend_sessions` (5–10) is how many were averaged; `trend_volume_avg_kg` is their mean volume;
+`trend_rpe_avg` is the mean of their per-session average RPE (non-warm-up sets with an RPE of
+1–10) and is null unless at least 3 of them have one; `trend_load_per_rep_avg_kg` is the mean of
+their volume ÷ loaded reps, null unless at least 3 have load. `session_rpe_avg` and
+`session_load_per_rep_kg` are this session's own two measures, stored whenever computable,
+threshold or not. RPE values keep 2 decimals and kg values 3, so stored and recomputed numbers
+match. CHECKs: `trend_sessions` 5–10, both RPE columns 1–10, the kg columns ≥ 0. No policy change
+(owner select only; only the function writes). Rows made by engine version 1 have all six null;
+the phone treats an older `engine_version` like a stale row and asks the function again (10 per
+sync, newest first). History edits do not re-stamp later workouts' trend (it is recomputed only
+when that workout's own analysis is).
+
 ## Enums
 
 - `workout_visibility`: `public` (any signed-in user), `followers` (people who follow the owner),
@@ -1272,7 +1299,8 @@ synced both ways, downloaded table by table on their own bookmarks
 the analyses and before tombstones; version 13 (B35) added `program_runs` (same columns, no local
 foreign keys, downloaded on `pull_cursor:program_runs` after the four program tables) and the bare
 column `workouts.program_workout_id`; version 14 (B39) added `programs.visibility` (text, default
-`private`; `program_team_shares` is not mirrored). **Upload order since B35** (`SYNC_ORDER`): `exercises`,
+`private`; `program_team_shares` is not mirrored); version 15 (B42) added the six trend columns to
+`workout_analyses` (integer / real, null on existing rows). **Upload order since B35** (`SYNC_ORDER`): `exercises`,
 `programs`, `program_weeks`, `program_workouts`, `workouts`, `workout_exercises`, `sets`,
 `personal_records`, `program_exercises`, `program_runs` (then `workouts` once more) — programs go
 before workouts so a session started from a program never reaches the server ahead of the
@@ -1322,7 +1350,8 @@ and `sync_state`, the download bookmarks. What this means for the server:
   are never touched: `sets.weight_kg` and `personal_records.value_kg` stay kg whatever the unit.
 - **`workout_analyses` (B18) is never uploaded.** After each successful download the phone
   calls `POST /functions/v1/analyze-workout {workoutId}` (its login token attached) for up to 10
-  finished workouts with no analysis or a stale one and no unsent changes, and saves each reply.
+  finished workouts with no analysis, a stale one, or (B42) one made by an older
+  `engine_version`, and no unsent changes, and saves each reply.
   Other devices get the rows on their own bookmark (`pull_cursor:workout_analyses`), after
   personal records.
 - **`posts` (B21) are upload-only, one request each, after every other upload phase.** Upsert on

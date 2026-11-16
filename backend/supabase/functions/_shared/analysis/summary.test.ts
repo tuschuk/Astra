@@ -8,7 +8,7 @@ const E1 = 'b0000000-0000-4000-8000-000000000001';
 const E2 = 'b0000000-0000-4000-8000-000000000002';
 
 function set(id: string, entry: string, position: number, reps: number | null, weight: number | null, warm = false): AnalysisSet {
-  return { id, workout_exercise_id: entry, position, reps, weight_kg: weight, is_warmup: warm };
+  return { id, workout_exercise_id: entry, position, reps, weight_kg: weight, is_warmup: warm, rpe: null };
 }
 
 function input(overrides: Partial<AnalysisInput> = {}): AnalysisInput {
@@ -27,6 +27,7 @@ function input(overrides: Partial<AnalysisInput> = {}): AnalysisInput {
     sets: [],
     records: [],
     exerciseNames: { bench: 'Bench Press', squat: 'Squat' },
+    history: [],
     ...overrides,
   };
 }

@@ -385,8 +385,25 @@ const V14 = `
 alter table programs add column visibility text not null default 'private';
 `;
 
+/**
+ * Version 15 (B42): the analysis trend. Mirrors the server's `…_analysis_trend.sql` — six
+ * nullable number columns on `workout_analyses`: the trend's window size and averages (null
+ * below the threshold) and this session's own average RPE and load per rep. Existing rows (all
+ * made by engine version 1) get nulls; the analysis request pass re-requests them because their
+ * `engine_version` is older, and the screen shows the phone's own version-2 computation meanwhile.
+ * Still download-only — no outbox lines, ever.
+ */
+const V15 = `
+alter table workout_analyses add column trend_sessions integer;
+alter table workout_analyses add column trend_volume_avg_kg real;
+alter table workout_analyses add column trend_rpe_avg real;
+alter table workout_analyses add column trend_load_per_rep_avg_kg real;
+alter table workout_analyses add column session_rpe_avg real;
+alter table workout_analyses add column session_load_per_rep_kg real;
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14];
+export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

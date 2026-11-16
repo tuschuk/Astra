@@ -16,6 +16,8 @@
  *   - the settings row (B15) can only be updated by the phone, never created;
  *   - analyses (B18) are made only by `requestAnalysis` — which runs the real server
  *     function's handler — one per workout, only for its owner, and deleted with their workout;
+ *     its history read (B42) mirrors the real one: own finished workouts starting no later, newest
+ *     first, capped at `TREND_SCAN_LIMIT`;
  *   - flairs (B21) are the four rows the real migration seeds; posts (B21) are one per workout,
  *     only about the poster's own workout already on the server, and deleted with it;
  *   - photo posts (B22) name a photo in their author's folder and no workout, progress pics are
@@ -32,6 +34,7 @@
  *   - `loseNextResponse()` — the next upload is SAVED but the reply is lost,
  *     so the phone thinks it failed and will retry (the classic duplicate trap).
  */
+import { timestampMs, TREND_SCAN_LIMIT } from '@analysis';
 import type { WeightUnit } from '@training-math';
 
 // The real server function's request logic, so app tests run it end to end.
@@ -395,6 +398,19 @@ export class FakeServer implements SyncTransport {
       readRecords: async (ids) => [...t.personal_records.values()].filter((r) => ids.includes(r.source_set_id)),
       readExerciseNames: async (ids) =>
         Object.fromEntries(ids.flatMap((id) => (t.exercises.has(id) ? [[id, t.exercises.get(id)!.name]] : []))),
+      // Like the real read (B42): the owner's other finished workouts starting no later than
+      // this one, newest first (by instant, then id), capped, each with all its sets.
+      readHistory: async (w) => {
+        const at = timestampMs(w.started_at);
+        return [...t.workouts.values()]
+          .filter((c) => c.user_id === w.user_id && c.ended_at != null && c.id !== w.id && timestampMs(c.started_at) <= at)
+          .sort((a, b) => timestampMs(b.started_at) - timestampMs(a.started_at) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0))
+          .slice(0, TREND_SCAN_LIMIT)
+          .map((c) => {
+            const slots = new Set([...t.workout_exercises.values()].filter((e) => e.workout_id === c.id).map((e) => e.id));
+            return { id: c.id, started_at: c.started_at, sets: [...t.sets.values()].filter((s) => slots.has(s.workout_exercise_id)) };
+          });
+      },
       saveAnalysis: async (analysis) => {
         const now = this.now();
         const created = this.analyses.get(analysis.id)?.created_at ?? now;

@@ -21,7 +21,14 @@
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
 
 import { handleAnalyzeRequest, type AnalyzeDeps, type StoredAnalysisRow } from './handler.ts';
-import type { AnalysisEntry, AnalysisRecord, AnalysisSet, AnalysisWorkout } from '../_shared/analysis/index.ts';
+import {
+  TREND_SCAN_LIMIT,
+  type AnalysisEntry,
+  type AnalysisRecord,
+  type AnalysisSet,
+  type AnalysisWorkout,
+  type TrendSessionInput,
+} from '../_shared/analysis/index.ts';
 
 /** Most ids in one `in (…)` filter, so a request URL never grows too long. */
 const ID_CHUNK = 100;
@@ -31,7 +38,24 @@ const PAGE_ROWS = 500;
 /** The columns of `workout_analyses` returned after a save, in table order. */
 const ANALYSIS_COLUMNS =
   'id,user_id,engine_version,total_volume_kg,total_sets,working_sets,duration_seconds,new_prs,' +
-  'headline,message,workout_updated_at,created_at,updated_at';
+  'headline,message,workout_updated_at,created_at,updated_at,' +
+  'trend_sessions,trend_volume_avg_kg,trend_rpe_avg,trend_load_per_rep_avg_kg,session_rpe_avg,session_load_per_rep_kg';
+
+/** The `sets` columns the analysis reads (B42 adds `rpe`, for the trend's intensity). */
+const SET_COLUMNS = 'id,workout_exercise_id,position,reps,weight_kg,is_warmup,rpe';
+
+/**
+ * Makes sure a set's numeric columns arrive as numbers (the API sends Postgres `numeric` as a
+ * JSON number, but this keeps the trend from silently skipping an RPE that ever came as text —
+ * the phone always has numbers, and both sides must compute the same).
+ */
+function asAnalysisSet(raw: AnalysisSet): AnalysisSet {
+  return {
+    ...raw,
+    weight_kg: raw.weight_kg == null ? null : Number(raw.weight_kg),
+    rpe: raw.rpe == null ? null : Number(raw.rpe),
+  };
+}
 
 /** A JSON response with the given status. */
 function json(status: number, body: unknown): Response {
@@ -93,14 +117,40 @@ function supabaseDeps(asCaller: SupabaseClient, asServer: SupabaseClient): Analy
     },
     readEntries: (workoutId) =>
       selectIn<AnalysisEntry>(asCaller, 'workout_exercises', 'id,exercise_id,position', 'workout_id', [workoutId]),
-    readSets: (entryIds) =>
-      selectIn<AnalysisSet>(
+    readSets: async (entryIds) =>
+      (await selectIn<AnalysisSet>(asCaller, 'sets', SET_COLUMNS, 'workout_exercise_id', entryIds)).map(asAnalysisSet),
+    async readHistory(workout) {
+      // The caller's other finished workouts that started no later than this one, newest first,
+      // capped. "No later" (not "strictly before") plus "not this one" over-fetches same-instant
+      // ties on purpose — the shared trend rules apply the exact id tie-break, on both runtimes.
+      const { data, error } = await asCaller
+        .from('workouts')
+        .select('id,started_at')
+        .eq('user_id', workout.user_id)
+        .not('ended_at', 'is', null)
+        .neq('id', workout.id)
+        .lte('started_at', workout.started_at)
+        .order('started_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(TREND_SCAN_LIMIT);
+      check(error, 'Reading the workout history failed');
+      const workouts = (data ?? []) as { id: string; started_at: string }[];
+      if (workouts.length === 0) return [];
+      const entries = await selectIn<{ id: string; workout_id: string }>(
         asCaller,
-        'sets',
-        'id,workout_exercise_id,position,reps,weight_kg,is_warmup',
-        'workout_exercise_id',
-        entryIds,
-      ),
+        'workout_exercises',
+        'id,workout_id',
+        'workout_id',
+        workouts.map((w) => w.id),
+      );
+      const sets = (
+        await selectIn<AnalysisSet>(asCaller, 'sets', SET_COLUMNS, 'workout_exercise_id', entries.map((e) => e.id))
+      ).map(asAnalysisSet);
+      const workoutOfEntry = new Map(entries.map((e) => [e.id, e.workout_id]));
+      const setsOf = new Map<string, AnalysisSet[]>(workouts.map((w) => [w.id, []]));
+      for (const s of sets) setsOf.get(workoutOfEntry.get(s.workout_exercise_id) ?? '')?.push(s);
+      return workouts.map((w): TrendSessionInput => ({ id: w.id, started_at: w.started_at, sets: setsOf.get(w.id) ?? [] }));
+    },
     readRecords: (setIds) =>
       selectIn<AnalysisRecord>(
         asCaller,

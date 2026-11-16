@@ -200,6 +200,58 @@ describe('Analysis screen', () => {
     });
   });
 
+  describe('against your trend (B42, ANA-5 / LOG-10)', () => {
+    /** Finishes a squat session on day `n` of November with [reps, kg, rpe?] sets. */
+    async function finishDay(n: number, sets: [number, number, number?][]): Promise<string> {
+      const store = await startActiveWorkout(db, SIGNED_IN_USER_ID, steadyOptions(`2026-11-${String(n).padStart(2, '0')}T09:00:00.000Z`));
+      const squat = await store.addExercise(libraryExerciseId('squat'));
+      for (const [reps, kg, rpe] of sets) await store.logSet(squat.id, { reps, weight: { value: kg, unit: 'kg' }, rpe });
+      return (await store.finish()).id;
+    }
+
+    /**
+     * Five earlier sessions — volumes 500, 600, 700, 800, 900 (average 700), RPE 7 on each
+     * (average 7), 100 kg per rep (average 100) — then today: 8×100 @8 → 800 kg, RPE 8, 100 kg/rep.
+     */
+    async function seedTrend(withRpe: boolean): Promise<string> {
+      for (const [i, reps] of [5, 6, 7, 8, 9].entries()) await finishDay(i + 1, [[reps, 100, withRpe ? 7 : undefined]]);
+      return finishDay(10, [[8, 100, withRpe ? 8 : undefined]]);
+    }
+
+    it('above the threshold: the basis, volume against the average, and the RPE line', async () => {
+      await unitStore.setUnit(db, SIGNED_IN_USER_ID, 'kg');
+      mockParams = { id: await seedTrend(true) };
+      await renderSignedIn(<AnalysisScreen />);
+      expect(await screen.findByText('Against your trend')).toBeTruthy();
+      expect(screen.getByText('Compared with your last 5 sessions')).toBeTruthy();
+      expect(screen.getByText(`${formatWeight(800, 'kg')} vs ${formatWeight(700, 'kg')}`)).toBeTruthy();
+      expect(screen.getByText('About 14% more than your recent average')).toBeTruthy(); // 100 / 700
+      expect(screen.getByText('Average RPE')).toBeTruthy();
+      expect(screen.getByText('8.0 vs 7.0')).toBeTruthy();
+      expect(screen.getByText('About 1.0 above your recent sessions')).toBeTruthy();
+      expect(screen.queryByText('Load per rep')).toBeNull();
+    });
+
+    it('without RPE the intensity line falls back to load per rep, in the lifter’s unit', async () => {
+      mockParams = { id: await seedTrend(false) };
+      await renderSignedIn(<AnalysisScreen />);
+      expect(await screen.findByText('Against your trend')).toBeTruthy();
+      expect(screen.queryByText('Average RPE')).toBeNull();
+      expect(screen.getByText('Load per rep')).toBeTruthy();
+      expect(screen.getByText(`${formatWeight(100, 'lb')} vs ${formatWeight(100, 'lb')}`)).toBeTruthy();
+      expect(screen.getByText('Right around your recent average')).toBeTruthy();
+    });
+
+    it('below the threshold (4 earlier sessions) the section is absent, the rest of the analysis intact', async () => {
+      for (const [i, reps] of [5, 6, 7, 8].entries()) await finishDay(i + 1, [[reps, 100, 7]]);
+      mockParams = { id: await finishDay(10, [[8, 100, 8]]) };
+      await renderSignedIn(<AnalysisScreen />);
+      expect(await screen.findByText('Muscles trained')).toBeTruthy();
+      expect(screen.queryByText('Against your trend')).toBeNull();
+      expect(screen.queryByText(/Compared with your last/)).toBeNull();
+    });
+  });
+
   it('the saved workout opens its analysis (ANA-1: from any past workout)', async () => {
     const id = await seedWorkout();
     mockParams = { id };

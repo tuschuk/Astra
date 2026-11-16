@@ -274,11 +274,43 @@ describe('migrate', () => {
 
     await migrate(db);
 
-    expect(SCHEMA_VERSION).toBe(14);
-    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 14 });
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: SCHEMA_VERSION });
     expect(await db.getFirstAsync('select id, name, visibility from programs')).toEqual({ id: 'p', name: 'Block', visibility: 'private' });
     const columns = await db.getAllAsync<{ name: string }>('pragma table_info(programs)');
     expect(columns.map((c) => c.name).sort()).toEqual([...TABLE_COLUMNS.programs].sort());
+  });
+
+  it('B42: upgrades a version-14 phone to version 15 — existing analyses stay readable with null trend columns', async () => {
+    const db = createNodeSqliteDriver();
+    for (const migration of MIGRATIONS.slice(0, 14)) await db.execAsync(migration);
+    await db.execAsync('pragma user_version = 14');
+    await db.runAsync(
+      `insert into workout_analyses (id, user_id, engine_version, total_volume_kg, total_sets, working_sets,
+         duration_seconds, new_prs, headline, message, workout_updated_at, created_at, updated_at)
+       values ('w', 'u', 1, 500, 3, 3, 600, '[]', 'Solid session', 'm', 't', 't', 't')`,
+    );
+
+    await migrate(db);
+
+    expect(SCHEMA_VERSION).toBe(15);
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 15 });
+    expect(
+      await db.getFirstAsync(
+        `select engine_version, total_volume_kg, trend_sessions, trend_volume_avg_kg, trend_rpe_avg,
+           trend_load_per_rep_avg_kg, session_rpe_avg, session_load_per_rep_kg from workout_analyses`,
+      ),
+    ).toEqual({
+      engine_version: 1,
+      total_volume_kg: 500,
+      trend_sessions: null,
+      trend_volume_avg_kg: null,
+      trend_rpe_avg: null,
+      trend_load_per_rep_avg_kg: null,
+      session_rpe_avg: null,
+      session_load_per_rep_kg: null,
+    });
+    const columns = await db.getAllAsync<{ name: string }>('pragma table_info(workout_analyses)');
+    expect(columns.map((c) => c.name).sort()).toEqual([...TABLE_COLUMNS.workout_analyses].sort());
   });
 
   it('upgrades a version-1 phone through every later version (sets.score), keeping the sets already there', async () => {

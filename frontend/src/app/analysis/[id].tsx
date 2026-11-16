@@ -11,6 +11,13 @@
  * server's copy after a sync without looking any different (see `analysisForScreen`). It re-reads
  * every time it comes into view.
  *
+ * Right under the numbers, **Against your trend** (B42, ANA-5 / LOG-10): once the lifter has at
+ * least 5 earlier sessions, this session's volume beside their recent average ("Compared with
+ * your last 10 sessions" · "4,850 kg vs 4,320 kg" · "About 12% more than your recent average"),
+ * and one intensity line — average RPE when this session and the history both carry RPE, else
+ * load per rep. The words come from the shared `trendCopy`; the card is absent below the
+ * threshold (the analysis holds no trend) or when no line can be computed.
+ *
  * Between the numbers and the PRs sits the **muscle map** (ANA-3): front and back body figures
  * with the muscles this session trained filled in red (stronger for main movers), and a line
  * naming them. It is read from the phone's own sets and the bundled exercise library, so it is
@@ -29,7 +36,8 @@
 import React, { useCallback, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { NOT_MEDICAL_ADVICE } from '@analysis';
+import { NOT_MEDICAL_ADVICE, trendCopy, type TrendLine } from '@analysis';
+import type { WeightUnit } from '@training-math';
 
 import { analysisForScreen, type ScreenAnalysis } from '@/analysis/analysis';
 import { sessionMuscleLoads, type SessionMuscleLoads } from '@/analysis/muscles';
@@ -125,6 +133,7 @@ export default function AnalysisScreen() {
   const { analysis, workout } = state.view;
   const muscleList = trainedMuscleNames(state.muscles);
   const setsText = setsSummaryLabel(analysis.total_sets, analysis.working_sets);
+  const trend = trendCopy(analysis);
 
   return (
     <Screen>
@@ -140,6 +149,25 @@ export default function AnalysisScreen() {
         <Stat label="Sets" value={setsText} />
         <Stat label="Duration" value={formatDuration(analysis.duration_seconds)} />
       </Card>
+
+      {trend ? (
+        <Card style={styles.card}>
+          <SectionLabel size="small" style={styles.sectionLabel}>
+            Against your trend
+          </SectionLabel>
+          <Body variant="small" style={styles.trendBasis}>
+            {trend.basis}
+          </Body>
+          {trend.lines.map((line) => (
+            <View key={line.measure} style={styles.trendLine}>
+              <Stat label={line.label} value={trendPair(line, unit)} />
+              <Body variant="small" style={styles.trendSentence}>
+                {line.sentence}
+              </Body>
+            </View>
+          ))}
+        </Card>
+      ) : null}
 
       {muscleList !== '' ? (
         <Card style={styles.card}>
@@ -186,6 +214,16 @@ export default function AnalysisScreen() {
       {disclaimer}
     </Screen>
   );
+}
+
+/**
+ * The "this session vs your average" pair for one trend line, e.g. "4,850 kg vs 4,320 kg" or
+ * "7.5 vs 7.0". Weights go through `formatWeight` in the lifter's unit; an RPE is unitless and
+ * already rounded by `trendCopy` to the one decimal its sentence was worked out from.
+ */
+function trendPair(line: TrendLine, unit: WeightUnit): string {
+  if (line.measure === 'rpe') return `${line.value.toFixed(1)} vs ${line.average.toFixed(1)}`;
+  return `${formatWeight(line.value, unit)} vs ${formatWeight(line.average, unit)}`;
 }
 
 /** One number of the summary: a small label and its value, side by side. */
@@ -235,6 +273,15 @@ const styles = StyleSheet.create({
   legend: {
     color: colors.muted,
     textAlign: 'center',
+  },
+  trendBasis: {
+    color: colors.muted,
+  },
+  trendLine: {
+    gap: spacing.xs,
+  },
+  trendSentence: {
+    color: colors.muted,
   },
   view: {
     marginTop: spacing.md,
