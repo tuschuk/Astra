@@ -148,10 +148,13 @@ export function VoteControl({
   return (
     <View style={styles.control}>
       <VoteArrows state={state} showDownvote={showDownvote} enabled={onVote != null} scoreTestID={scoreTestID} />
+      {/* A refused vote's message is announced as it appears (the score snapped back silently otherwise). */}
       {state.message ? (
-        <Body variant="small" style={styles.message}>
-          {state.message}
-        </Body>
+        <View accessible accessibilityRole="alert" accessibilityLiveRegion="polite">
+          <Body variant="small" style={styles.message}>
+            {state.message}
+          </Body>
+        </View>
       ) : null}
     </View>
   );

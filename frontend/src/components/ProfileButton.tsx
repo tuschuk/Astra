@@ -18,7 +18,11 @@ import { colors, glows, layout, radii } from '@/theme';
 
 import { YOU_TAB } from './AstraTabBar';
 
-const BUTTON_SIZE = 44;
+/**
+ * The circle's size: the platform's minimum touch target (44pt iOS, 48dp Android). It floats
+ * outside the screen's reading order, so its spoken name ("Your profile") stands on its own.
+ */
+const BUTTON_SIZE = layout.minTouchTarget;
 
 function ProfileCircle({ isFocused = false, ref, ...pressableProps }: TabTriggerSlotProps) {
   return (

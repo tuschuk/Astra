@@ -43,7 +43,7 @@ import {
   type TimerSnapshot,
 } from '@/toolkit/timer';
 import { timerStore, type TimerStoreState } from '@/toolkit/timerStore';
-import { colors, spacing, type } from '@/theme';
+import { colors, fontScaleCaps, spacing, type } from '@/theme';
 
 import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
 import { NumberField } from './WeightField';
@@ -109,7 +109,12 @@ export function TimerScreen() {
       <Card accent style={styles.clockCard}>
         <View accessible accessibilityLabel={clockLabel(frame)} style={styles.clock}>
           <SectionLabel>{caption(frame)}</SectionLabel>
-          <Text style={styles.digits} numberOfLines={1} adjustsFontSizeToFit>
+          <Text
+            style={styles.digits}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            maxFontSizeMultiplier={fontScaleCaps.timer}
+          >
             {frame.display}
           </Text>
           {mode === 'amrap' && frame.remainingMs !== null ? (

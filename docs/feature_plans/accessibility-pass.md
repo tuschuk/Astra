@@ -300,3 +300,84 @@ decisions); every checkable claim verified in the repo before writing.
   primitives — is argued in Scope reading 1 and is the single-home rule applied to UI. The one
   deliberate narrowing — non-core flows untouched beyond primitives — matches the step text
   ("across the core flows") and NFR-10's own DoD ("core flows pass").
+
+## Audit findings and deviations (builder, B49)
+
+### What the audit found and fixed
+
+**Contrast** (`theme/contrast.ts` + `contrast.test.ts`, 35 assertions, all green):
+- [x] Measured ratios (composited over `bg`): `muted` 10.1:1, `mutedDecor` 5.3:1, `accent`
+  #cc0404 3.3:1 on `bg` / 3.6:1 on `navBg` (fails small text, passes non-text), white on `accent`
+  5.9:1, white on `accentBright` 5.0:1, `error` 7.0, `warn` 6.2, `info` 12.7, `gold` 13.9,
+  `green` 7.8; category colors on their dim fills 6.0–8.5.
+- [x] New token `accentText` #ff4d4d (5.9:1 on `bg`, ≥ 4.5 on card surfaces and `navBg`). Moved
+  onto it: EntryCard History link + Superset badge, analysis section labels, saved workout's PR
+  badge + Superset label, session view's Superset label, post-workout Flair label, tab bar focused
+  label. The library FilterChip's active label was already white (its accent is the border —
+  non-text, passes), so the baseline's listing of it was a false positive.
+- [x] `docs/styling_guide.md` notes the split (it still described small accent-red text).
+
+**Dynamic type:**
+- [x] `fontScaleCaps` in `tokens.ts` (display/title 1.4, sectionTitle 1.6, timer 1.2,
+  statValue 1.6, label/labelSmall/button 2); body, bodyMuted, bodySmall, input, cardTitle
+  uncapped and pinned uncapped by `tokens.test.ts`.
+- [x] `Heading`, `SectionLabel`, `Button` pass their caps; `Body` takes `scaleAs` for the one
+  call site that restyles it as a stat value (profile count tiles). Raw `<Text>` sites: timer
+  digits (timer cap), ResultCard value (display cap), tab labels (labelSmall cap).
+- [x] Fixed-size text containers → floors: EntryCard W/link badge (26×26 → min 26 + padding);
+  "Set n" column `width: 48` → `minWidth: 48` in the logger, saved workout, session view and
+  exercise history; analysis stat labels `width: 80` → `minWidth: 80` with a wrapping row.
+- [x] Checked, no change needed: Home header actions already wrap; PostCard photo frame is a
+  picture (fixed height is fine); 8px dots and the 56px tab circle hold no text.
+
+**Labels, roles, state, grouping:**
+- [x] Section headings now announced as headers: Home "Your feed" / "Your teams", Workout tab
+  "Tool Kit" / "Past workouts", Library "Your exercises", profile "Teams", analysis "Against your
+  trend" / "Muscles trained" / "New PRs", post-workout "Flair", exercise detail "Muscles worked" /
+  "How to do it" / "Tips" / "Your history", history "Current PRs"; exercise names in the logger,
+  saved workout and session view and each history session title are headers.
+- [x] Set rows read as one sentence via the new `spokenSetLabel` / `spokenSetText` in
+  `workout/format.ts` ("Set 2: Warm-up, 8 × 225 lb, then 8 × 185 lb"); the logger's grouping
+  wraps only the label + text, so its note / W / remove controls stay separate stops (G5); drop
+  rows speak "Drop n: …". Analysis stats speak "Volume: 4,850 kg".
+- [x] PostCard author button speaks the handle and age ("Open Wendy's profile, @wod_queen, 2h
+  ago" — they were swallowed by the button); the flair View is now `accessible` (its label was
+  unreachable on iOS); comment rows read as one sentence; exercise tips read without "bullet".
+- [x] VoteControl's refusal message is an `alert` live region (it was silent).
+- [x] Already sound, no change: every icon-only pressable in the four flows had a label; chips
+  and toggles carry selected/checked/disabled; PostCard photos are labeled "Post photo".
+
+**Focus order and modals:**
+- [x] ExercisePicker and ToolKitSheet: title first, Cancel/Close second, `onRequestClose` wired.
+  Active-workout Tool Kit button ("Open Tool Kit") and ProfileButton ("Your profile") float
+  out of tree order with labels that stand alone. No change needed beyond the touch-target note
+  below.
+
+### Deviations from the plan
+
+1. **`borderStrong` and `accentBorder` are exempted from the 3:1 non-text check** (the plan
+   asked for "borders of interactive controls" at 3:1). They measure 1.7:1 and 1.4:1. WCAG
+   1.4.11 needs a 3:1 boundary only where the boundary is what identifies the control, and every
+   Astra input, ghost button and chip is identified by its own text or field label (chip
+   selection is also spoken). Raising them to 3:1 would restyle every control in the app — a
+   brand call, so per the plan's own rule ("leaves the token change to Tristen") the exemption is
+   written into `contrast.test.ts` and listed here for Tristen to decide.
+2. **`accentText` also applied outside the four flows** at `new-post.tsx` (composer label) and
+   `marketplace-program/[id].tsx` (author name): the same failing pair, fixed by the same token.
+   Not a screen audit, just a one-line token swap.
+3. **Touch targets** (not one of the five named concerns): ProfileButton now sizes to
+   `layout.minTouchTarget` (it was a hardcoded 44, under Android's 48dp), and the ⋯ report
+   buttons on PostCard and CommentsPane got a min-touch-target box (an 18–20px icon plus hitSlop
+   was ~36px).
+4. **Tab labels shrink to fit** (`numberOfLines={1}` + `adjustsFontSizeToFit`) on top of the 2×
+   cap, so "LIBRARY" at large sizes shrinks within its fifth of the bar instead of wrapping into
+   the icon. The tab's spoken name is unaffected.
+5. **TextField.test.tsx not extended**: TextField has no new code — its label is a
+   `SectionLabel` (cap pinned in `Text.test.tsx`) and its input is deliberately uncapped.
+6. **Review (code-review skill) fixes:** the spoken set label was deduplicated into
+   `spokenSetLabel`; a round-trip test now pins `spokenSetText` against `formatDropSet`'s real
+   output (so a separator change can't silently garble speech); `Text.tsx` rest props renamed
+   (`textProps`, `styleName`); VoteControl, CommentsPane and exercise-detail tests now pin the
+   alert, the grouped comment row, the section headers and the tips. Left as-is (judgement
+   calls): the two identical min-touch-target styles in PostCard / CommentsPane (two lines each,
+   different components) and the separate author-line builders.

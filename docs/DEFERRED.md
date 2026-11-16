@@ -861,3 +861,27 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     `UNIQUE_VIOLATION` / `RLS_REFUSED` are redeclared beside `teams.ts`'s; the settings row's
     non-switch columns are spelled in several places (a `SETTABLE_FIELDS` list would gather them).
   - `mmdc` render of both updated diagrams was declined by the permission layer — Gate 2.
+- **B49 accessibility-pass (builder):**
+  - **Device walkthrough (Tristen, Built → Done):** run the plan's walkthrough script with
+    VoiceOver, then TalkBack, then once more with the OS text size at its maximum: log a
+    two-exercise workout (warm-up toggle, a set note, the Tool Kit, finish to analysis), swipe the
+    Home feed (workout post, photo post, vote, comments, author profile), You (tabs, stats,
+    trends), Library (chips, search, an exercise detail, "Your history"). Watch for: the
+    `fontScaleCaps` values (judgement, not measurement — tune in `tokens.ts`); the tab labels'
+    shrink-to-fit; whether `accentText` #ff4d4d reads right as the brand red in small text.
+  - **Control outlines below 3:1** (`borderStrong` 1.7:1, `accentBorder` 1.4:1) are exempted
+    in `contrast.test.ts`, because each control is identified by its text label. Raising them
+    restyles every input, ghost button and chip, so that is a brand call for Tristen (plan
+    Deviation 1).
+  - **Non-core flows not audited** (teams, marketplace, messages, programs, settings, auth). They
+    inherit only the primitive fixes (caps, header roles on `Heading`). A dedicated pass waits
+    for the device check to show the need.
+  - **A11y lint** (`eslint-plugin-react-native-a11y`) is not adopted (plan G6). Adopt it if a
+    later step ships an unlabeled control the role queries miss.
+  - **Chart interactivity** (tap a point) stays out of scope. One spoken sentence per chart is
+    the bar (closes the B46 note above).
+  - Review smells left as judgement calls: PostCard and CommentsPane each carry an identical
+    min-touch-target style for their ⋯ button; post and comment author lines ("@handle · age")
+    are built in three places with two joiners.
+  - Diagrams: `mmdc` render not attempted by the builder (app-flow gained prose only, the ERD
+    is unchanged), so that is left for Gate 2.

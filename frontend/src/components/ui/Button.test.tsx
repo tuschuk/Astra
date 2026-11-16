@@ -6,6 +6,8 @@ import { describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
 import { fireEvent, render } from '@testing-library/react-native';
 
+import { fontScaleCaps } from '@/theme';
+
 import { Button } from './Button';
 
 describe('Button', () => {
@@ -24,6 +26,15 @@ describe('Button', () => {
     const screen = await render(<Button label="Save changes" onPress={onPress} />);
     await fireEvent.press(screen.getByRole('button'));
     expect(onPress).toHaveBeenCalledTimes(1);
+  });
+
+  it('(B49) is announced by role and label, says when it is disabled, and caps its label size', async () => {
+    const screen = await render(
+      <Button label="Remove" accessibilityLabel="Remove Week 2" onPress={() => {}} disabled />,
+    );
+    const button = screen.getByRole('button', { name: 'Remove Week 2' });
+    expect(button).toBeDisabled();
+    expect(screen.getByText('Remove').props.maxFontSizeMultiplier).toBe(fontScaleCaps.button);
   });
 
   it('does not call onPress when disabled', async () => {

@@ -29,7 +29,7 @@ import { Body, Heading, SectionLabel } from '@/components/ui/Text';
 import type { PersonalRecordRow } from '@/db/dao';
 import { useAppDatabase } from '@/db/useAppDatabase';
 import { useDisplayUnit } from '@/settings/displayUnit';
-import { formatDropSet, formatPrLine, groupDropSets, workoutDateLabel } from '@/workout/format';
+import { formatDropSet, formatPrLine, groupDropSets, spokenSetLabel, workoutDateLabel } from '@/workout/format';
 import {
   EXERCISE_SESSION_LIMIT,
   exerciseInfo,
@@ -143,7 +143,9 @@ export function ExerciseHistorySection({
       {showName ? <Heading>{name ?? 'Exercise'}</Heading> : null}
 
       <Card style={styles.card}>
-        <SectionLabel size="small">Current PRs</SectionLabel>
+        <SectionLabel size="small" accessibilityRole="header">
+          Current PRs
+        </SectionLabel>
         <Body>{prLine !== '' ? prLine : 'No PRs yet'}</Body>
       </Card>
 
@@ -152,14 +154,22 @@ export function ExerciseHistorySection({
       ) : (
         sessions.map((s) => (
           <Card key={s.workoutId} style={styles.card}>
-            <Body style={styles.sessionTitle}>{s.title ?? workoutDateLabel(s.startedAt)}</Body>
+            <Body accessibilityRole="header" style={styles.sessionTitle}>
+              {s.title ?? workoutDateLabel(s.startedAt)}
+            </Body>
             {s.title ? (
               <Body variant="small" style={styles.muted}>
                 {workoutDateLabel(s.startedAt)}
               </Body>
             ) : null}
             {groupDropSets(s.sets).map((segments, index) => (
-              <View key={segments[0].id} style={styles.setRow}>
+              /* One utterance per set for screen readers; a drop set's arrows are spoken as "then". */
+              <View
+                key={segments[0].id}
+                style={styles.setRow}
+                accessible
+                accessibilityLabel={spokenSetLabel(index + 1, segments, unit)}
+              >
                 <SectionLabel size="small" style={styles.setNumber}>
                   Set {index + 1}
                 </SectionLabel>
@@ -199,7 +209,8 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   setNumber: {
-    width: 48,
+    // minWidth: at large text sizes "SET 10" grows instead of clipping.
+    minWidth: 48,
   },
   setText: {
     flex: 1,

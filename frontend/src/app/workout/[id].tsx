@@ -44,6 +44,7 @@ import {
   formatDropSet,
   formatPrBadge,
   groupDropSets,
+  spokenSetLabel,
   supersetRuns,
   totalSets,
   workoutDateLabel,
@@ -227,7 +228,9 @@ function SavedExercise({
 }) {
   return (
     <View style={styles.exercise}>
-      <Body style={styles.name}>{entry.exerciseName ?? 'Deleted exercise'}</Body>
+      <Body accessibilityRole="header" style={styles.name}>
+        {entry.exerciseName ?? 'Deleted exercise'}
+      </Body>
       {entry.notes ? (
         <Body variant="small" style={styles.note}>
           {entry.notes}
@@ -238,7 +241,12 @@ function SavedExercise({
       ) : (
         groupDropSets(entry.sets).map((segments, index) => (
           <View key={segments[0].id}>
-            <View style={styles.setRow}>
+            {/* One utterance per set for screen readers; a drop set's arrows are spoken as "then". */}
+            <View
+              style={styles.setRow}
+              accessible
+              accessibilityLabel={spokenSetLabel(index + 1, segments, unit)}
+            >
               <SectionLabel size="small" style={styles.setNumber}>
                 Set {index + 1}
               </SectionLabel>
@@ -285,7 +293,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   prBadge: {
-    color: colors.accent,
+    color: colors.accentText,
   },
   back: {
     alignSelf: 'flex-start',
@@ -306,7 +314,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   supersetLabel: {
-    color: colors.accent,
+    color: colors.accentText,
   },
   setRow: {
     flexDirection: 'row',
@@ -317,7 +325,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   setNumber: {
-    width: 48,
+    // minWidth: at large text sizes "SET 10" grows instead of clipping.
+    minWidth: 48,
   },
   workoutNotes: {
     marginTop: -spacing.md,

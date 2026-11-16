@@ -285,7 +285,7 @@ export default function HomeScreen() {
     <View style={styles.header}>
       <Heading size="display">Astra</Heading>
       <View style={styles.headerRow}>
-        <SectionLabel>Your feed</SectionLabel>
+        <SectionLabel accessibilityRole="header">Your feed</SectionLabel>
         <View style={styles.headerActions}>
           <Button label="Share a photo" variant="ghost" onPress={() => router.push('/new-post')} />
           <Button label="Find lifters" variant="ghost" onPress={() => router.push('/find-lifters')} />
@@ -315,7 +315,9 @@ export default function HomeScreen() {
       {/* B36: one chip per team → its page (and the Team feed); an invite chip → Communities. */}
       {teamRow && (teamRow.teams.length > 0 || teamRow.invites > 0) ? (
         <View style={styles.teams}>
-          <SectionLabel size="small">Your teams</SectionLabel>
+          <SectionLabel size="small" accessibilityRole="header">
+            Your teams
+          </SectionLabel>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.teamRow}>
             {teamRow.teams.map(({ team }) => (
               <Button

@@ -21,7 +21,8 @@ grid texture, white text, a hot red accent with neon glows, green reserved exclu
 | `--bg-maroon` | `#2a0a0e` | Dark maroon — gradient bands in the page background |
 | `--nav-bg` | `#000000` | Navigation sidebar — pure black |
 | `--text` | `#ffffff` | Primary text |
-| `--accent` | `#cc0404` | Brand red — CTAs, active nav, highlights, identity labels |
+| `--accent` | `#cc0404` | Brand red — CTAs, fills, borders, icons, large display numbers |
+| `accentText` (app token, B49) | `#ff4d4d` | Small red **text** (labels, links, badges, the active tab label). `#cc0404` is only ≈ 3.3:1 on the dark background — under WCAG's 4.5:1 for normal text — so wherever this guide says "accent text" or `color: var(--accent)` on small text, the app uses `accentText` (≈ 5.9:1). Pinned by `frontend/src/theme/contrast.test.ts`. |
 | `--accent-dim` | `rgba(204, 4, 4, 0.12)` | Red-tinted fill for selected/active states |
 | `--accent-border` | `rgba(204, 4, 4, 0.40)` | Red border on active/hovered elements |
 | `--accent-glow` | `0 0 16px rgba(204,4,4,0.40), 0 0 32px rgba(204,4,4,0.18)` | Large neon glow (button hover) |

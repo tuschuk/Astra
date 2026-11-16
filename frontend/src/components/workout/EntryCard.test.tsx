@@ -70,6 +70,19 @@ describe('EntryCard', () => {
     expect(benchSets(store)).toEqual([[8, roundWeightKgForStorage(lbToKg(185))]]);
   });
 
+  it('(B49) names the exercise as a heading and speaks a logged set as one line, warm-up in words', async () => {
+    await setup();
+    expect(screen.getByRole('header', { name: 'Bench Press' })).toBeTruthy();
+    await fireEvent.press(screen.getByRole('switch', { name: 'Warm-up sets for Bench Press' }));
+    await fireEvent.changeText(screen.getByLabelText('Reps for Bench Press'), '10');
+    await fireEvent.changeText(screen.getByLabelText('Weight in lb for Bench Press'), '95');
+    await fireEvent.press(screen.getByRole('button', { name: 'Log set' }));
+    expect(await screen.findByLabelText('Set 1: Warm-up, 10 × 95 lb')).toBeTruthy();
+    // The row's own controls stay separately reachable (not swallowed by the grouping).
+    expect(screen.getByRole('switch', { name: 'Warm-up: set 1 of Bench Press' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove set 1 of Bench Press' })).toBeTruthy();
+  });
+
   it('repeats the last set with exactly one press (NFR-2)', async () => {
     const { store } = await setup();
     const repeat = screen.getByLabelText('Repeat last set');
@@ -341,6 +354,9 @@ describe('EntryCard', () => {
       expect(screen.getByText('Set 2')).toBeTruthy();
       expect(screen.queryByText('Set 3')).toBeNull();
       expect(screen.getByLabelText('Remove drop 2 of set 1 of Bench Press')).toBeTruthy();
+      // (B49) A screen reader hears each set and drop as one sentence, the arrow spelled out.
+      expect(screen.getByLabelText('Set 1: 8 × 225 lb')).toBeTruthy();
+      expect(screen.getByLabelText('Drop 2: 10 × 155 lb')).toBeTruthy();
     });
 
     it('marks a whole drop set as warm-up with one W', async () => {

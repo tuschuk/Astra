@@ -86,6 +86,30 @@ export function formatDropSet(segments: readonly PrintableSet[], unit: WeightUni
 }
 
 /**
+ * A printed set line (from `formatSet` / `formatDropSet`) rewritten for a screen reader to say
+ * aloud (B49). The drawn line uses shorthand that reads fine on screen but badly out loud — a
+ * screen reader says "W middle dot" and "right arrow" — so: a leading "W · " becomes
+ * "Warm-up, ", each drop arrow becomes ", then ", and any other "·" a pause (a comma).
+ * "8 × 225 lb → 8 × 185 lb" → "8 × 225 lb, then 8 × 185 lb" (screen readers say "×" as "times").
+ */
+export function spokenSetText(printed: string): string {
+  return printed
+    .replace(/^W · /, 'Warm-up, ')
+    .replace(/ → /g, ', then ')
+    .replace(/ · /g, ', ');
+}
+
+/**
+ * What a screen reader says for one numbered set row — the logger, the saved workout, a
+ * coach's session view and an exercise's history all draw "Set n" beside the set's line, and
+ * all speak it as one sentence: "Set 2: 8 × 225 lb, then 8 × 185 lb". `segments` is the set as
+ * the lifter counts it (a plain set is one segment; a drop set its top set plus its drops).
+ */
+export function spokenSetLabel(number: number, segments: readonly PrintableSet[], unit: WeightUnit): string {
+  return `Set ${number}: ${spokenSetText(formatDropSet(segments, unit))}`;
+}
+
+/**
  * Groups an exercise's sets (in logged order) into the sets the lifter thinks in: an ordinary
  * set is a group of one; a drop set is its top set followed by its drops (LOG-12).
  *

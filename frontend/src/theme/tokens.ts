@@ -34,8 +34,18 @@ export const colors = {
   /** Decorative-only text — 50% white (AA). Never for information. */
   mutedDecor: 'rgba(255, 255, 255, 0.50)',
 
-  /** Brand red. */
+  /**
+   * Brand red — fills, solid buttons, borders, icons and big display numbers. Too dark for small
+   * text on the dark background (≈ 3.3:1, under WCAG's 4.5:1 for normal text): small red words
+   * use `accentText` instead.
+   */
   accent: '#cc0404',
+  /**
+   * The brand red lightened for small information-bearing text (links, "PR", superset tags,
+   * section labels, the focused tab label) — ≈ 5.9:1 on `bg`, clearing WCAG AA. Same hue, split
+   * by use, like `muted` / `mutedDecor`. (B49 accessibility pass.)
+   */
+  accentText: '#ff4d4d',
   /** Brighter red for pressed/hover states of solid-red controls. */
   accentBright: '#e00505',
   /** Red-tinted fill for selected/active states. */
@@ -226,6 +236,39 @@ export const type = {
     color: colors.muted,
   },
 } as const;
+
+/**
+ * How far each text style may grow when the phone's text-size setting is turned up (B49).
+ *
+ * By default React Native scales every piece of text with the phone's accessibility text size,
+ * with no ceiling — and that's what low-vision lifters need for anything they read: body copy,
+ * inputs, card titles, notes. Those styles are deliberately absent from this table (uncapped).
+ *
+ * The exceptions are text that's already huge or that lives in fixed chrome, where unbounded
+ * growth makes the screen *less* usable: an 88px timer digit at 2× is wider than a phone, a 40px
+ * marker heading at 3× pushes the screen's content out of view, and tab-bar labels at 3× collide.
+ * Each entry is the largest multiple of its base size that text may reach (passed to RN as
+ * `maxFontSizeMultiplier`). These are judgment calls checked on a device at maximum text size —
+ * tune them here, never at a call site.
+ */
+export const fontScaleCaps = {
+  /** Hero marker text is already 40px; 1.4× is 56px — still the biggest thing on screen. */
+  display: 1.4,
+  /** Screen titles (30px) — 1.4× keeps a title on one or two lines. */
+  title: 1.4,
+  /** Section headings (20px) — 1.6× reaches 32px, as large as a screen title gets. */
+  sectionTitle: 1.6,
+  /** The Tool Kit timer's 88px digits; 1.2× (≈ 106px) is the widest that fits "00:00" on a phone. */
+  timer: 1.2,
+  /** Stat values (22px) sit in side-by-side tiles; 1.6× keeps tiles from overflowing. */
+  statValue: 1.6,
+  /** Uppercase tracked labels (11px) in chips, tabs and field labels — 2× keeps chrome intact. */
+  label: 2,
+  /** The tiny 10px variant (tab labels, metadata) — 2× is 20px, double its size. */
+  labelSmall: 2,
+  /** Button text (12px) inside fixed-padding buttons — 2× still fits a phone-width button. */
+  button: 2,
+} as const satisfies Partial<Record<keyof typeof type, number>>;
 
 /** Spacing scale in device pixels. Use these instead of ad-hoc numbers. */
 export const spacing = {

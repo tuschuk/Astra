@@ -152,7 +152,7 @@ export default function AnalysisScreen() {
 
       {trend ? (
         <Card style={styles.card}>
-          <SectionLabel size="small" style={styles.sectionLabel}>
+          <SectionLabel size="small" accessibilityRole="header" style={styles.sectionLabel}>
             Against your trend
           </SectionLabel>
           <Body variant="small" style={styles.trendBasis}>
@@ -171,7 +171,7 @@ export default function AnalysisScreen() {
 
       {muscleList !== '' ? (
         <Card style={styles.card}>
-          <SectionLabel size="small" style={styles.sectionLabel}>
+          <SectionLabel size="small" accessibilityRole="header" style={styles.sectionLabel}>
             Muscles trained
           </SectionLabel>
           <MuscleMap loads={state.muscles} />
@@ -183,7 +183,7 @@ export default function AnalysisScreen() {
 
       {analysis.new_prs.length > 0 ? (
         <Card style={styles.card}>
-          <SectionLabel size="small" style={styles.sectionLabel}>
+          <SectionLabel size="small" accessibilityRole="header" style={styles.sectionLabel}>
             New PRs
           </SectionLabel>
           {analysis.new_prs.map((pr) => (
@@ -226,10 +226,13 @@ function trendPair(line: TrendLine, unit: WeightUnit): string {
   return `${formatWeight(line.value, unit)} vs ${formatWeight(line.average, unit)}`;
 }
 
-/** One number of the summary: a small label and its value, side by side. */
+/**
+ * One number of the summary: a small label and its value, side by side. A screen reader hears
+ * the pair as one line ("Volume: 4,850 kg") rather than two fragments.
+ */
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <View style={styles.stat}>
+    <View style={styles.stat} accessible accessibilityLabel={`${label}: ${value}`}>
       <SectionLabel size="small" style={styles.statLabel}>
         {label}
       </SectionLabel>
@@ -257,18 +260,20 @@ const styles = StyleSheet.create({
   },
   stat: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: spacing.md,
   },
   statLabel: {
-    width: 80,
+    // minWidth, not width: at large text sizes the label grows (and the row wraps) instead of clipping.
+    minWidth: 80,
   },
   statValue: {
     ...type.cardTitle,
     flex: 1,
   },
   sectionLabel: {
-    color: colors.accent,
+    color: colors.accentText,
   },
   legend: {
     color: colors.muted,

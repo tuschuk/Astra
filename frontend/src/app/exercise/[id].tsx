@@ -190,7 +190,9 @@ function CustomExerciseDetail({ id, back, backButton }: { id: string; back: () =
       </View>
       {error ? <FormError message={error} /> : null}
 
-      <SectionLabel style={styles.historyLabel}>Your history</SectionLabel>
+      <SectionLabel accessibilityRole="header" style={styles.historyLabel}>
+        Your history
+      </SectionLabel>
       <ExerciseHistorySection exerciseId={row.id} />
 
       {editKey !== null ? (
@@ -254,12 +256,16 @@ export default function ExerciseDetailScreen() {
       </Body>
 
       <Card style={styles.card}>
-        <SectionLabel size="small">Muscles worked</SectionLabel>
+        <SectionLabel size="small" accessibilityRole="header">
+          Muscles worked
+        </SectionLabel>
         <Body>{muscles.join(', ')}</Body>
       </Card>
 
       <Card style={styles.card}>
-        <SectionLabel size="small">How to do it</SectionLabel>
+        <SectionLabel size="small" accessibilityRole="header">
+          How to do it
+        </SectionLabel>
         {exercise.steps.map((step, index) => (
           <View key={`${index}-${step.title}`} style={styles.step}>
             <Body style={styles.stepTitle}>
@@ -272,9 +278,12 @@ export default function ExerciseDetailScreen() {
 
       {exercise.tips.length > 0 ? (
         <Card style={styles.card}>
-          <SectionLabel size="small">Tips</SectionLabel>
+          <SectionLabel size="small" accessibilityRole="header">
+            Tips
+          </SectionLabel>
+          {/* Each tip is read as its words alone — the drawn bullet isn't spoken ("bullet, …"). */}
           {exercise.tips.map((tip, index) => (
-            <View key={`${index}-${tip}`} style={styles.tip}>
+            <View key={`${index}-${tip}`} style={styles.tip} accessible accessibilityLabel={tip}>
               <Body style={styles.bullet}>•</Body>
               <Body style={styles.tipText}>{tip}</Body>
             </View>
@@ -282,7 +291,9 @@ export default function ExerciseDetailScreen() {
         </Card>
       ) : null}
 
-      <SectionLabel style={styles.historyLabel}>Your history</SectionLabel>
+      <SectionLabel accessibilityRole="header" style={styles.historyLabel}>
+        Your history
+      </SectionLabel>
       <ExerciseHistorySection exerciseId={libraryExerciseId(exercise.id)} />
     </Screen>
   );

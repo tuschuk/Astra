@@ -6,12 +6,14 @@
  * - outline: transparent with a red border that fills red when pressed.
  *
  * All variants meet the 44px minimum touch target and use the system's
- * uppercase tracked button type style.
+ * uppercase tracked button type style. The label grows with the phone's text size up to the
+ * theme's button cap (`fontScaleCaps.button`), and the button grows with it (a minimum height,
+ * never a fixed one). Screen readers hear a button, its label, and whether it is disabled.
  */
 import React from 'react';
 import { Pressable, StyleSheet, Text, type StyleProp, type ViewStyle } from 'react-native';
 
-import { colors, glows, layout, radii, spacing, type } from '@/theme';
+import { colors, fontScaleCaps, glows, layout, radii, spacing, type } from '@/theme';
 
 export type ButtonVariant = 'primary' | 'ghost' | 'outline';
 
@@ -51,6 +53,7 @@ export function Button({ label, onPress, variant = 'primary', disabled = false, 
     >
       {({ pressed }) => (
         <Text
+          maxFontSizeMultiplier={fontScaleCaps.button}
           style={[
             type.button,
             variant === 'ghost' && !pressed && styles.ghostLabel,

@@ -229,7 +229,9 @@ export default function WorkoutScreen() {
         <FormError message={dbError ? 'This phone’s workout storage couldn’t be opened.' : error} />
       </View>
 
-      <SectionLabel style={styles.toolkitLabel}>Tool Kit</SectionLabel>
+      <SectionLabel accessibilityRole="header" style={styles.toolkitLabel}>
+        Tool Kit
+      </SectionLabel>
       <View style={styles.toolkitRow}>
         {TOOL_OPTIONS.map((tool) => (
           <Pressable
@@ -250,7 +252,9 @@ export default function WorkoutScreen() {
         Works offline.
       </Body>
 
-      <SectionLabel style={styles.historyLabel}>Past workouts</SectionLabel>
+      <SectionLabel accessibilityRole="header" style={styles.historyLabel}>
+        Past workouts
+      </SectionLabel>
     </View>
   );
 

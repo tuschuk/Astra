@@ -618,7 +618,7 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
 
       {teams.length > 0 ? (
         <View style={styles.teams}>
-          <SectionLabel>Teams</SectionLabel>
+          <SectionLabel accessibilityRole="header">Teams</SectionLabel>
           {teams.map(({ team, role }) => (
             <TeamListItem
               key={team.id}
@@ -775,7 +775,9 @@ function Count({ label, value }: { label: string; value: number | null }) {
   const shown = value === null ? '—' : String(value);
   return (
     <View style={styles.count} accessible accessibilityLabel={`${label}: ${value === null ? 'unknown' : shown}`}>
-      <Body style={styles.countValue}>{shown}</Body>
+      <Body scaleAs="statValue" style={styles.countValue}>
+        {shown}
+      </Body>
       <SectionLabel size="small">{label}</SectionLabel>
     </View>
   );

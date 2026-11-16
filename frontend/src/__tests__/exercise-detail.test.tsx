@@ -88,6 +88,12 @@ describe('exercise detail screen', () => {
     expect(screen.getByText('Eyes under the bar')).toBeTruthy();
     expect(screen.queryByText(/\*\*/)).toBeNull();
     for (const tip of bench.tips) expect(screen.getByText(tip)).toBeTruthy();
+    // (B49) Screen-reader users can jump between the card's sections, and each tip is read as
+    // its words alone (the drawn bullet isn't spoken).
+    for (const section of ['Muscles worked', 'How to do it', 'Tips', 'Your history', 'Current PRs']) {
+      expect(screen.getByRole('header', { name: section })).toBeTruthy();
+    }
+    for (const tip of bench.tips) expect(screen.getByLabelText(tip)).toBeTruthy();
   });
 
   it('every launch exercise opens with its muscles and all its steps (B29 step DoD)', async () => {
