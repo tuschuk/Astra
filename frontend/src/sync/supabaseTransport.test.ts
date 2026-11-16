@@ -92,10 +92,12 @@ describe('createSupabaseTransport', () => {
       user_id: 'u1',
       unit: 'kg',
       progress_pic_visibility: 'followers',
+      dm_policy: 'mutual_follows',
       notify_follows: true,
       notify_comments: false,
       notify_votes: true,
       notify_team_pushes: true,
+      notify_messages: false,
       updated_at: '2026-11-15T00:00:00+00:00',
     };
     const { client, requests } = recordingClient([{ data: row }, { data: null }]);
@@ -104,7 +106,10 @@ describe('createSupabaseTransport', () => {
     expect(await transport.pullUserSettings('u1')).toBeNull();
     expect(requests[0]).toEqual([
       ['from', 'user_settings'],
-      ['select', 'user_id,unit,progress_pic_visibility,notify_follows,notify_comments,notify_votes,notify_team_pushes,updated_at'],
+      [
+        'select',
+        'user_id,unit,progress_pic_visibility,dm_policy,notify_follows,notify_comments,notify_votes,notify_team_pushes,notify_messages,updated_at',
+      ],
       ['eq', 'user_id', 'u1'],
       ['maybeSingle'],
     ]);
@@ -129,12 +134,20 @@ describe('createSupabaseTransport', () => {
       notify_comments: true,
       notify_votes: false,
       notify_team_pushes: true,
+      notify_messages: true,
+      dm_policy: 'anyone',
     });
   });
 
-  it('B15/B26/B47: saves every settable field with an update by user id — never an upsert, never updated_at', async () => {
+  it('B15/B26/B47/B48: saves every settable field with an update by user id — never an upsert, never updated_at', async () => {
     const { client, requests } = recordingClient();
-    const fields = { ...DEFAULT_USER_SETTINGS, unit: 'kg' as const, progress_pic_visibility: 'followers' as const, notify_team_pushes: false };
+    const fields = {
+      ...DEFAULT_USER_SETTINGS,
+      unit: 'kg' as const,
+      progress_pic_visibility: 'followers' as const,
+      dm_policy: 'mutual_follows' as const,
+      notify_team_pushes: false,
+    };
     await createSupabaseTransport(client).pushUserSettings('u1', fields);
     expect(requests[0]).toEqual([
       ['from', 'user_settings'],
@@ -143,10 +156,12 @@ describe('createSupabaseTransport', () => {
         {
           unit: 'kg',
           progress_pic_visibility: 'followers',
+          dm_policy: 'mutual_follows',
           notify_follows: true,
           notify_comments: true,
           notify_votes: true,
           notify_team_pushes: false,
+          notify_messages: true,
         },
       ],
       ['eq', 'user_id', 'u1'],

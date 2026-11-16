@@ -417,8 +417,20 @@ alter table user_settings add column notify_votes integer not null default 1;
 alter table user_settings add column notify_team_pushes integer not null default 1;
 `;
 
+/**
+ * Version 17 (B48): two direct-message settings on `user_settings`, mirroring the server's
+ * `…_direct_messages.sql` — `dm_policy` (who may START a conversation with the lifter: 'anyone',
+ * the default, or 'mutual_follows') and `notify_messages` (the fifth push switch, 1 = on). The
+ * server enforces the policy with its own copy; the phone's copy is what Settings shows, saved
+ * offline and synced like the other settings. Messages themselves are never stored on the phone.
+ */
+const V17 = `
+alter table user_settings add column dm_policy text not null default 'anyone';
+alter table user_settings add column notify_messages integer not null default 1;
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16];
+export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16, V17];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

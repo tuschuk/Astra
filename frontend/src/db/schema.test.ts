@@ -128,6 +128,8 @@ describe('migrate', () => {
       'notify_comments',
       'notify_votes',
       'notify_team_pushes',
+      'dm_policy',
+      'notify_messages',
     ]);
   });
 
@@ -227,6 +229,8 @@ describe('migrate', () => {
       notify_comments: 1,
       notify_votes: 1,
       notify_team_pushes: 1,
+      dm_policy: 'anyone',
+      notify_messages: 1,
     });
     expect(await db.getFirstAsync('select count(*) as n from outbox')).toEqual({ n: 1 });
   });
@@ -252,6 +256,35 @@ describe('migrate', () => {
       notify_comments: 1,
       notify_votes: 1,
       notify_team_pushes: 1,
+      dm_policy: 'anyone',
+      notify_messages: 1,
+    });
+    expect(await db.getFirstAsync('select count(*) as n from outbox')).toEqual({ n: 1 });
+  });
+
+  it("B48: upgrades a version-16 phone to version 17, keeping its settings — anyone may message, message pushes on", async () => {
+    const db = createNodeSqliteDriver();
+    for (const migration of MIGRATIONS.slice(0, 16)) await db.execAsync(migration);
+    await db.execAsync('pragma user_version = 16');
+    await db.runAsync(
+      "insert into user_settings (user_id, unit, progress_pic_visibility, notify_votes, updated_at) values ('u', 'kg', 'public', 0, 't')",
+    );
+    await db.runAsync("insert into outbox (tbl, row_id, queued_at) values ('user_settings', 'u', 't')");
+
+    await migrate(db);
+
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: SCHEMA_VERSION });
+    expect(await db.getFirstAsync('select * from user_settings')).toEqual({
+      user_id: 'u',
+      unit: 'kg',
+      updated_at: 't',
+      progress_pic_visibility: 'public',
+      notify_follows: 1,
+      notify_comments: 1,
+      notify_votes: 0,
+      notify_team_pushes: 1,
+      dm_policy: 'anyone',
+      notify_messages: 1,
     });
     expect(await db.getFirstAsync('select count(*) as n from outbox')).toEqual({ n: 1 });
   });

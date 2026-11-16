@@ -29,6 +29,11 @@
  *     ways; while blocking, there is no Follow button. A muted or blocked profile says so in one
  *     line — its tabs are empty because the server leaves that lifter's content out. After any
  *     change the header, counts and open tab are read again. Their post cards' ⋯ reports a post.
+ *   - (B48) on someone else's profile, **Message** opens a direct-message thread with them. It
+ *     shows only when the server says messaging is allowed (their "who can message you" setting
+ *     and no block either way — `can_message_user`), or when the two already have a conversation
+ *     (so a reply is always possible); a failed check hides it. The server enforces
+ *     the same rule on every attempt, so the hidden button is a courtesy, not the wall.
  *   - (B28) the Posts tab includes the lifter's re-shares (the original shown inside each). On
  *     someone else's cards, Re-share passes a post on to your own followers; on your own workout
  *     cards, Share opens the image share card for the phone's share sheet.
@@ -81,6 +86,7 @@ import {
   type Relation,
   type SafetyResult,
 } from '@/social/moderation';
+import { canOpenThread } from '@/social/messages';
 import { personLabels } from '@/social/names';
 import { getCachedOwnProfile, loadOwnProfile, saveOwnProfile, type OwnProfileIdentity } from '@/social/ownProfileCache';
 import { withPostVisibility } from '@/social/postPrivacy';
@@ -204,11 +210,14 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
   const relation = relationState?.forId === profileId ? relationState.value : null;
   const [safetyBusy, setSafetyBusy] = useState(false);
   const [safetyMessage, setSafetyMessage] = useState<string | null>(null);
+  // (B48) Whether the server would let me start a conversation with this lifter — the Message button.
+  const [canMessageState, setCanMessage] = useState<{ forId: string; value: boolean } | null>(null);
+  const canMessage = canMessageState?.forId === profileId && canMessageState.value;
   // (B36) The lifter's teams, tagged with whose they are.
   const [teamsState, setTeams] = useState<{ forId: string; value: TeamMembership[] } | null>(null);
   const teams = teamsState?.forId === profileId ? teamsState.value : [];
   // Each reload gets a number per list; an answer that lands after a newer reload is dropped.
-  const generation = useRef({ header: 0, posts: 0, history: 0, prs: 0, relation: 0, teams: 0 });
+  const generation = useRef({ header: 0, posts: 0, history: 0, prs: 0, relation: 0, teams: 0, message: 0 });
   const pageInFlight = useRef(false);
 
   useEffect(() => {
@@ -258,6 +267,19 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
       if (mine !== generation.current.relation) return;
       console.warn('Profile: block / mute state could not be loaded', error);
     }
+  }, [client, me, own, profileId]);
+
+  /**
+   * (B48) Asks the server whether I may message this lifter: their "who can message you" setting
+   * and blocks (the very rule the server enforces), or a conversation we already have (so I can
+   * always reply). Only for someone else's profile. Any failure answers no, so the button stays
+   * hidden rather than guessing.
+   */
+  const loadCanMessage = useCallback(async () => {
+    if (!me || own) return;
+    const mine = ++generation.current.message;
+    const value = await canOpenThread(client, me, profileId);
+    if (mine === generation.current.message) setCanMessage({ forId: profileId, value });
   }, [client, me, own, profileId]);
 
   /** The first page of posts: this lifter's own posts, newest first (the feed read, one author). */
@@ -375,8 +397,9 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
     useCallback(() => {
       void loadHeader();
       void loadRelation();
+      void loadCanMessage();
       void loadTeams();
-    }, [loadHeader, loadRelation, loadTeams]),
+    }, [loadHeader, loadRelation, loadCanMessage, loadTeams]),
   );
   useFocusEffect(
     useCallback(() => {
@@ -463,7 +486,7 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
       setSafetyMessage(result.message);
       return;
     }
-    await Promise.all([loadRelation(), loadHeader(), loadSection(section)]);
+    await Promise.all([loadRelation(), loadCanMessage(), loadHeader(), loadSection(section)]);
   }
 
   if (header.status === 'missing') {
@@ -520,7 +543,20 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
           key={`${ready.id}:${String(ready.viewerFollows)}`}
           initialFollowing={ready.viewerFollows === true}
           onSetFollowing={(next) => (next ? follow(client, me, profileId) : unfollow(client, me, profileId))}
-          onSettled={() => void loadHeader()}
+          // A follow can change whether messaging is allowed (a mutual-follows-only lifter).
+          onSettled={() => {
+            void loadHeader();
+            void loadCanMessage();
+          }}
+          style={styles.action}
+        />
+      ) : null}
+
+      {!own && ready && me && canMessage && !relation?.blocking ? (
+        <Button
+          label="Message"
+          variant="outline"
+          onPress={() => router.push({ pathname: '/messages/[userId]', params: { userId: profileId } })}
           style={styles.action}
         />
       ) : null}

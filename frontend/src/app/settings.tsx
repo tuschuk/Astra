@@ -11,11 +11,15 @@
  *       - Progress pics — who NEW progress pics are shown to: Only you (the default), Followers,
  *         or Public. Saved and uploaded exactly like the unit (works offline). Posts already made
  *         keep their own setting; a line says they're changed on the post itself.
+ *       - Who can message you (B48) — Anyone (the default) or Mutual follows (lifters you follow
+ *         who follow you back). Decides who may START a direct-message conversation with you;
+ *         existing conversations stay open (block the lifter to stop one). Saved and uploaded like
+ *         the unit; the server enforces its own copy.
  *       - Body data — a plain statement, not a control: body data is only ever visible to the
  *         lifter (the server enforces it). Nothing in the app shows body data to anyone yet, so
  *         there is nothing to choose; the choice arrives with the first feature that reads it.
- *   - Notifications (B47): four switches — new followers, comments on your posts, upvotes on your
- *     posts, Team posts. Each is on until turned off; turning one off stops exactly that kind of
+ *   - Notifications (B47): five switches — new followers, comments on your posts, upvotes on your
+ *     posts, Team posts, and (B48) messages. Each is on until turned off; turning one off stops exactly that kind of
  *     push (the server's `notify` function reads the switch before sending). Saved and uploaded
  *     like the unit, so it works offline and reaches the server on reconnect. Under them, a line
  *     saying where push stands on this phone — on; off, with "Turn on push notifications" (which
@@ -48,6 +52,7 @@ import type { WorkoutVisibility } from '@/db/dao';
 import { useAppDatabase } from '@/db/useAppDatabase';
 import { getSupabase } from '@/lib/supabase';
 import { pushRegistration, type PushState } from '@/notifications/pushRegistration';
+import { readDmPolicy, setDmPolicy, type DmPolicy } from '@/settings/dmSettings';
 import { useDisplayUnit } from '@/settings/displayUnit';
 import {
   readNotificationSwitches,
@@ -80,13 +85,24 @@ export const BODY_DATA_LINE = 'Only you. Body data never leaves your account.';
 /** The small print under Export your data (B32): the export is the server's copy. */
 export const EXPORT_NOTE = 'A JSON file of your workouts, sets, PRs, posts and settings. Includes everything that has synced to your account.';
 
-/** The four notification switches (B47), in the order shown, with their labels. */
+/** The five notification switches (B47; Messages, B48), in the order shown, with their labels. */
 export const NOTIFICATION_ROWS: readonly { field: NotifyField; label: string }[] = [
   { field: 'notify_follows', label: 'New followers' },
   { field: 'notify_comments', label: 'Comments on your posts' },
   { field: 'notify_votes', label: 'Upvotes on your posts' },
   { field: 'notify_team_pushes', label: 'Team posts' },
+  { field: 'notify_messages', label: 'Messages' },
 ];
+
+/** The two "who can message you" chips (B48), most open first. */
+const DM_OPTIONS: ChoiceOption<DmPolicy>[] = [
+  { value: 'anyone', label: 'Anyone', spoken: 'Anyone on Astra can message you' },
+  { value: 'mutual_follows', label: 'Mutual follows', spoken: 'Only lifters you follow who follow you back can message you' },
+];
+
+/** The small print under the "who can message you" chips (B48). */
+export const DM_POLICY_NOTE =
+  'Applies to new conversations. To stop an existing one, block the lifter from their profile.';
 
 /** The line under the switches for each state push can be in on this phone (B47). */
 export const PUSH_STATE_LINES: Record<PushState, string> = {
@@ -115,9 +131,12 @@ export default function SettingsScreen() {
   // Null until read from the phone; the chips wait (disabled) rather than guess.
   const [picVisibility, setPicVisibility] = useState<WorkoutVisibility | null>(null);
   const [privacyError, setPrivacyError] = useState<string | null>(null);
+  // B48: who can start a conversation with me (null until read from the phone).
+  const [dmPolicy, setDmPolicyState] = useState<DmPolicy | null>(null);
+  const [dmError, setDmError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
-  // B47: the four switches (null until read) and where push stands on this phone (null while checking).
+  // B47: the five switches (null until read) and where push stands on this phone (null while checking).
   const [switches, setSwitches] = useState<NotificationSwitches | null>(null);
   const [notifyError, setNotifyError] = useState<string | null>(null);
   const [pushState, setPushState] = useState<PushState | null>(null);
@@ -138,6 +157,14 @@ export default function SettingsScreen() {
         .catch((error: unknown) => {
           console.warn('Settings: could not read the privacy setting', error);
           if (live) setPrivacyError('Your privacy setting couldn’t be read. Try again.');
+        });
+      readDmPolicy(db, userId)
+        .then((value) => {
+          if (live) setDmPolicyState(value);
+        })
+        .catch((error: unknown) => {
+          console.warn('Settings: could not read the messaging setting', error);
+          if (live) setDmError('Your messaging setting couldn’t be read. Try again.');
         });
       readNotificationSwitches(db, userId)
         .then((value) => {
@@ -207,6 +234,25 @@ export default function SettingsScreen() {
       console.warn('Settings: could not save the privacy setting', error);
       setPicVisibility(before);
       setPrivacyError('Your privacy setting couldn’t be saved. Try again.');
+    }
+  }
+
+  /**
+   * (B48) Saves who may start a conversation with the lifter (offline-safe: phone + upload queue
+   * in one go). The chip moves at once and moves back, with a message, if the phone couldn't save
+   * it. The server enforces its own copy once the upload lands.
+   */
+  async function chooseDmPolicy(next: DmPolicy): Promise<void> {
+    if (!db || !userId || dmPolicy === null || next === dmPolicy) return;
+    const before = dmPolicy;
+    setDmPolicyState(next);
+    setDmError(null);
+    try {
+      await setDmPolicy(db, userId, next);
+    } catch (error: unknown) {
+      console.warn('Settings: could not save the messaging setting', error);
+      setDmPolicyState(before);
+      setDmError('Your messaging setting couldn’t be saved. Try again.');
     }
   }
 
@@ -298,6 +344,20 @@ export default function SettingsScreen() {
           Posts you’ve already shared keep their own setting — change one from the post itself.
         </Body>
         <FormError message={privacyError} />
+      </Card>
+      <Card style={[styles.card, styles.cardGap]}>
+        <Body>Who can message you</Body>
+        <ChoiceChips
+          options={DM_OPTIONS}
+          selected={dmPolicy ?? 'anyone'}
+          onSelect={(value) => void chooseDmPolicy(value)}
+          disabled={!db || !userId || dmPolicy === null}
+          fill
+        />
+        <Body variant="small" style={styles.muted}>
+          {DM_POLICY_NOTE}
+        </Body>
+        <FormError message={dmError} />
       </Card>
       <Card style={[styles.card, styles.cardGap]}>
         <Body>Body data</Body>

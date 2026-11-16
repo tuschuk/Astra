@@ -166,6 +166,8 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
           <Stack.Screen name="session/[id]" />
           <Stack.Screen name="marketplace-program/[id]" />
           <Stack.Screen name="program-comments/[id]" />
+          <Stack.Screen name="messages/index" />
+          <Stack.Screen name="messages/[userId]" />
         </Stack.Protected>
         <Stack.Protected guard={!signedIn}>
           <Stack.Screen name="(auth)" />

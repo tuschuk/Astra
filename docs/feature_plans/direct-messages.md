@@ -408,3 +408,58 @@ proving **no** `channel(`/`postgres_changes` call exists yet.
 - **Scope verdict:** right as written. Nothing narrowed; one deliberate, flagged widening
   (the fifth push event, G5) grounded in the handoff's explicit offer; the reports widening
   explicitly deferred rather than silently absorbed (decision 10).
+
+## Build record and deviations (builder, Nov 16, 2026)
+
+Shipped as planned, with these deliberate differences (each recorded here, not slipped in):
+
+1. **A second migration, `20261116070550_direct_messages_server_time.sql`** (code-review fix).
+   The insert policies check *who* writes, but a client could send its own `created_at` (and a
+   new conversation's `last_message_at`). A future-dated message would sort wrongly and, through
+   the `greatest()` stamp, pin its conversation to the top of both inboxes for good. `BEFORE
+   INSERT` triggers on both tables now overwrite those columns with server values. Probed live:
+   a forged 2099 timestamp is replaced.
+2. **The `last_message_at` stamp uses `greatest(coalesce(last_message_at, new.created_at),
+   new.created_at)`** rather than a plain assignment, so an out-of-order insert can't move the
+   inbox order backwards. It is harmless now that `created_at` is server time.
+3. **An extra index, `messages_sender_idx (sender_id)`**, covers the account-deletion cascade
+   through `messages.sender_id` (the advisor's unindexed-FK class).
+4. **`private.can_message` keeps EXECUTE for `authenticated`** (revoked from public/anon). The
+   policies call it as the signed-in lifter, so a revoke from `authenticated` would break every
+   insert.
+5. **The profile's Message button asks `canOpenThread`, not just `can_message_user`** (spec
+   review). Taken literally, a non-mutual lifter who was messaged by someone set to
+   `mutual_follows` had no Message button on that person's profile, even though decision 2 says
+   they may reply. `canOpenThread` = the RPC **or** an existing conversation the viewer can see.
+   A block hides the conversation, so the button still hides on a block.
+6. **The thread is a `ScrollView` that scrolls itself to the end on every content-size change,
+   not an inverted `FlatList`.** Same outcome (newest in view on open, on send, on a live
+   arrival) with no list virtualisation, which is fine at 50-message pages (grow-the-limit). Move
+   to an inverted FlatList if long threads lag on a device.
+7. **Sends are confirmed, not optimistic.** The message appears when the server returns it
+   (about one round trip, with "Sending…" on the button). The id-dedupe against the live echo
+   that the plan asked for is in place and tested.
+8. **The thread re-reads on focus only, not on network reconnect.** A thread left open across a
+   signal drop picks up missed messages on the next focus, or from the live channel once
+   supabase-js reconnects it. A reconnect listener can be added if a device check shows a gap.
+9. **Message length is counted in code points everywhere** (`messageLength`, matching the
+   server's `char_length`), and the composer has no `maxLength`. The box's UTF-16 count would
+   have refused emoji early. A counter and a "too long" line guide instead, as for comments.
+10. **A dedicated test fake, `test-utils/fakeMessagesClient.ts`**, instead of more branches in
+    `fakeSocialClient.ts`. DMs need a signed-in identity and Realtime channels, which that fake has
+    no notion of. The profile tests still use the social fake, through its `rpc` option.
+11. **The conversation list reads at most 100 conversations** (no paging). Revisit when someone
+    reaches that.
+12. **`notify` v2 was deployed with comment-trimmed `handler.ts` / `expoPush.ts`** (the bundle
+    upload). The logic is byte-for-byte the repo's, and `index.ts` is the repo copy. This is the
+    same posture as B47's v1.
+13. **The two new routes are declared in the root layout's signed-in guard** (`messages/index`,
+    `messages/[userId]`). The plan's file table missed `_layout.tsx`. `sync/transport.ts` needed
+    no change: the types flow through `UserSettingsFields`.
+
+Review (the `mattpocock-skills:code-review` skill, two axes). The findings fixed are items 1, 5, 6
+and 9 above, plus a `useThread` docstring and a `Pick<Message>` for the list's last line. The
+findings left as judgement calls are: `setDmPolicy` is the fourth copy of the "patch + outbox +
+notify" sequence (the settings precedent); `UNIQUE_VIOLATION` / `RLS_REFUSED` are redeclared
+rather than imported from `teams.ts`; the settings row's non-switch fields are still listed in
+several places (Shotgun Surgery). `messageTime` stays local to the thread screen.

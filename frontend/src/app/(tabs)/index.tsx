@@ -9,7 +9,8 @@
  * posts are there; after Share a photo, yours is, once it has uploaded).
  *
  * What the user can do: read the feed, pull to refresh, open Share a photo (B22) to post a
- * progress pic or PR photo, and open Find lifters to search for people and follow them. On each
+ * progress pic or PR photo, open Find lifters to search for people and follow them, and (B48)
+ * open Messages, the lifter's direct-message conversations. On each
  * card (B23): upvote or downvote (no downvote on upvote-only posts such as Physique Check), and
  * open the post's comments. Votes go straight to the server; the card shows the change at once
  * and takes it back if refused. Tapping a card's author opens their profile (B25). On the
@@ -288,6 +289,7 @@ export default function HomeScreen() {
         <View style={styles.headerActions}>
           <Button label="Share a photo" variant="ghost" onPress={() => router.push('/new-post')} />
           <Button label="Find lifters" variant="ghost" onPress={() => router.push('/find-lifters')} />
+          <Button label="Messages" variant="ghost" onPress={() => router.push('/messages')} />
         </View>
       </View>
       {/* Shown once both the remembered choice and the flair list are read, so a chip is never lit wrongly. */}

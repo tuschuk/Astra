@@ -6,7 +6,8 @@
  *   - Follow from the header flips the button and the Followers count re-reads to match (SOC-7);
  *     a block's refusal flips back with the calm sentence and the count stays;
  *   - their posts, their complete history paged from the server (not tappable), their PRs;
- *   - a profile that doesn't exist, and my own id opened here.
+ *   - a profile that doesn't exist, and my own id opened here;
+ *   - (B48) Message shows only when the server's `can_message_user` says yes, and opens the thread.
  */
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import React from 'react';
@@ -166,5 +167,44 @@ describe('Another lifter’s profile (B25)', () => {
     await renderSignedIn(<ProfileScreen />);
     expect(await screen.findByLabelText('Edit profile')).toBeTruthy();
     expect(screen.queryByLabelText('Follow')).toBeNull();
+  });
+});
+
+describe('Another lifter’s profile — Message (B48)', () => {
+  /** The same seed as above, plus the server's answer to `can_message_user`. */
+  function withMessaging(allowed: (target: string) => boolean) {
+    mockSocial = createFakeSocialClient(
+      { ...mockSocial.tables },
+      { rpc: { can_message_user: (params) => allowed(String(params.target)) } },
+    );
+  }
+
+  it('shows Message when the server allows it, and it opens the thread with this lifter', async () => {
+    withMessaging((target) => target === 'sam');
+    await renderSignedIn(<ProfileScreen />);
+    await fireEvent.press(await screen.findByLabelText('Message'));
+    expect(mockRouter.push).toHaveBeenCalledWith({ pathname: '/messages/[userId]', params: { userId: 'sam' } });
+  });
+
+  it('hides Message when the server says no (their setting, or a block)', async () => {
+    withMessaging(() => false);
+    await renderSignedIn(<ProfileScreen />);
+    expect(await screen.findByText('@sam_lifts')).toBeTruthy();
+    expect(screen.queryByLabelText('Message')).toBeNull();
+  });
+
+  it('hides Message when the check fails (no guessing)', async () => {
+    // The fake's default: no such function → an error.
+    await renderSignedIn(<ProfileScreen />);
+    expect(await screen.findByText('@sam_lifts')).toBeTruthy();
+    expect(screen.queryByLabelText('Message')).toBeNull();
+  });
+
+  it('my own profile has no Message button', async () => {
+    withMessaging(() => true);
+    mockId = ME;
+    await renderSignedIn(<ProfileScreen />);
+    expect(await screen.findByLabelText('Edit profile')).toBeTruthy();
+    expect(screen.queryByLabelText('Message')).toBeNull();
   });
 });

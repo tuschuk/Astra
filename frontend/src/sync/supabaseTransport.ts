@@ -31,6 +31,7 @@ import {
 } from '@/db/dao';
 import {
   NOTIFY_FIELDS,
+  parseDmPolicy,
   parseNotifySwitches,
   parseUnit,
   parseVisibility,
@@ -43,8 +44,8 @@ import { postImageUploadUrl, uploadFile } from '@/social/postImages';
 
 import { PostAlreadyExistsError, type PullCursor, type SyncTransport, type TombstoneRow } from './transport';
 
-/** The settings row's columns as the download reads them (B15, B26, and B47's four switches). */
-export const USER_SETTINGS_COLUMNS = `user_id,unit,progress_pic_visibility,${NOTIFY_FIELDS.join(',')},updated_at`;
+/** The settings row's columns as the download reads them (B15, B26, B48's DM policy, and the five switches). */
+export const USER_SETTINGS_COLUMNS = `user_id,unit,progress_pic_visibility,dm_policy,${NOTIFY_FIELDS.join(',')},updated_at`;
 
 /** Postgres's error code for "duplicate key value violates unique constraint". */
 const UNIQUE_VIOLATION = '23505';
@@ -177,14 +178,18 @@ export function createSupabaseTransport(
         .maybeSingle();
       throwIfError(error, 'Download of settings failed');
       if (!data) return null;
-      const row = data as unknown as { user_id: string; unit: unknown; progress_pic_visibility: unknown; updated_at: string } & Record<
-        NotifyField,
-        unknown
-      >;
+      const row = data as unknown as {
+        user_id: string;
+        unit: unknown;
+        progress_pic_visibility: unknown;
+        dm_policy: unknown;
+        updated_at: string;
+      } & Record<NotifyField, unknown>;
       return {
         user_id: row.user_id,
         unit: parseUnit(row.unit),
         progress_pic_visibility: parseVisibility(row.progress_pic_visibility),
+        dm_policy: parseDmPolicy(row.dm_policy),
         ...parseNotifySwitches(row),
         updated_at: row.updated_at,
       };
@@ -193,7 +198,7 @@ export function createSupabaseTransport(
     async pushUserSettings(userId, fields) {
       // An update, never an upsert: the row exists from signup and the phone may not insert.
       // No updated_at — the server's moddatetime trigger stamps it. Every settable field goes up
-      // together (unit, progress-pic visibility and the four B47 notification switches): the
+      // together (unit, progress-pic visibility, the B48 DM policy and the five notification switches): the
       // phone's row is always whole (changes are merged into it first), so this never undoes a
       // setting the lifter didn't touch.
       const { error } = await client

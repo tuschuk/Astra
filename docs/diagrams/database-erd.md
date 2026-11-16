@@ -53,6 +53,11 @@ votes; see "Program votes, comments and Featured"),
 `20261116052928_push_notifications.sql` (B47, applied live — `pg_net`, `push_tokens`,
 `register_push_token`, the four `user_settings.notify_*` switches, `notification_log`, and the
 four `notify_on_*` triggers that call the `notify` server function; see "Push notifications"),
+`20261116063026_direct_messages.sql` and `20261116070550_direct_messages_server_time.sql` (B48,
+both applied live — `conversations`, `messages`, `private.can_message`, `can_message_user`,
+`user_settings.dm_policy` / `notify_messages`, the `last_message_at` and server-time triggers,
+`messages` in the `supabase_realtime` publication, and the fifth push event; see "Direct
+messages"),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -137,6 +142,25 @@ erDiagram
   comments ||..o{ notification_log : "source_key = comment id (no FK)"
   votes ||..o{ notification_log : "source_key post:voter, upvotes only (no FK)"
   team_posts ||..o{ notification_log : "source_key = team post id, one row per member (no FK)"
+  profiles ||--o{ conversations : "user_a: the smaller id of the pair (cascade, B48)"
+  profiles ||--o{ conversations : "user_b: the larger id of the pair (cascade, B48)"
+  conversations ||--o{ messages : "conversation_id (cascade)"
+  profiles ||--o{ messages : "sender_id writes (cascade)"
+  messages ||..o{ notification_log : "source_key = message id, event message (no FK; trigger -> notify)"
+  conversations {
+    uuid id PK "client-generated on the first send"
+    uuid user_a FK "smaller id; CHECK user_a < user_b; UK (user_a, user_b) = one thread per pair"
+    uuid user_b FK "larger id"
+    timestamptz created_at "server time (BEFORE INSERT trigger overwrites anything sent)"
+    timestamptz last_message_at "newest message's time, trigger-kept; null until the first; the inbox order (nulls last)"
+  }
+  messages {
+    uuid id PK "client-generated, so the live echo of your own send is recognised"
+    uuid conversation_id FK "the thread"
+    uuid sender_id FK "must be auth.uid() (RLS)"
+    text body "1-2000 chars, not blank (CHECK; MESSAGE_MAX_LENGTH mirrors it)"
+    timestamptz created_at "server time (BEFORE INSERT trigger); thread order"
+  }
   push_tokens {
     text token PK "Expo push token, ExponentPushToken[...]; CHECK shape, max 200"
     uuid user_id FK "who it belongs to now; moves on account switch (register_push_token)"
@@ -147,7 +171,7 @@ erDiagram
   }
   notification_log {
     uuid id PK "server-generated"
-    text event "follow | comment | vote | team_push"
+    text event "follow | comment | vote | team_push | message (B48)"
     text source_key "the row that caused it; UK (event, source_key, recipient_id) = the already-handled gate"
     uuid recipient_id FK "who it was for"
     uuid actor_id "who did it (no FK)"
@@ -213,6 +237,8 @@ erDiagram
     boolean notify_comments "push on a comment on your post; default true (B47)"
     boolean notify_votes "push on an upvote of your post; default true (B47)"
     boolean notify_team_pushes "push on a teammate's Team post; default true (B47)"
+    text dm_policy "who may START a DM with you: anyone | mutual_follows; default anyone (CHECK, B48)"
+    boolean notify_messages "push on a new direct message; default true (B48)"
     timestamptz updated_at
   }
 
@@ -519,6 +545,57 @@ erDiagram
     timestamptz created_at
   }
 ```
+
+## Direct messages (B48)
+
+- **Shape:** a conversation is one *pair* of lifters stored smaller id first (`user_a < user_b`,
+  unique) — no membership table, two people only. Messages hang off it. Both ids are made on the
+  phone; `created_at` (both tables) and a new conversation's `last_message_at` are overwritten
+  with server values by `BEFORE INSERT` triggers (`messages_server_time`,
+  `conversations_server_time`), so a client can't back- or future-date anything.
+- **`private.can_message(sender, recipient)`** (security definer — follows and settings RLS would
+  hide what it needs) — the one home of the DM rule: two different signed-in people, no block
+  either way (`private.blocked_either`), and either the recipient's `user_settings.dm_policy` is
+  `anyone` (a missing row counts as `anyone`) or **both** `follows` rows exist (the only place
+  "mutual follows" is spelled). `public.can_message_user(target)` answers it for `auth.uid()` as a
+  bare yes/no (EXECUTE for `authenticated` only) — the profile's Message button.
+- **RLS — the whole wall, Realtime included:**
+  - `conversations` select: you are `user_a` or `user_b` **and** `not blocked_either(user_a,
+    user_b)`. This is the one spelling of "membership + block"; everything below reaches it by
+    subquery.
+  - `conversations` insert: you are in the pair **and** `can_message(you, the other)`. No update or
+    delete policies.
+  - `messages` select: `exists (select 1 from conversations where id = conversation_id)` — runs
+    under the policy above, so a block hides the whole history from both sides; unblocking brings
+    it back (nothing is deleted).
+  - `messages` insert: `sender_id = auth.uid()` and the conversation is visible to you. A block →
+    42501. No update or delete policies.
+  - **The setting gates starting, not replying** (plan decision 2): once a conversation exists,
+    either member may keep writing in it even if the other later switches to `mutual_follows`, and
+    a non-mutual recipient may reply. Block is the remedy for an unwanted existing thread.
+- **Realtime:** `public.messages` is in the `supabase_realtime` publication (the first table there).
+  Realtime re-checks the `messages` select policy for each subscriber, so only the two members
+  receive an INSERT and a block stops delivery.
+- **Triggers on `messages`:** `messages_server_time` (BEFORE INSERT, above);
+  `stamp_last_message` (AFTER INSERT, definer) sets `conversations.last_message_at` to the newest
+  message time — the inbox's single ordering key; `notify_on_message` (AFTER INSERT) queues
+  `{ event: 'message', keys: { id } }` to `notify` through `private.notify_event()`.
+- **Push:** recipient = the other member; title "New message", body "<name> sent you a message",
+  `data.path` `/messages/<sender id>` — **never the message text** (the function doesn't even
+  select it). Standing filters apply: self, block, the recipient's mute of the sender (a muted
+  sender's message still lands — mutes don't cut DMs, B27 — only the push is skipped), the
+  `notify_messages` switch, no tokens.
+- **Deletion:** either account's deletion cascades the conversation and all its messages away.
+- **Live probe (B48 build, as throwaway users in a rolled-back transaction):** a non-mutual start
+  against `mutual_follows` → 42501 and `can_message_user` false; after the follow-back → true and
+  the insert succeeds; a forged `sender_id` → 42501; a blank body → 23514; a second row for the same
+  pair → 23505; the recipient reads the message and `last_message_at` is stamped; a third user reads
+  0 conversations / 0 messages and their insert → 42501; after a block both sides read 0, the
+  sender's insert → 42501, `can_message_user` false; after unblock the history (2 messages) is back;
+  a forged future `created_at` / `last_message_at` is overwritten with server time. Committed
+  probe (rows deleted after): a real message logged `notification_log` `event = message` reaching
+  Expo (`send_failed`, `DeviceNotRegistered` for the fake token), a follow in the same run still
+  logged, and with `notify_messages` off the next message logged `skipped_setting`.
 
 ## Push notifications (B47)
 
@@ -1197,8 +1274,15 @@ when that workout's own analysis is).
 - `team_role` (B36): `owner`, `coach`, `member`. Used by `team_members.role`; `coach` is granted
   by the owner (B37).
 - `team_post_kind` (B37): `announcement`, `program`, `workout`. Used by `team_posts.kind`.
+- (Not an enum type, a CHECKed text — the `unit` precedent.) `user_settings.dm_policy` (B48):
+  `anyone`, `mutual_follows`.
 
 ## What happens automatically (triggers)
+
+- **Direct messages (B48).** `messages_server_time` / `conversations_server_time` (BEFORE INSERT)
+  overwrite `created_at` (and a new conversation's `last_message_at`) with server values;
+  `stamp_last_message` (AFTER INSERT on messages, definer) moves `conversations.last_message_at`;
+  `notify_on_message` (AFTER INSERT on messages) queues the `message` push. See "Direct messages".
 
 - **Signup creates the identity rows — and enforces 18+.** Inserting into `auth.users` fires
   `handle_new_user` (migration `20261114224613_signup_birthdate_gate.sql`). It first reads
@@ -1308,6 +1392,8 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `team_invites` (B36) | invites to you, and the owner sees their team's | insert only the owner, never across a block (`private.blocked_either`); delete by the invitee (decline) or the owner (cancel) |
 | `push_tokens` (B47) | only your own | delete only your own; no insert/update policies — writes only through `register_push_token` (signed-in, saves for `auth.uid()`, takes the token over from a previous owner) |
 | `notification_log` (B47) | nobody — RLS on, no policies; the `notify` function (service role) writes and reads it | nobody |
+| `conversations` (B48) | the two members, and not while either has blocked the other (`private.blocked_either`) | insert only a pair you are in, and only when `private.can_message(you, them)` (no block; their `dm_policy` is `anyone` or you follow each other); no update/delete |
+| `messages` (B48) | whoever can read the conversation (so: the two members, unblocked — a block hides the history both ways); Realtime delivery uses the same rule | insert as yourself into a conversation you can read (a block → 42501); no update/delete |
 | `reports` (B27) | moderators only (`private.is_moderator()`) | insert only as yourself, about a post or comment you can currently see (each table's own read rule decides), never your own; no updates or deletes — the founder works the queue via service role |
 
 **Workout visibility rule** (`private.workout_visible`): you always see your own; a block in either
@@ -1372,7 +1458,9 @@ column `workouts.program_workout_id`; version 14 (B39) added `programs.visibilit
 `private`; `program_team_shares` is not mirrored); version 15 (B42) added the six trend columns to
 `workout_analyses` (integer / real, null on existing rows); version 16 (B47) added the four
 `user_settings.notify_*` switches (integer 0/1, default 1; `push_tokens` and `notification_log`
-are not mirrored). **Upload order since B35** (`SYNC_ORDER`): `exercises`,
+are not mirrored); version 17 (B48) added `user_settings.dm_policy` (text, default `anyone`) and
+`notify_messages` (integer 0/1, default 1) — `conversations` and `messages` are **not** mirrored
+(direct messages are online-only). **Upload order since B35** (`SYNC_ORDER`): `exercises`,
 `programs`, `program_weeks`, `program_workouts`, `workouts`, `workout_exercises`, `sets`,
 `personal_records`, `program_exercises`, `program_runs` (then `workouts` once more) — programs go
 before workouts so a session started from a program never reaches the server ahead of the
@@ -1414,7 +1502,8 @@ and `sync_state`, the download bookmarks. What this means for the server:
 - **`user_settings` (B15) syncs outside the id-keyed machinery.** The phone's kg/lb toggle and
   (B26) its progress-pic privacy choice and (B47) its four notification switches send
   `UPDATE user_settings SET unit = …, progress_pic_visibility = …, notify_follows = …,
-  notify_comments = …, notify_votes = …, notify_team_pushes = … WHERE user_id = …` (every settable
+  notify_comments = …, notify_votes = …, notify_team_pushes = …, dm_policy = …, notify_messages = …
+  WHERE user_id = …` (every settable
   field from the phone's whole row; a change to one is merged into the stored row first, so it
   never undoes another) — never an insert or upsert, since RLS
   grants the owner select and update only and the signup trigger already made the row; no

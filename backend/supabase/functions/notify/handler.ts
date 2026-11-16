@@ -3,8 +3,9 @@
  * from the Deno wiring in `index.ts` so every decision can be tested with fakes.
  *
  * Who calls it: the database itself. After a row is inserted into `follows`, `comments`, `votes`
- * (upvotes only) or `team_posts`, a trigger queues a call here carrying only that row's keys —
- * `{ event: 'follow' | 'comment' | 'vote' | 'team_push', keys: {...} }`.
+ * (upvotes only), `team_posts` or `messages` (B48 — direct messages), a trigger queues a call here
+ * carrying only that row's keys —
+ * `{ event: 'follow' | 'comment' | 'vote' | 'team_push' | 'message', keys: {...} }`.
  *
  * Why it trusts nothing in the call: the function is reachable without a login (a database
  * trigger has no lifter's login to send, and storing a secret in SQL would be worse). So the call
@@ -27,20 +28,21 @@
  * send nothing.
  *
  * What a push says: the actor's display name and the kind of act ("Alex commented on your post")
- * and, for a team post, the team's name. Never a comment's words, workout numbers, photos or body
- * data (CLAUDE.md's privacy rule). The only data attached is the in-app screen a tap opens.
+ * and, for a team post, the team's name. Never a comment's or a direct message's words, workout
+ * numbers, photos or body data (CLAUDE.md's privacy rule). The only data attached is the in-app screen a tap opens.
  */
 import { buildMessage, chunk, isDeviceNotRegistered, parseTickets, type ExpoMessage, type ExpoTicket } from './expoPush.ts';
 
-/** The four kinds of event. */
-export type NotifyEvent = 'follow' | 'comment' | 'vote' | 'team_push';
+/** The five kinds of event. */
+export type NotifyEvent = 'follow' | 'comment' | 'vote' | 'team_push' | 'message';
 
-/** The four per-person switches on `user_settings`, one per event. */
+/** The five per-person switches on `user_settings`, one per event. */
 export interface NotifySwitches {
   notify_follows: boolean;
   notify_comments: boolean;
   notify_votes: boolean;
   notify_team_pushes: boolean;
+  notify_messages: boolean;
 }
 
 /** Which switch governs which event. */
@@ -49,6 +51,7 @@ export const SWITCH_FOR_EVENT: Record<NotifyEvent, keyof NotifySwitches> = {
   comment: 'notify_comments',
   vote: 'notify_votes',
   team_push: 'notify_team_pushes',
+  message: 'notify_messages',
 };
 
 /** What a person with no settings row gets: every switch on (the columns' default). */
@@ -57,6 +60,7 @@ export const DEFAULT_SWITCHES: NotifySwitches = {
   notify_comments: true,
   notify_votes: true,
   notify_team_pushes: true,
+  notify_messages: true,
 };
 
 /** What became of the notification for one recipient (the `notification_log.status` values). */
@@ -85,6 +89,11 @@ export interface NotifyDeps {
   readVote(postId: string, voterId: string): Promise<{ value: number; postAuthorId: string } | null>;
   /** The team post's author, team and team name, or null if it is gone. */
   readTeamPost(postId: string): Promise<{ authorId: string; teamId: string; teamName: string } | null>;
+  /**
+   * The message's sender and its conversation's two members, or null if the message is gone.
+   * Never the message's text — a push must not carry it, so the handler never reads it.
+   */
+  readMessage(messageId: string): Promise<{ senderId: string; memberIds: [string, string] } | null>;
   /** Every member of the team. */
   teamMemberIds(teamId: string): Promise<string[]>;
   /** The name to show for a lifter (display name, else username), or null if they have neither. */
@@ -118,7 +127,8 @@ export type NotifyRequest =
   | { event: 'follow'; followerId: string; followeeId: string }
   | { event: 'comment'; commentId: string }
   | { event: 'vote'; postId: string; voterId: string }
-  | { event: 'team_push'; teamPostId: string };
+  | { event: 'team_push'; teamPostId: string }
+  | { event: 'message'; messageId: string };
 
 /** Reads a uuid out of `keys[name]`, or null. */
 function uuidKey(keys: Record<string, unknown>, name: string): string | null {
@@ -152,6 +162,10 @@ export function parseNotifyRequest(body: unknown): NotifyRequest | null {
   if (event === 'team_push') {
     const teamPostId = uuidKey(k, 'id');
     return teamPostId ? { event, teamPostId } : null;
+  }
+  if (event === 'message') {
+    const messageId = uuidKey(k, 'id');
+    return messageId ? { event, messageId } : null;
   }
   return null;
 }
@@ -227,6 +241,22 @@ async function resolveEvent(request: NotifyRequest, deps: NotifyDeps): Promise<R
         path: `/team/${post.teamId}`,
         title: post.teamName,
         body: (name) => `${name} posted to ${post.teamName}`,
+      };
+    }
+    case 'message': {
+      const message = await deps.readMessage(request.messageId);
+      if (!message) return null;
+      return {
+        event: 'message',
+        actorId: message.senderId,
+        // The other member of the conversation (the sender is never told about their own message).
+        recipients: message.memberIds.filter((id) => id !== message.senderId),
+        sourceKey: request.messageId,
+        // Threads are keyed by the OTHER lifter — for the recipient, that is the sender.
+        path: `/messages/${message.senderId}`,
+        title: 'New message',
+        // The act only, never the words (plan decision 9; CLAUDE.md's privacy rule).
+        body: (name) => `${name} sent you a message`,
       };
     }
   }
