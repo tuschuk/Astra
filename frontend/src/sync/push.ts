@@ -49,7 +49,7 @@
  */
 import type { SqlDriver } from '@/db/driver';
 import { deletePostsTx, getRowsByIds, rootWorkoutIds, SYNC_ORDER, type RowByTable, type SyncedTable } from '@/db/dao';
-import { readUserSettingsRow } from '@/db/userSettings';
+import { readUserSettingsRow, settableFields } from '@/db/userSettings';
 import { mimeTypeForPath } from '@/social/mediaLimits';
 import { localPostImageFiles, localPostImageUri, type LocalPostImageFiles } from '@/social/postImages';
 
@@ -260,7 +260,7 @@ async function pushUserSettingsPhase(db: SqlDriver, transport: SyncTransport): P
   for (const pending of await pendingRows(db, 'user_settings')) {
     const row = await readUserSettingsRow(db, pending.rowId);
     if (row) {
-      await transport.pushUserSettings(row.user_id, { unit: row.unit, progress_pic_visibility: row.progress_pic_visibility });
+      await transport.pushUserSettings(row.user_id, settableFields(row));
       sent += 1;
     }
     await acknowledge(db, 'user_settings', [pending]);

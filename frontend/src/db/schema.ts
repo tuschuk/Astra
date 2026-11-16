@@ -9,8 +9,8 @@
  *     syncing a row is a straight copy, not a translation.
  *     Custom exercises can be soft-deleted (`exercises.deleted_at`, version 11, B31).
  *   - personal_records — the lifter's current PRs per exercise (version 4, B13).
- *   - user_settings — the lifter's kg/lb choice (version 6, B15) and who sees their new progress
- *     pics (version 10, B26).
+ *   - user_settings — the lifter's kg/lb choice (version 6, B15), who sees their new progress
+ *     pics (version 10, B26) and their four push-notification switches (version 16, B47).
  *   - workout_analyses — each finished workout's post-workout analysis, as the
  *     server function wrote it (version 7, B18; download-only).
  *   - flairs — the server's list of post flairs (version 8, B21; download-only, replaced whole).
@@ -402,8 +402,23 @@ alter table workout_analyses add column session_rpe_avg real;
 alter table workout_analyses add column session_load_per_rep_kg real;
 `;
 
+/**
+ * Version 16 (B47): the lifter's four push-notification switches on `user_settings`, mirroring
+ * the server's `…_push_notifications.sql` — whether a push is sent when someone follows them,
+ * comments on their post, upvotes their post, or posts to one of their Teams. 1 = on, 0 = off
+ * (SQLite has no true/false). Every existing row gets 1 for all four, the server's default: a
+ * switch exists to stop a notification, and nobody has turned one off yet. Saved offline and
+ * synced like the unit; the server reads its own copy when it decides whether to send.
+ */
+const V16 = `
+alter table user_settings add column notify_follows integer not null default 1;
+alter table user_settings add column notify_comments integer not null default 1;
+alter table user_settings add column notify_votes integer not null default 1;
+alter table user_settings add column notify_team_pushes integer not null default 1;
+`;
+
 /** Every schema version, oldest first. Append only. */
-export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15];
+export const MIGRATIONS: readonly string[] = [V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V12, V13, V14, V15, V16];
 
 /** The schema version a fully upgraded database is at. */
 export const SCHEMA_VERSION = MIGRATIONS.length;

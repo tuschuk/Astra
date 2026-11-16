@@ -809,3 +809,22 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - Trend charts are look-only (no tap-a-point, no zoom); B49's accessibility pass may raise the
     bar beyond one spoken sentence per chart.
   - `mmdc` render of the updated app-flow diagram was declined by the permission layer — Gate 2.
+- **B47 push-notifications (builder):**
+  - **Tristen's hands-on:** run `npx eas init` in `frontend/` (free, needs the Expo account) so
+    `app.json` gets `extra.eas.projectId`; until then every phone reads "Push notifications aren't
+    set up on this version of the app yet" and no token is registered. Then device check: iOS Expo
+    Go (or an Android development build — Expo Go on Android has no remote push) → Settings →
+    Turn on push notifications → allow; from a second account follow / comment / upvote / Team-post
+    → four pushes; tap each → the right screen; turn one switch off → only that one stops. Production
+    iOS needs an Apple Developer membership — a credential Tristen provides, never a purchase.
+  - No foreground notification handler is set, so a push arriving while Astra is open may not show
+    (setting one globally would also change the B17 timer's behaviour — a separate decision).
+  - Receipt polling (Expo's second stage) is not scheduled; ticket ids are in
+    `notification_log.tickets` for a manual check. Add a pg_cron poller only on evidence of loss.
+  - A `sending` row left by a crashed `notify` call is never retried (see plan build record 1).
+  - Not notified, by scope: vote flips, downvotes, re-shares, Team assignments, program votes /
+    comments (B41 tables — two more triggers on the same function when wanted), DMs (B48).
+  - Settings re-registers on every visit (one RPC) — fine at launch scale; revisit if measured.
+  - `mmdc` render of both updated diagrams was declined by the permission layer — Gate 2.
+  - Re-deploy `notify` from the repo (`supabase functions deploy notify --no-verify-jwt`) to swap the
+    comment-trimmed v1 for the commented source (logic identical).

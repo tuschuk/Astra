@@ -55,7 +55,7 @@ import type {
   WorkoutRow,
   WorkoutVisibility,
 } from '@/db/dao';
-import type { UserSettingsFields, UserSettingsRow } from '@/db/userSettings';
+import type { NotifyField, UserSettingsFields, UserSettingsRow } from '@/db/userSettings';
 import {
   PostAlreadyExistsError,
   type PostPushRow,
@@ -329,13 +329,24 @@ export class FakeServer implements SyncTransport {
 
   /**
    * Creates or changes a user's settings row directly (the signup trigger, or another device).
-   * The progress-pic choice (B26) defaults to 'private', the server column's default.
+   * The progress-pic choice (B26) defaults to 'private' and the four notification switches (B47)
+   * to on — the server columns' defaults; `notify` overrides any of the switches.
    */
-  seedUserSettings(userId: string, unit: WeightUnit, progressPicVisibility: WorkoutVisibility = 'private'): void {
+  seedUserSettings(
+    userId: string,
+    unit: WeightUnit,
+    progressPicVisibility: WorkoutVisibility = 'private',
+    notify: Partial<Pick<UserSettingsFields, NotifyField>> = {},
+  ): void {
     this.userSettings.set(userId, {
       user_id: userId,
       unit,
       progress_pic_visibility: progressPicVisibility,
+      notify_follows: true,
+      notify_comments: true,
+      notify_votes: true,
+      notify_team_pushes: true,
+      ...notify,
       updated_at: this.now(),
     });
   }
@@ -353,7 +364,10 @@ export class FakeServer implements SyncTransport {
   async pushUserSettings(userId: string, fields: UserSettingsFields): Promise<void> {
     this.userSettingsPushes.push({ userId, ...fields });
     this.guard();
-    if (this.userSettings.has(userId)) this.seedUserSettings(userId, fields.unit, fields.progress_pic_visibility);
+    if (this.userSettings.has(userId)) {
+      const { unit, progress_pic_visibility, ...notify } = fields;
+      this.seedUserSettings(userId, unit, progress_pic_visibility, notify);
+    }
   }
 
   /** The server's `workout_analyses` table (B18): workout id → row. */

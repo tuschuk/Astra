@@ -13,6 +13,8 @@ import { describe, expect, it } from '@jest/globals';
 import { prepareDatabase } from '@/db/database';
 import { deleteLocalRowsTx, writeLocal, type SetRow } from '@/db/dao';
 import { replaceFlairsTx } from '@/db/flairs';
+import { DEFAULT_USER_SETTINGS } from '@/db/userSettings';
+import { setNotificationSwitch } from '@/settings/notificationSettings';
 import { setProgressPicVisibility } from '@/settings/privacySettings';
 import { createUnitStore } from '@/settings/unitStore';
 import { createImagePost, createWorkoutPost } from '@/social/createPost';
@@ -295,8 +297,8 @@ describe('B15: the settings phase', () => {
     expect(await outboxSize(db)).toBe(0);
     // Exactly one successful upload (the offline attempt is recorded, then refused).
     expect(server.userSettingsPushes).toEqual([
-      { userId: USER_ID, unit: 'kg', progress_pic_visibility: 'private' },
-      { userId: USER_ID, unit: 'kg', progress_pic_visibility: 'private' },
+      { userId: USER_ID, ...DEFAULT_USER_SETTINGS, unit: 'kg' },
+      { userId: USER_ID, ...DEFAULT_USER_SETTINGS, unit: 'kg' },
     ]);
     expect((await pushOutbox(db, server)).userSettings).toBe(0);
   });
@@ -307,7 +309,7 @@ describe('B15: the settings phase', () => {
     await store.setUnit(db, USER_ID, 'lb');
     await store.setUnit(db, USER_ID, 'kg');
     expect((await pushOutbox(db, server)).userSettings).toBe(1);
-    expect(server.userSettingsPushes).toEqual([{ userId: USER_ID, unit: 'kg', progress_pic_visibility: 'private' }]);
+    expect(server.userSettingsPushes).toEqual([{ userId: USER_ID, ...DEFAULT_USER_SETTINGS, unit: 'kg' }]);
   });
 
   it('B26: a privacy choice made offline lands once, and a later unit toggle carries it rather than undoing it', async () => {
@@ -325,6 +327,27 @@ describe('B15: the settings phase', () => {
     await pushOutbox(db, server);
     expect(server.userSettings.get(USER_ID)).toMatchObject({ unit: 'kg', progress_pic_visibility: 'followers' });
     expect(await outboxSize(db)).toBe(0);
+  });
+
+  it('B47: a notification switch turned off offline lands on reconnect, and later changes carry it', async () => {
+    const { db, server, store } = await deviceWithAccount();
+    server.offline = true;
+    await setNotificationSwitch(db, USER_ID, 'notify_comments', false);
+    await expect(pushOutbox(db, server)).rejects.toThrow('Network request failed');
+    expect(server.userSettings.get(USER_ID)?.notify_comments).toBe(true);
+
+    server.offline = false;
+    expect((await pushOutbox(db, server)).userSettings).toBe(1);
+    expect(server.userSettings.get(USER_ID)).toMatchObject({
+      notify_follows: true,
+      notify_comments: false,
+      notify_votes: true,
+      notify_team_pushes: true,
+    });
+
+    await store.setUnit(db, USER_ID, 'kg');
+    await pushOutbox(db, server);
+    expect(server.userSettings.get(USER_ID)).toMatchObject({ unit: 'kg', notify_comments: false });
   });
 
   it('a toggle flipped while the upload is in flight is sent next time, not lost', async () => {

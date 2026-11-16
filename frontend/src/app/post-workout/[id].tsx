@@ -14,7 +14,8 @@
  *   - pick a flair (one at a time);
  *   - **Post** — saves the post on the phone, queued for upload (so it works with no signal and
  *     goes up on the next connection), then opens Home, where their own post appears once it is
- *     on the server. The post carries the workout's own visibility;
+ *     on the server. The post carries the workout's own visibility. The very first Post on this
+ *     phone also asks, once, whether Astra may send push notifications (B47, `askOnce.ts`);
  *   - **Skip** — makes no post and goes to the Workout tab;
  *   - **Back** — returns to the analysis.
  *
@@ -37,6 +38,7 @@ import type { FlairRow } from '@/db/dao';
 import type { SqlExecutor } from '@/db/driver';
 import { readFlairs } from '@/db/flairs';
 import { useAppDatabase } from '@/db/useAppDatabase';
+import { maybeAskForPushOnce } from '@/notifications/askOnce';
 import { createWorkoutPost, hasPostForWorkout, PostRefusedError } from '@/social/createPost';
 import { workoutDateLabel } from '@/workout/format';
 import { colors, radii, spacing } from '@/theme';
@@ -115,6 +117,8 @@ export default function PostWorkoutScreen() {
     setError(null);
     try {
       await createWorkoutPost(db, userId, id, flairId);
+      // B47: the first Post is when push becomes worth asking for — once per phone, never awaited.
+      void maybeAskForPushOnce(userId);
       router.replace('/');
     } catch (caught) {
       if (caught instanceof PostRefusedError && caught.reason === 'already-posted') {

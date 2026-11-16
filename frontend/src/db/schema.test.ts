@@ -119,7 +119,16 @@ describe('migrate', () => {
     expect(await db.getFirstAsync('select count(*) as n from workouts')).toEqual({ n: 1 });
     expect(await db.getFirstAsync('select count(*) as n from outbox')).toEqual({ n: 1 });
     const columns = await db.getAllAsync<{ name: string }>('pragma table_info(user_settings)');
-    expect(columns.map((c) => c.name)).toEqual(['user_id', 'unit', 'updated_at', 'progress_pic_visibility']);
+    expect(columns.map((c) => c.name)).toEqual([
+      'user_id',
+      'unit',
+      'updated_at',
+      'progress_pic_visibility',
+      'notify_follows',
+      'notify_comments',
+      'notify_votes',
+      'notify_team_pushes',
+    ]);
   });
 
   it('B18: upgrades a version-6 phone to version 7 (workout_analyses), keeping its workouts and outbox', async () => {
@@ -214,6 +223,35 @@ describe('migrate', () => {
       unit: 'kg',
       updated_at: 't',
       progress_pic_visibility: 'private',
+      notify_follows: 1,
+      notify_comments: 1,
+      notify_votes: 1,
+      notify_team_pushes: 1,
+    });
+    expect(await db.getFirstAsync('select count(*) as n from outbox')).toEqual({ n: 1 });
+  });
+
+  it('B47: upgrades a version-15 phone to version 16, keeping its settings and turning all four push switches on', async () => {
+    const db = createNodeSqliteDriver();
+    for (const migration of MIGRATIONS.slice(0, 15)) await db.execAsync(migration);
+    await db.execAsync('pragma user_version = 15');
+    await db.runAsync(
+      "insert into user_settings (user_id, unit, progress_pic_visibility, updated_at) values ('u', 'kg', 'followers', 't')",
+    );
+    await db.runAsync("insert into outbox (tbl, row_id, queued_at) values ('user_settings', 'u', 't')");
+
+    await migrate(db);
+
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: SCHEMA_VERSION });
+    expect(await db.getFirstAsync('select * from user_settings')).toEqual({
+      user_id: 'u',
+      unit: 'kg',
+      updated_at: 't',
+      progress_pic_visibility: 'followers',
+      notify_follows: 1,
+      notify_comments: 1,
+      notify_votes: 1,
+      notify_team_pushes: 1,
     });
     expect(await db.getFirstAsync('select count(*) as n from outbox')).toEqual({ n: 1 });
   });
@@ -292,8 +330,7 @@ describe('migrate', () => {
 
     await migrate(db);
 
-    expect(SCHEMA_VERSION).toBe(15);
-    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: 15 });
+    expect(await db.getFirstAsync('pragma user_version')).toEqual({ user_version: SCHEMA_VERSION });
     expect(
       await db.getFirstAsync(
         `select engine_version, total_volume_kg, trend_sessions, trend_volume_avg_kg, trend_rpe_avg,

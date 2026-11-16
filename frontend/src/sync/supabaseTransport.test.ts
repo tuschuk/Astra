@@ -6,6 +6,8 @@
 import { describe, expect, it } from '@jest/globals';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+import { DEFAULT_USER_SETTINGS } from '@/db/userSettings';
+
 import { CHILD_PAGE_ROWS, afterCursorFilter, createSupabaseTransport, toAnalysisRow } from './supabaseTransport';
 import { PostAlreadyExistsError } from './transport';
 
@@ -86,14 +88,23 @@ describe('createSupabaseTransport', () => {
   });
 
   it('B15: reads the user’s one settings row, and null when there is none', async () => {
-    const row = { user_id: 'u1', unit: 'kg', progress_pic_visibility: 'followers', updated_at: '2026-11-15T00:00:00+00:00' };
+    const row = {
+      user_id: 'u1',
+      unit: 'kg',
+      progress_pic_visibility: 'followers',
+      notify_follows: true,
+      notify_comments: false,
+      notify_votes: true,
+      notify_team_pushes: true,
+      updated_at: '2026-11-15T00:00:00+00:00',
+    };
     const { client, requests } = recordingClient([{ data: row }, { data: null }]);
     const transport = createSupabaseTransport(client);
     expect(await transport.pullUserSettings('u1')).toEqual(row);
     expect(await transport.pullUserSettings('u1')).toBeNull();
     expect(requests[0]).toEqual([
       ['from', 'user_settings'],
-      ['select', 'user_id,unit,progress_pic_visibility,updated_at'],
+      ['select', 'user_id,unit,progress_pic_visibility,notify_follows,notify_comments,notify_votes,notify_team_pushes,updated_at'],
       ['eq', 'user_id', 'u1'],
       ['maybeSingle'],
     ]);
@@ -111,19 +122,40 @@ describe('createSupabaseTransport', () => {
     expect((await createSupabaseTransport(client).pullUserSettings('u1'))?.progress_pic_visibility).toBe('private');
   });
 
-  it('B15/B26: saves the unit and progress-pic choice with an update by user id — never an upsert, never updated_at', async () => {
+  it('B47: reads a missing or damaged notification switch as on (the column default)', async () => {
+    const { client } = recordingClient([{ data: { user_id: 'u1', unit: 'lb', progress_pic_visibility: 'private', notify_votes: false, updated_at: 't' } }]);
+    expect(await createSupabaseTransport(client).pullUserSettings('u1')).toMatchObject({
+      notify_follows: true,
+      notify_comments: true,
+      notify_votes: false,
+      notify_team_pushes: true,
+    });
+  });
+
+  it('B15/B26/B47: saves every settable field with an update by user id — never an upsert, never updated_at', async () => {
     const { client, requests } = recordingClient();
-    await createSupabaseTransport(client).pushUserSettings('u1', { unit: 'kg', progress_pic_visibility: 'followers' });
+    const fields = { ...DEFAULT_USER_SETTINGS, unit: 'kg' as const, progress_pic_visibility: 'followers' as const, notify_team_pushes: false };
+    await createSupabaseTransport(client).pushUserSettings('u1', fields);
     expect(requests[0]).toEqual([
       ['from', 'user_settings'],
-      ['update', { unit: 'kg', progress_pic_visibility: 'followers' }],
+      [
+        'update',
+        {
+          unit: 'kg',
+          progress_pic_visibility: 'followers',
+          notify_follows: true,
+          notify_comments: true,
+          notify_votes: true,
+          notify_team_pushes: false,
+        },
+      ],
       ['eq', 'user_id', 'u1'],
     ]);
   });
 
   it('B15: throws when the server refuses the settings update', async () => {
     const { client } = recordingClient([{ error: { message: 'permission denied' } }]);
-    await expect(createSupabaseTransport(client).pushUserSettings('u1', { unit: 'lb', progress_pic_visibility: 'private' })).rejects.toThrow(
+    await expect(createSupabaseTransport(client).pushUserSettings('u1', DEFAULT_USER_SETTINGS)).rejects.toThrow(
       'Upload of settings failed: permission denied',
     );
   });

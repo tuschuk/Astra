@@ -4,12 +4,14 @@
  * Loads the three brand font families (Permanent Marker for headings,
  * Space Grotesk for UI text, Manrope for body copy), wraps everything in
  * AuthProvider (who is signed in), starts the on-device database and sync
- * engine (useSync), holds the splash screen until fonts and
+ * engine (useSync), wires push notifications (usePushNotifications, B47 —
+ * silent token refresh and opening the screen a tapped push is about),
+ * holds the splash screen until fonts and
  * the saved session are both ready, then mounts the router stack with the
  * signed-in tabs and the signed-out sign-in/sign-up screens behind guards.
  */
-import React, { useEffect } from 'react';
-import { ErrorBoundary as RouterErrorBoundary, Stack, type ErrorBoundaryProps } from 'expo-router';
+import React, { useCallback, useEffect } from 'react';
+import { ErrorBoundary as RouterErrorBoundary, Stack, useRouter, type ErrorBoundaryProps, type Href } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import * as SplashScreen from 'expo-splash-screen';
 import { useFonts } from 'expo-font';
@@ -28,6 +30,7 @@ import {
 } from '@expo-google-fonts/manrope';
 
 import { AuthProvider, useAuth } from '@/auth/AuthProvider';
+import { usePushNotifications } from '@/notifications/usePushNotifications';
 import { useSync } from '@/sync/useSync';
 import { colors } from '@/theme';
 
@@ -109,6 +112,12 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
   // Opens the on-device database and, while signed in, keeps it in sync
   // with the server (src/sync/useSync.ts).
   useSync(session?.user.id ?? null);
+
+  // Push (B47): re-save this phone's token if permission was already given
+  // (never prompts), and open the screen a tapped notification is about.
+  const router = useRouter();
+  const navigate = useCallback((path: Href) => router.push(path), [router]);
+  usePushNotifications({ userId: session?.user.id ?? null, ready: ready && status === 'signedIn', navigate });
 
   useEffect(() => {
     if (ready) {

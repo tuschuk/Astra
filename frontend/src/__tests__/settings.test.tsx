@@ -14,6 +14,11 @@
  * And B32's Account additions: Export your data runs the export flow (mocked) and shows its
  * line; Delete account opens the delete screen.
  *
+ * And B47's Notifications section: four switches on by default; turning each off saves exactly
+ * that one column (offline, one upload queued); stored values shown on open; a failed save
+ * reverts; the push-state line for each state, with "Turn on push notifications" asking only when
+ * tapped; sign-out forgets the push token first. The push port is a stand-in.
+ *
  * Settings is rendered next to the screen that shows the weights, so the test sees one tree
  * re-render, the way a mounted screen under Settings would. The router is a stub; the database
  * comes through a mocked `openAppDatabase`.
@@ -24,8 +29,10 @@ import { fireEvent, screen, waitFor } from '@testing-library/react-native';
 import { lbToKg } from '@training-math';
 
 import type { SqlDriver } from '@/db/driver';
+import type { PushState } from '@/notifications/pushRegistration';
+import { setNotificationSwitch } from '@/settings/notificationSettings';
 import { replaceFlairsTx } from '@/db/flairs';
-import { readUserSettingsRow } from '@/db/userSettings';
+import { DEFAULT_USER_SETTINGS, readUserSettingsRow } from '@/db/userSettings';
 import { libraryExerciseId } from '@/library/uuidv5';
 import { setProgressPicVisibility } from '@/settings/privacySettings';
 import { unitStore } from '@/settings/unitStore';
@@ -39,7 +46,7 @@ import { startActiveWorkout } from '@/workout/activeWorkout';
 import WorkoutScreen from '@/app/(tabs)/workout';
 import ActiveWorkoutScreen from '@/app/active-workout';
 import { EXPORT_OFFLINE } from '@/account/exportData';
-import SettingsScreen, { BODY_DATA_LINE, EXPORT_NOTE } from '@/app/settings';
+import SettingsScreen, { BODY_DATA_LINE, EXPORT_NOTE, NOTIFICATION_ROWS, PUSH_STATE_LINES } from '@/app/settings';
 import SavedWorkoutScreen from '@/app/workout/[id]';
 
 const mockOpenDatabase = jest.fn<() => Promise<SqlDriver>>();
@@ -60,6 +67,22 @@ jest.mock('@/account/exportData', () => ({
   exportMyData: (client: unknown) => mockExport(client),
 }));
 
+// B47: the push port is a stand-in, so each test sets where push stands; it has its own tests.
+const mockPush = {
+  register: jest.fn<(userId: string, options: { ask: boolean }) => Promise<PushState>>(),
+  watchTokenChanges: jest.fn(() => () => {}),
+  unregister: jest.fn(async () => {}),
+};
+// A getter, defined explicitly: the factory runs before `mockPush` is initialised (jest.mock is
+// hoisted), and Babel's object-spread helper would read a literal getter right away.
+jest.mock('@/notifications/pushRegistration', () =>
+  Object.defineProperty(
+    { ...jest.requireActual<typeof import('@/notifications/pushRegistration')>('@/notifications/pushRegistration') },
+    'pushRegistration',
+    { get: () => mockPush },
+  ),
+);
+
 const mockRouter = { push: jest.fn(), replace: jest.fn(), back: jest.fn(), canGoBack: jest.fn(() => false) };
 let mockParams: { id?: string } = {};
 jest.mock('expo-router', () => {
@@ -78,6 +101,7 @@ beforeEach(async () => {
   unitStore.reset();
   db = await createPreparedDb();
   mockOpenDatabase.mockResolvedValue(db);
+  mockPush.register.mockResolvedValue('unavailable');
 });
 
 afterEach(() => {
@@ -96,14 +120,13 @@ async function toggleReady(): Promise<void> {
 }
 
 describe('Settings screen (B15)', () => {
-  it('shows pounds selected by default, the signed-in email, and no Notifications yet', async () => {
+  it('shows pounds selected by default and the signed-in email', async () => {
     await renderSignedIn(<SettingsScreen />);
     expect(screen.getByText('Units')).toBeTruthy();
     expect(screen.getByLabelText('Pounds').props.accessibilityState.selected).toBe(true);
     expect(screen.getByLabelText('Kilograms').props.accessibilityState.selected).toBe(false);
     expect(await screen.findByText('Signed in as')).toBeTruthy();
     expect(screen.getByText('lifter@example.com')).toBeTruthy();
-    expect(screen.queryByText(/Notifications/)).toBeNull();
   });
 
   it('step DoD: switching units converts every displayed weight without changing a stored kg value', async () => {
@@ -179,11 +202,12 @@ describe('Settings screen (B15)', () => {
     expect(weights[1].weight_kg).toBe(100);
   });
 
-  it('Sign out signs out of this device', async () => {
+  it('Sign out signs out of this device, forgetting its push token first (B47)', async () => {
     const view = await renderSignedIn(<SettingsScreen />);
     await screen.findByText('lifter@example.com');
     await fireEvent.press(screen.getByLabelText('Sign out'));
     await waitFor(() => expect(screen.queryByText('lifter@example.com')).toBeNull());
+    expect(mockPush.unregister).toHaveBeenCalledTimes(1);
     await view.unmount();
   });
 
@@ -251,6 +275,86 @@ describe('Settings — Privacy (B26)', () => {
     expect(await screen.findByText('Your privacy setting couldn’t be saved. Try again.')).toBeTruthy();
     expect(screen.getByLabelText(ONLY_ME).props.accessibilityState.selected).toBe(true);
     warn.mockRestore();
+  });
+});
+
+describe('Settings — Notifications (B47)', () => {
+  /** The switch for one row, by its screen-reader label. */
+  const switchFor = (label: string) => screen.getByLabelText(`Push notifications for ${label.toLowerCase()}`);
+
+  /** Waits until the switches can be used (the settings have been read). */
+  async function switchesReady(): Promise<void> {
+    await waitFor(() => expect(switchFor(NOTIFICATION_ROWS[0].label).props.disabled).toBe(false));
+  }
+
+  it('shows all four switches on by default, and stays usable while push is unavailable on this build', async () => {
+    await renderSignedIn(<SettingsScreen />);
+    expect(screen.getByText('Notifications')).toBeTruthy();
+    await switchesReady();
+    for (const row of NOTIFICATION_ROWS) expect(switchFor(row.label).props.value).toBe(true);
+    expect(await screen.findByText(PUSH_STATE_LINES.unavailable)).toBeTruthy();
+    expect(screen.queryByLabelText('Turn on push notifications')).toBeNull();
+    // The screen checks push without ever prompting.
+    expect(mockPush.register).toHaveBeenCalledWith(SIGNED_IN_USER_ID, { ask: false });
+  });
+
+  for (const row of NOTIFICATION_ROWS) {
+    it(`step DoD: turning off "${row.label}" saves exactly that switch, offline, with one upload queued`, async () => {
+      await renderSignedIn(<SettingsScreen />);
+      await switchesReady();
+      await fireEvent(switchFor(row.label), 'valueChange', false);
+      await waitFor(async () => expect((await readUserSettingsRow(db, SIGNED_IN_USER_ID))?.[row.field]).toBe(false));
+      const stored = await readUserSettingsRow(db, SIGNED_IN_USER_ID);
+      for (const other of NOTIFICATION_ROWS) {
+        if (other.field !== row.field) expect(stored?.[other.field]).toBe(true);
+      }
+      expect(stored).toMatchObject({ unit: DEFAULT_USER_SETTINGS.unit, progress_pic_visibility: 'private' });
+      expect((await pendingRows(db, 'user_settings')).map((p) => p.rowId)).toEqual([SIGNED_IN_USER_ID]);
+      expect(switchFor(row.label).props.value).toBe(false);
+    });
+  }
+
+  it('shows the phone’s stored switches when opened', async () => {
+    await setNotificationSwitch(db, SIGNED_IN_USER_ID, 'notify_votes', false);
+    await renderSignedIn(<SettingsScreen />);
+    await switchesReady();
+    expect(switchFor('Upvotes on your posts').props.value).toBe(false);
+    expect(switchFor('New followers').props.value).toBe(true);
+  });
+
+  it('a failed save moves the switch back and says so', async () => {
+    await renderSignedIn(<SettingsScreen />);
+    await switchesReady();
+    await db.execAsync('drop table outbox');
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    await fireEvent(switchFor('Team posts'), 'valueChange', false);
+    expect(await screen.findByText('Your notification setting couldn’t be saved. Try again.')).toBeTruthy();
+    expect(switchFor('Team posts').props.value).toBe(true);
+    warn.mockRestore();
+  });
+
+  it('when push is off, "Turn on push notifications" asks the phone and shows the result', async () => {
+    mockPush.register.mockResolvedValueOnce('off').mockResolvedValueOnce('on');
+    await renderSignedIn(<SettingsScreen />);
+    expect(await screen.findByText(PUSH_STATE_LINES.off)).toBeTruthy();
+    await fireEvent.press(screen.getByLabelText('Turn on push notifications'));
+    expect(await screen.findByText(PUSH_STATE_LINES.on)).toBeTruthy();
+    expect(mockPush.register).toHaveBeenLastCalledWith(SIGNED_IN_USER_ID, { ask: true });
+    expect(screen.queryByLabelText('Turn on push notifications')).toBeNull();
+  });
+
+  it('explains a refusal in phone settings, with no button to ask again', async () => {
+    mockPush.register.mockResolvedValue('denied');
+    await renderSignedIn(<SettingsScreen />);
+    expect(await screen.findByText(PUSH_STATE_LINES.denied)).toBeTruthy();
+    expect(screen.queryByLabelText('Turn on push notifications')).toBeNull();
+  });
+
+  it('offers Try again after a failed registration', async () => {
+    mockPush.register.mockResolvedValue('failed');
+    await renderSignedIn(<SettingsScreen />);
+    expect(await screen.findByText(PUSH_STATE_LINES.failed)).toBeTruthy();
+    expect(screen.getByLabelText('Try again')).toBeTruthy();
   });
 });
 

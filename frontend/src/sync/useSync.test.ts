@@ -8,7 +8,7 @@ import { renderHook, waitFor } from '@testing-library/react-native';
 import { prepareDatabase } from '@/db/database';
 import type { SqlDriver } from '@/db/driver';
 import { writeLocal } from '@/db/dao';
-import { writeUserSettingsRowTx } from '@/db/userSettings';
+import { DEFAULT_USER_SETTINGS, writeUserSettingsRowTx } from '@/db/userSettings';
 import { createUnitStore } from '@/settings/unitStore';
 import { FakeServer } from '@/test-utils/fakeTransport';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
@@ -56,7 +56,7 @@ describe('useSync', () => {
 
   it('B15: loads the signed-in lifter’s unit, and a unit changed on another device reaches the store', async () => {
     const db = await prepareDatabase(createNodeSqliteDriver());
-    await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, { user_id: USER_ID, unit: 'kg', progress_pic_visibility: 'private', updated_at: 't' }));
+    await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, { ...DEFAULT_USER_SETTINGS, user_id: USER_ID, unit: 'kg', progress_pic_visibility: 'private', updated_at: 't' }));
     const server = new FakeServer();
     const store = createUnitStore();
     const { deps } = makeDeps(db, server);
