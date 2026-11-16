@@ -42,6 +42,8 @@ team; see "Team moderation"),
 `program_visibility` enum, `program_team_shares`, `private.program_visible`, the widened `programs`
 read policy, `private.program_tree_json` and the `program_payload` function; see "Program
 visibility"),
+`20261116004257_marketplace_search.sql` (B40, applied live — the generated `programs.search`
+tsvector, its GIN index and the published-browse partial index; see "Marketplace search"),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -342,6 +344,7 @@ erDiagram
     uuid user_id FK "the author; the only person who can change it"
     text name "1-100 chars"
     program_visibility visibility "private (default), followers, team, published (B39)"
+    tsvector search "GENERATED from name, 'simple' config (B40); server-only, never synced"
     timestamptz deleted_at "soft delete; null while live"
     timestamptz created_at
     timestamptz updated_at
@@ -503,7 +506,7 @@ Migration `20261115235525_program_visibility.sql`. Who besides its author may se
 - **`public.program_payload(p_program)`** (definer, `stable`, EXECUTE revoked from public/anon,
   granted to authenticated): the program's live tree as JSON — the same shape as
   `team_program_payload` — when `program_visible` admits the caller, else null. This is how a
-  non-author reads a shared program's content (online; no app screen calls it until B40).
+  non-author reads a shared program's content (online; the Marketplace program page calls it, B40).
 - **`private.program_tree_json(pid)`** — the one tree builder (gate-free, `private` only). Both
   `program_payload` and `team_program_payload` build through it; `team_program_payload`'s gate is
   unchanged (a pushed or assigned program stays team-readable whatever its visibility).
@@ -515,6 +518,27 @@ Migration `20261115235525_program_visibility.sql`. Who besides its author may se
   0 rows; published + soft-deleted → C 0 / null while A still reads the row; B's bare reads of the
   three child tables 0 rows at every level; a private program pushed to T still returns its tree
   through `team_program_payload` (B37 unregressed).
+
+## Marketplace search (B40)
+
+- **`programs.search`** — `tsvector GENERATED ALWAYS AS (to_tsvector('simple', name)) STORED`.
+  Nobody writes it; it follows `name`. `'simple'` (no stemming, no stop words): names are proper
+  nouns and jargon. Whole-word matching only — "starting" finds "Starting Strength", "start" does
+  not. **It must stay out of the device's `TABLE_COLUMNS.programs`**: sync selects and uploads
+  named columns, and an upload naming a generated column is refused by Postgres. The phone's
+  mirror has no such column (no device schema change).
+- **`programs_search_idx`** — GIN on `search`. The Marketplace's search is PostgREST
+  `search=wfts(simple).<typed text>` (`websearch_to_tsquery`, safe for raw input).
+- **`programs_published_idx`** — `(created_at desc, id desc) WHERE visibility = 'published' AND
+  deleted_at IS NULL`: the browse list's exact shape.
+- **No policy change.** The browse read is B39's `visible programs are readable`; the app also
+  filters `visibility = published` and `deleted_at is null` itself, because the author arm would
+  otherwise return the reader's own private and deleted programs. Another lifter's non-published
+  rows never return either way.
+- Live-probed at B40 (rolled back): a published row and a private row of A both matched the word;
+  B, as `authenticated`, read 1 row by search with and without the visibility filter (the
+  published one), `program_payload` non-null for the published and null for the private; the
+  column is `attgenerated = 's'` and non-null on every existing row.
 
 ## Team coaching (B37)
 

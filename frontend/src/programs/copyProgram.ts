@@ -165,10 +165,14 @@ export async function createProgramFromPayload(
   return { programId: program.id, skippedExercises };
 }
 
-/** The confirmation line about slots that didn't copy, or null when every exercise came across. */
-export function skippedExercisesLine(skipped: number): string | null {
+/**
+ * The confirmation line about slots that didn't copy, or null when every exercise came across.
+ * `owner` names whose custom exercises they were: "coach" on a team (B37), "author" for a
+ * Marketplace program (B40) — same rule, the right word for where the lifter got it.
+ */
+export function skippedExercisesLine(skipped: number, owner: 'coach' | 'author' = 'coach'): string | null {
   if (skipped === 0) return null;
   return skipped === 1
-    ? '1 exercise is the coach’s own and didn’t copy.'
-    : `${skipped} exercises are the coach’s own and didn’t copy.`;
+    ? `1 exercise is the ${owner}’s own and didn’t copy.`
+    : `${skipped} exercises are the ${owner}’s own and didn’t copy.`;
 }

@@ -81,7 +81,18 @@ flowchart TD
   CommentQ -->|"select / insert comments (RLS: post visible to me)"| DB
   FollowQ -->|"select profiles / blocks / follows; insert / delete follows"| DB
   DispUnit -->|"viewer's unit: PostCard sets via formatSet / formatDropSet"| Home
-  Tabs --> Market["Marketplace<br/>programs (MKT-1..5)<br/>today: featured-section skeleton, placeholder cards"]
+  Tabs --> Market["Marketplace tab (app/(tabs)/marketplace.tsx, B40: MKT-1) — online only<br/>search box (debounced 300 ms; blank = browse at once) → cards: program name + 'by author',<br/>newest first, 30 a page + Show more (grow the limit);<br/>no match → 'No programs match …'; nothing published → empty state;<br/>offline → MARKETPLACE_OFFLINE + Retry. Featured / votes / comments: not built (B41)"]
+  Market -->|"loadPublishedPrograms(client, { query, limit })"| MarketQ["social/marketplace.ts (B40) — online only<br/>loadPublishedPrograms: programs.select(id, name, user_id, visibility, created_at,<br/>author:profiles!programs_user_id_fkey) eq visibility published, is deleted_at null,<br/>[textSearch('search', words, websearch, simple)] order created_at, id desc, limit;<br/>loadProgramPage: same row by id + rpc program_payload → parseProgramPayload (teamCoaching.ts);<br/>programFacts / programFactsLine: 'N weeks · M days/week' (range when weeks differ)"]
+  MarketQ -->|"select programs (B39 policy: published to any signed-in user; the author arm is why<br/>the app filters visibility + deleted_at itself); search = wfts on the generated column;<br/>rpc program_payload (null unless program_visible)"| DB
+  Market -->|"tap a card: router.push('/marketplace-program/[id]')"| MarketProg["Marketplace program page (app/marketplace-program/[id].tsx, B40: MKT-4, MKT-5)<br/>name · 'by author' (→ profile/[id]) · '2 weeks · 2–3 days/week' ·<br/>ProgramPayloadView (every week, workout, slot + targets in the display unit);<br/>others' program: Save and Start (primary) · Save to my programs; 'This will replace your<br/>current program' when readActiveRun ≠ null; buttons spent after a copy; customs counted<br/>('… the author's own and didn't copy') → stays with 'Go to the Workout tab';<br/>own program: 'This is your program' + Open in editor → program/[id];<br/>no workouts → 'This program has no workouts yet'; gone → 'no longer available'; offline → Retry"]
+  MarketProg -->|"loadProgramPage(client, id)"| MarketQ
+  MarketProg -->|"readActiveRun (only for the replace warning)"| RunsMod
+  MarketProg -->|"Save and Start → saveAndStartProgram → router.push('/workout') (run card waits there)"| SaveStart["programs/saveAndStart.ts (B40): the ONE copy-then-run home<br/>createProgramFromPayload (throws → nothing saved) → startProgramRun<br/>(throws → copy kept, started: false); callers: Marketplace page, team assignment Start"]
+  MarketProg -->|"Save to my programs → createProgramFromPayload"| CopyProg
+  SaveStart --> CopyProg
+  SaveStart --> RunsMod
+  MarketProg --> PayloadView["ProgramPayloadView (components/programs, B40)<br/>the one drawing of a server-sent program: Week N → workout cards → slot lines<br/>(name or 'Deleted exercise', formatProgramTargets); used by TeamProgramSheet too"]
+  MarketProg -->|"Open in editor (own program)"| ProgramScr
   Tabs --> Workout["Workout tab (on focus: re-read astra.db + readActiveRun)<br/>no draft, no run: Start empty workout · Start from a program (→ ProgramPickerSheet, B35)<br/>no draft, run active (B35): card 'Running · program name · Next: Week N · workout name',<br/>Start next session (primary) · Start empty workout · Stop program (asks first);<br/>run with no session left: 'This program has no next session.' + Stop<br/>draft on phone (run card hidden): Resume workout / Discard (asks first)<br/>Tool Kit tiles: 1RM / RPE / %1RM / Plates / Timer open the Tool Kit at that tool (B16, B17)<br/>Past workouts: newest 100 finished, date + duration + counts<br/>Your programs (B34, always enabled) → /programs"]
   Workout -->|"Your programs: router.push('/programs')"| ProgramsScr["Programs (app/programs.tsx, B34)<br/>listPrograms on focus: my live programs, newest first,<br/>name + '2 weeks · 6 workouts'; empty state explains a program;<br/>New program → NewProgramForm (Modal; name 1–100 via assertValidProgramName,<br/>Create disabled until valid) → createProgram → router.push program/[id]; Back"]
   ProgramsScr -->|"tap a program: router.push('/program/[id]')"| ProgramScr["Program page = editor (app/program/[id].tsx, B34, PRG-2)<br/>readProgramTree on focus; name box autosaves (renameProgram);<br/>B39 (PRG-4) Who can see this: ProgramVisibilitySection<br/>(chips Only you · Followers · Team · Published + meaning line → setProgramVisibility, offline);<br/>one card per week 'Week N': its workouts ('Day A' / 'Workout N' + 'N exercises'),<br/>Add workout · Remove week (asks first) · per workout Remove (asks first);<br/>Add week; Delete program (asks first) → Back;<br/>unknown / deleted / someone else's id → 'isn't one of yours'"]
@@ -91,7 +102,6 @@ flowchart TD
   VisSection --> SharesMod["social/programShares.ts (B39) — online only<br/>listProgramShares · shareProgramWithTeam (23505 = done; 42501 → 'only teams you're in /<br/>wait for it to sync') · unshareProgramFromTeam"]
   SharesMod -->|"program_team_shares (RLS: author, to a team they're in)"| DB
   VisSection -->|"loadTeamsOf"| TeamsMod
-  DB -.->|"rpc program_payload(p_program): a shared program's tree for anyone program_visible admits —<br/>NO app caller yet (B40 Marketplace is the first); probed through the API only"| DB
   ProgramsScr --> ProgramsMod
   ProgramScr --> ProgramsMod
   ProgWorkoutScr --> ProgramsMod
@@ -117,8 +127,10 @@ flowchart TD
   CoachHook -->|"Push a program / Push a workout / Assign: ProgramPickerSheet onPick (no run started)"| PickerSheet
   CoachHook --> PushSheet["CoachPushSheet (components/teams, B37, a Modal)<br/>announcement box (≤ 2000) → Push; or the picked program's workouts<br/>(readProgramTree on the coach's phone) → tap one to push; refusal line"]
   PushSheet -->|"readProgramTree(db, me, programId)"| LocalDB
-  CoachHook --> TeamSheetC["TeamProgramSheet (components/teams, B37, a Modal)<br/>payload weeks → workouts → slots + targets (display unit); null → 'no longer available';<br/>footer: assignment → Start program · pushed program → Save to my programs ·<br/>pushed workout → Start this workout; button gone once done"]
-  TeamSheetC -->|"Start program / Save: createProgramFromPayload (one transaction, member-owned,<br/>coach's customs → no exercise) → [Start] startProgramRun → removeAssignment"| CopyProg["programs/copyProgram.ts (B37)<br/>payload → new program, weeks, workouts, slots (fresh ids, positions 0..n)<br/>via writeLocalRowsTx ×4 → outbox → normal program sync"]
+  CoachHook --> TeamSheetC["TeamProgramSheet (components/teams, B37, a Modal)<br/>payload weeks → workouts → slots + targets (display unit, drawn by ProgramPayloadView, B40);<br/>null → 'no longer available';<br/>footer: assignment → Start program · pushed program → Save to my programs ·<br/>pushed workout → Start this workout; button gone once done"]
+  TeamSheetC --> PayloadView
+  TeamSheetC -->|"Start program: saveAndStartProgram (B40) → removeAssignment"| SaveStart
+  TeamSheetC -->|"Save: createProgramFromPayload (one transaction, member-owned,<br/>coach's customs → no exercise)"| CopyProg["programs/copyProgram.ts (B37)<br/>payload → new program (born private), weeks, workouts, slots (fresh ids, positions 0..n)<br/>via writeLocalRowsTx ×4 → outbox → normal program sync"]
   CopyProg --> LocalDB
   TeamSheetC -->|"Start this workout: startPushedWorkout (title, exercises + target notes,<br/>no program link, skips what canLogExercise refuses) → router.push('/active-workout')"| Logger
   CoachHook --> CoachMod["social/teamCoaching.ts (B37) — online only<br/>loadTeamPosts · pushAnnouncement (assertValidTeamAnnouncement) · pushProgram · pushWorkout ·<br/>deleteTeamPost · assignProgram · removeAssignment · myAssignments · teamAssignments ·<br/>fetchProgramPayload / fetchWorkoutPayload (parsed, never trusted raw); 42501 → calm sentence"]
@@ -675,8 +687,8 @@ flowchart TD
    **Published** — a tap saves on the phone, offline too, and the server enforces it once synced.
    Choosing **Team** (needs a connection) lists the lifter's Teams to tick; a share with a Team
    they've since left shows as "Still shared with N teams you left" with **Stop sharing**.
-   Others can't open a shared program in the app yet — the server's `program_payload` is ready
-   for the Marketplace (B40).
+   A **Published** program appears on the Marketplace (28); other levels have no browsing
+   screen yet.
 24. **Run a program (B35, PRG-3, LOG-1), with no signal needed.** On the Workout tab, **Start from
    a program** lists the lifter's programs (one with no workouts is shown but can't be picked);
    picking one starts running it at its first session. The tab then shows the program and
@@ -721,8 +733,22 @@ flowchart TD
    feed" marker with **Unhide**. The owner can **Remove** any push in the Coach's corner, and
    **Delete team** → confirm deletes it for everyone (posts and workouts stay with their owners)
    and returns to Communities. Anyone else's attempt is refused by the server.
-28. Everything else is a placeholder that renders its final layout with inert controls
-   (Marketplace, and the Gyms half of Communities).
+28. **Marketplace (B40, MKT-1, MKT-4, MKT-5) — browsing needs a connection.** The Marketplace
+   tab lists every published program, newest first, as a card with its name and author; 30 at a
+   time with **Show more**. Typing in the search box narrows the list to programs whose name
+   holds every typed word (whole words — "strength" finds "Starting Strength", "start" doesn't);
+   clearing it shows everything again. Tapping a card opens the program's page: its name, "by
+   <author>" (tap → their profile), "8 weeks · 3 days/week" (a range like "2–3" when weeks
+   differ), then every week, workout and exercise with its targets in the lifter's unit.
+   **Save and Start** copies it into the lifter's own programs (private) and makes it the active
+   program — the app goes to the Workout tab, where "Start next session" opens Week 1's first
+   workout prefilled. If a program is already running, the page warns that this replaces it.
+   **Save to my programs** copies without starting. The author's own custom exercises can't be
+   copied; the page says how many and offers "Go to the Workout tab". On the lifter's own
+   program the page offers **Open in editor** instead. The copy and the run are on the phone
+   from then on and work offline. Featured programs, votes and comments are not built yet (B41).
+29. Everything else is a placeholder that renders its final layout with inert controls
+   (the Gyms half of Communities).
 
 ## Data path today
 

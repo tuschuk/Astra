@@ -71,6 +71,14 @@
  * cascades its shares). Who may share — the author, with a Team they're in — is NOT imitated
  * (the `refuse` option lets a test stand in for that refusal); probed live at B39.
  *
+ * B40 adds `programs` (seeded as server rows: `{ id, user_id, name, visibility, deleted_at,
+ * created_at }`), `is(column, null)`, an `author:profiles…(…)` embed on programs (by `user_id`), and
+ * `textSearch(column, query, { type: 'websearch' })` imitating `websearch_to_tsquery('simple', …)`
+ * over the row's `name` (the generated column's source): every bare word must be a whole word of
+ * the name and every "quoted phrase" must appear as consecutive words, case-insensitive. The
+ * `-word` and `or` operators are not imitated. Who may read a program (B39's rule) is NOT imitated
+ * — seed only what the reader may see; probed live at Gate 2.
+ *
  * What it does NOT do: row-level security or general embedding. Posts are seeded already shaped
  * the way the server's embed returns them (author, flair and workout nested in), and the follow
  * insert imitates the one RLS refusal the app handles (a block in either direction). Server-side
@@ -121,6 +129,8 @@ export interface FakeSocialTables {
   team_feed_hides: Row[];
   /** Program share rows: `{ program_id, team_id }` (B39). */
   program_team_shares: Row[];
+  /** Program rows as the server holds them: `{ id, user_id, name, visibility, deleted_at, created_at }` (B40). */
+  programs: Row[];
 }
 
 /** What a request can name: the tables, plus the computed `post_scores` and (B24) `post_hot_scores` views. */
@@ -218,6 +228,30 @@ export function parseOrFilter(filter: string): Predicate {
   return (row) => parts.some((p) => p(row));
 }
 
+/** A name's words as the 'simple' text-search config sees them: lower-cased runs of letters and digits. */
+function words(text: string): string[] {
+  return text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+/**
+ * (B40) `websearch_to_tsquery('simple', query) @@ to_tsvector('simple', name)`, imitated for the
+ * forms the Marketplace's search box produces: bare words (each must be a whole word of the name)
+ * and "quoted phrases" (consecutive words). A query with no words matches nothing, like the server.
+ */
+function websearchMatch(query: string): Predicate {
+  const phrases: string[][] = [];
+  const rest = query.replace(/"([^"]*)"/g, (_match, phrase: string) => {
+    phrases.push(words(phrase));
+    return ' ';
+  });
+  const terms = [...words(rest).map((w) => [w]), ...phrases.filter((p) => p.length > 0)];
+  return (row) => {
+    if (terms.length === 0) return false;
+    const name = words(String(row.name ?? ''));
+    return terms.every((term) => name.some((_word, i) => term.every((w, j) => name[i + j] === w)));
+  };
+}
+
 interface FakeOptions {
   /** Make every request fail as a dropped connection would. */
   offline?: boolean;
@@ -257,6 +291,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     team_assignments: [...(seed.team_assignments ?? [])],
     team_feed_hides: [...(seed.team_feed_hides ?? [])],
     program_team_shares: [...(seed.program_team_shares ?? [])],
+    programs: [...(seed.programs ?? [])],
   };
   const requests: FakeCall[][] = [];
   let offline = options.offline ?? false;
@@ -279,6 +314,9 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
     }
     if (table === 'team_posts' && select.includes('author:profiles')) {
       out.author = tables.profiles.find((p) => p.id === row.author_id) ?? null;
+    }
+    if (table === 'programs' && select.includes('author:profiles')) {
+      out.author = tables.profiles.find((p) => p.id === row.user_id) ?? null;
     }
     return out;
   }
@@ -391,6 +429,8 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
         filters.push((r) => !excluded.includes(String(r[args[0] as string])));
       }
       if (method === 'or') filters.push(parseOrFilter(args[0] as string));
+      if (method === 'is') filters.push((r) => (args[1] === null ? r[args[0] as string] == null : r[args[0] as string] === args[1]));
+      if (method === 'textSearch') filters.push(websearchMatch(String(args[1])));
       if (method === 'order') orders.push({ column: args[0] as string, ascending: (args[1] as { ascending: boolean }).ascending });
       if (method === 'limit') limit = args[0] as number;
       if (method === 'insert') insert = args[0] as Row;
@@ -578,7 +618,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       });
     }
     if (table === 'comments') out = out.map(withAuthor);
-    if (table === 'team_members' || table === 'team_invites' || table === 'team_posts') {
+    if (table === 'team_members' || table === 'team_invites' || table === 'team_posts' || table === 'programs') {
       const select = calls.find(([m]) => m === 'select')?.[1];
       out = out.map((r) => withTeamEmbeds(table, r, select));
     }
@@ -590,7 +630,7 @@ export function createFakeSocialClient(seed: Partial<FakeSocialTables> = {}, opt
       const calls: FakeCall[] = [['from', table]];
       requests.push(calls);
       const builder: Record<string, unknown> = {};
-      for (const method of ['select', 'eq', 'neq', 'in', 'not', 'or', 'order', 'limit', 'insert', 'update', 'upsert', 'delete', 'single']) {
+      for (const method of ['select', 'eq', 'neq', 'in', 'not', 'or', 'is', 'textSearch', 'order', 'limit', 'insert', 'update', 'upsert', 'delete', 'single']) {
         builder[method] = (...args: unknown[]) => {
           calls.push([method, ...args]);
           return builder;
