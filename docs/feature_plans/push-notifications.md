@@ -282,3 +282,56 @@ attacked with the same severity in-session. What the grilling changed or confirm
    section must stay fully functional for toggles in all three, and the app-start silent
    registration must never prompt. Easy to get a stray prompt-on-launch wrong — the tests fake
    all three states.
+
+## Build record (builder, Nov 16, 2026) — deviations from the plan
+
+What shipped matches the plan except for these, each deliberate:
+
+1. **`notification_log.status` gained `'sending'`.** The function claims the log row *before*
+   calling Expo (the plan's "dedupe gate before sending"), so it needs a value for "claimed, not yet
+   answered"; it becomes `sent` / `send_failed` once Expo replies. Consequence (accepted, in the
+   ERD notes): a function that dies between the claim and the reply leaves the row at `sending`
+   and the unique key blocks a retry — that one notification is lost, never data.
+2. **No `notifications/notificationsModule.ts`; the loader lives in `pushRegistration.ts`**
+   (`loadPushNotificationsModule`). Decision 10's "two small guarded loaders" — `timerAlerts.ts`
+   untouched. `NotificationsModule` (the type) is exported from there for the hook and fakes.
+3. **No `status()` on the port.** Settings calls `register(userId, { ask: false })` on every focus
+   instead: it never prompts, reports the true state (on / off / denied / unavailable / failed),
+   and doubles as a token refresh. Cost: one small RPC per Settings visit when push is on —
+   accepted.
+4. **A fifth reason for `unavailable`: Expo Go on Android** (`isExpoGoOnAndroid`, from
+   `Constants.executionEnvironment`). The module loads there but tokens always fail, so without this
+   Settings would show "couldn't be turned on — Try again" forever (review finding).
+5. **The after-first-Post ask is not used up by an `unavailable` answer** (review finding): until
+   `npx eas init` lands, or on Expo Go Android, no prompt can show, so the kv flag is only written
+   once `register` answers anything else. The flag is therefore written after the ask, not before.
+6. **`register_push_token` is `insert … on conflict (token) do update`**, not delete-then-insert —
+   same outcome, one statement, atomic; `created_at` resets only when the token changes owner.
+7. **`usePushNotifications.ts` is its own file** (the root layout's wiring: silent registration,
+   token-change watch, tap listener incl. the cold-start tap, then cleared so a later sign-in
+   doesn't reopen it). `notificationNav.ts` holds only the pure path check.
+8. **The block check in `notify/index.ts` queries `blocks` directly** (either direction) rather
+   than calling `private.blocked_either`, because the `private` schema isn't exposed to the
+   service-role REST client. Same logic; if `blocked_either` ever changes, change this too.
+9. **`notify` answers 204 for every handled call and an empty 500 on a database failure** (so the
+   failure shows in logs). Neither ever carries a body.
+10. **Trigger function swallows queueing failures** (`raise warning`), so pg_net trouble can never
+    refuse the follow / comment / vote / post itself.
+11. **The deployed `notify` (v1) is logic-identical to the repo but has its doc comments trimmed**
+    (deployed through the MCP). A `supabase functions deploy notify --no-verify-jwt` from the repo
+    replaces it with the commented copy at any time.
+
+Review (code-review skill, both axes) also found and fixed: `turnOnPush` had no try/finally; the
+four switch names were spelled out in several places (`settableFields` now feeds both the push
+phase and the transport; `readNotificationSwitches` reads through `NOTIFY_FIELDS`); missing
+comments on the hook and small helpers. Kept by decision: vote *flips* (UPDATE −1 → +1) don't
+notify (decision 4); the hard-coded project URL in the trigger (decision 12).
+
+Live verification (builder): migration applied (recorded version `20261116052928`, file renamed to
+match); advisors show only the intended items (`notification_log` RLS with no policies; the
+signed-in `register_push_token` definer); a three-user probe through the real trigger → pg_net →
+`notify` → Expo path logged every expected status, the switch-off produced `skipped_setting` for
+exactly its event, replay + forged calls added nothing, fake tokens were removed by
+`DeviceNotRegistered`, and the RPC moved one token from user A to user B; anon / bad token /
+direct insert refused; a recipient can't read `notification_log`. Probe users deleted (cascade
+verified: 0 rows left).

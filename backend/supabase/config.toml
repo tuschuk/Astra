@@ -419,6 +419,13 @@ verify_jwt = true
 [functions.delete-account]
 verify_jwt = true
 
+# B47: push notifications, called by database triggers through pg_net (which have no login to
+# send). JWT verification OFF by design: the function trusts nothing in the call — it re-reads the
+# named row with the server key — answers every POST with the same empty 204, and its
+# notification_log "already handled" key makes a repeated or forged call send nothing.
+[functions.notify]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

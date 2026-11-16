@@ -9,7 +9,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { prepareDatabase } from '@/db/database';
 import { onLocalWrite, writeLocal, type WorkoutVisibility } from '@/db/dao';
 import type { SqlDriver } from '@/db/driver';
-import { readUserSettingsRow, writeUserSettingsRowTx, type UserSettingsRow } from '@/db/userSettings';
+import { DEFAULT_USER_SETTINGS, readUserSettingsRow, writeUserSettingsRowTx, type UserSettingsRow } from '@/db/userSettings';
 import { pendingRows } from '@/sync/outbox';
 import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 import { ENTRIES, SETS, WORKOUT } from '@/test-utils/workoutFixtures';
@@ -27,7 +27,7 @@ function settingsRow(
   updated_at = 't',
   progress_pic_visibility: WorkoutVisibility = 'private',
 ): UserSettingsRow {
-  return { user_id, unit, progress_pic_visibility, updated_at };
+  return { ...DEFAULT_USER_SETTINGS, user_id, unit, progress_pic_visibility, updated_at };
 }
 
 /** Lets pending promise callbacks (a re-read after a download) run. */

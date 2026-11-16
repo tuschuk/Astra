@@ -20,7 +20,8 @@
  * Posting is instant: Post saves the post and a copy of the photo on the phone, queued for upload,
  * and returns to Home straight away. The sync engine uploads the photo and then the post in the
  * background — right away with signal, or whenever the phone reconnects — while the lifter keeps
- * using the app. If the flair list has never synced to this phone (near-impossible), Post is
+ * using the app. The very first Post on this phone also asks, once, whether Astra may send push
+ * notifications (B47, `askOnce.ts`). If the flair list has never synced to this phone (near-impossible), Post is
  * disabled with a line saying so.
  */
 import React, { useCallback, useState } from 'react';
@@ -36,6 +37,7 @@ import { Body, Heading, SectionLabel } from '@/components/ui/Text';
 import type { FlairRow, ImagePostKind, WorkoutVisibility } from '@/db/dao';
 import { readFlairs } from '@/db/flairs';
 import { useAppDatabase } from '@/db/useAppDatabase';
+import { maybeAskForPushOnce } from '@/notifications/askOnce';
 import { readProgressPicVisibility } from '@/settings/privacySettings';
 import { createImagePost, IMAGE_POST_DEFAULTS, PostRefusedError, type PickedImage } from '@/social/createPost';
 import { checkPostImage, mimeTypeForPath } from '@/social/mediaLimits';
@@ -149,6 +151,8 @@ export default function NewPostScreen() {
     setError(null);
     try {
       await createImagePost(db, userId, kind, image);
+      // B47: the first Post is when push becomes worth asking for — once per phone, never awaited.
+      void maybeAskForPushOnce(userId);
       router.replace('/');
     } catch (caught) {
       if (caught instanceof PostRefusedError && caught.reason === 'image-refused') {

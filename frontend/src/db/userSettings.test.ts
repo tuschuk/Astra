@@ -1,6 +1,7 @@
 /**
- * Tests for the on-device settings row (B15, widened B26), on real SQLite: read, save, replace,
- * patch one field without touching the other, and reading damaged values back as the defaults.
+ * Tests for the on-device settings row (B15, widened B26 and B47), on real SQLite: read, save,
+ * replace, patch one field without touching the others, and reading damaged values back as the
+ * defaults.
  */
 import { describe, expect, it } from '@jest/globals';
 
@@ -8,18 +9,31 @@ import { createNodeSqliteDriver } from '@/test-utils/nodeSqliteDriver';
 
 import { prepareDatabase } from './database';
 import {
+  parseNotifySwitch,
+  parseNotifySwitches,
   parseUnit,
   parseVisibility,
   patchUserSettingsTx,
   readUserSettingsRow,
+  settableFields,
   writeUserSettingsRowTx,
+  type NotifyField,
   type UserSettingsRow,
 } from './userSettings';
 
 /** A whole settings row for user `user_id`, with the given values. */
-function row(user_id: string, unit: 'kg' | 'lb', updated_at: string, progress_pic_visibility: UserSettingsRow['progress_pic_visibility'] = 'private'): UserSettingsRow {
-  return { user_id, unit, progress_pic_visibility, updated_at };
+function row(
+  user_id: string,
+  unit: 'kg' | 'lb',
+  updated_at: string,
+  progress_pic_visibility: UserSettingsRow['progress_pic_visibility'] = 'private',
+  notify: Partial<Pick<UserSettingsRow, NotifyField>> = {},
+): UserSettingsRow {
+  return { user_id, unit, progress_pic_visibility, ...ALL_ON, ...notify, updated_at };
 }
+
+/** The four B47 switches, all on (the default). */
+const ALL_ON = { notify_follows: true, notify_comments: true, notify_votes: true, notify_team_pushes: true };
 
 describe('user settings row', () => {
   it('is absent until saved, then reads back exactly', async () => {
@@ -75,5 +89,48 @@ describe('patchUserSettingsTx (B26)', () => {
 
     await db.withTransactionAsync((tx) => patchUserSettingsTx(tx, 'u1', { progress_pic_visibility: 'public' }, 't2'));
     expect(await readUserSettingsRow(db, 'u1')).toEqual(row('u1', 'kg', 't2', 'public'));
+  });
+
+  it('B47: turning one notification switch off changes that column only, and it reads back off', async () => {
+    const db = await prepareDatabase(createNodeSqliteDriver());
+    await db.withTransactionAsync((tx) => writeUserSettingsRowTx(tx, row('u1', 'kg', 't0', 'followers')));
+    await db.withTransactionAsync((tx) => patchUserSettingsTx(tx, 'u1', { notify_votes: false }, 't1'));
+    expect(await readUserSettingsRow(db, 'u1')).toEqual(row('u1', 'kg', 't1', 'followers', { notify_votes: false }));
+    expect(await db.getFirstAsync('select notify_votes, notify_comments from user_settings')).toEqual({ notify_votes: 0, notify_comments: 1 });
+
+    // A unit change afterwards keeps the switch off.
+    await db.withTransactionAsync((tx) => patchUserSettingsTx(tx, 'u1', { unit: 'lb' }, 't2'));
+    expect((await readUserSettingsRow(db, 'u1'))?.notify_votes).toBe(false);
+  });
+});
+
+describe('notification switches (B47)', () => {
+  it('only an explicit off is off — damaged or missing values read as on, the default', () => {
+    expect(parseNotifySwitch(false)).toBe(false);
+    expect(parseNotifySwitch(0)).toBe(false);
+    expect(parseNotifySwitch('0')).toBe(false);
+    expect(parseNotifySwitch(true)).toBe(true);
+    expect(parseNotifySwitch(1)).toBe(true);
+    expect(parseNotifySwitch(null)).toBe(true);
+    expect(parseNotifySwitch(undefined)).toBe(true);
+    expect(parseNotifySwitch('garbage')).toBe(true);
+  });
+
+  it('reads all four from a row, and settableFields carries all six settable fields', () => {
+    expect(parseNotifySwitches({ notify_follows: 0, notify_comments: 1, notify_votes: false })).toEqual({
+      notify_follows: false,
+      notify_comments: true,
+      notify_votes: false,
+      notify_team_pushes: true,
+    });
+    const whole = row('u1', 'kg', 't', 'public', { notify_team_pushes: false });
+    expect(settableFields(whole)).toEqual({
+      unit: 'kg',
+      progress_pic_visibility: 'public',
+      notify_follows: true,
+      notify_comments: true,
+      notify_votes: true,
+      notify_team_pushes: false,
+    });
   });
 });

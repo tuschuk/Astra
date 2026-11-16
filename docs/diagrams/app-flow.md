@@ -174,7 +174,10 @@ flowchart TD
   ProfileView -->|"Edit profile: router.push('/edit-profile')"| EditProfileScr["Edit profile (app/edit-profile.tsx, B25, YOU-1)<br/>loadProfileRow fills Display name / Username / Bio; Change photo → expo-image-picker<br/>(square crop, quality 0.8) → checkAvatarImage (≤ 5 MiB, jpeg / png / webp; refusal line, Save disabled);<br/>Save: checkProfileText (profileLimits: 50 / 300 / username pattern; a set username can't be cleared)<br/>→ uploadAvatar to avatars/me/uuid.ext (new name each time) → updateProfile(avatar_url = path)<br/>→ deleteAvatar(old) best effort (or the new one if the update failed) → saveOwnProfile → Back;<br/>offline → 'Editing your profile needs a connection.' + Retry; nothing queued"]
   EditProfileScr --> ProfileQ
   EditProfileScr -->|"FileSystem.uploadAsync POST /storage/v1/object/avatars/path (Bearer + apikey);<br/>DELETE same address for the old photo"| DB
-  You -->|"gear: router.push('/settings')"| SettingsScr["Settings (app/settings.tsx, B15, YOU-4 part)<br/>Units: kg | lb segmented toggle (radio roles for screen readers)<br/>Privacy (B26): 'Who can see new progress pics' ChoiceChips Only you | Followers | Public<br/>(read from astra.db on focus, disabled until read; failed save → chip back + line);<br/>'existing posts keep their own setting'; Body data: static 'Only you. Body data never leaves your account.' (no control)<br/>Account: signed-in email + Sign out + Export your data (busy label, calm error line) + Delete account (B32)<br/>Back (or /you); no Notifications until B47"]
+  You -->|"gear: router.push('/settings')"| SettingsScr["Settings (app/settings.tsx, B15, YOU-4 part)<br/>Units: kg | lb segmented toggle (radio roles for screen readers)<br/>Privacy (B26): 'Who can see new progress pics' ChoiceChips Only you | Followers | Public<br/>(read from astra.db on focus, disabled until read; failed save → chip back + line);<br/>'existing posts keep their own setting'; Body data: static 'Only you. Body data never leaves your account.' (no control)<br/>Account: signed-in email + Sign out + Export your data (busy label, calm error line) + Delete account (B32)<br/>Back (or /you)<br/>Notifications (B47): 4 Switches — New followers · Comments on your posts · Upvotes on your posts · Team posts<br/>(all on by default; read from astra.db on focus; failed save → switch back + line);<br/>push-state line on | off + 'Turn on push notifications' | denied | unavailable | failed + 'Try again'<br/>(focus runs register(ask:false) — never prompts)"]
+  SettingsScr -->|"switch: setNotificationSwitch"| NotifySet["notificationSettings.ts (src/settings, B47):<br/>readNotificationSwitches (no row → all on) ·<br/>setNotificationSwitch (ONE transaction: patchUserSettingsTx — only that column —<br/>+ outbox line row_id = user id, then notify)"]
+  NotifySet -->|"user_settings row + outbox line"| LocalDB
+  SettingsScr -->|"focus: register(ask:false) · Turn on: register(ask:true) ·<br/>Sign out: unregister() first (≤ 3 s, best effort)"| PushReg
   SettingsScr -->|"tap kg / lb: unitStore.setUnit"| UnitStore
   SettingsScr -->|"progress-pic chip: setProgressPicVisibility"| PrivacySet["privacySettings.ts (src/settings, B26):<br/>readProgressPicVisibility (no row → private) ·<br/>setProgressPicVisibility (ONE transaction: patchUserSettingsTx — unit kept —<br/>+ outbox line row_id = user id, then notify); no in-memory store"]
   PrivacySet -->|"user_settings row + outbox line"| LocalDB
@@ -253,6 +256,8 @@ flowchart TD
     PostQ["createWorkoutPost (social/createPost.ts, B21): ONE transaction —<br/>check own finished workout, no post yet, flair on the phone;<br/>insert posts row (new uuid, visibility = the workout's) + outbox line 'posts';<br/>then notifyLocalWrite → the engine syncs soon"]
     PostStep -->|Post| PostQ
   end
+  PostStep -->|"after a saved Post (not awaited): maybeAskForPushOnce"| AskOnce
+  NewPostScr -->|"after a saved Post (not awaited): maybeAskForPushOnce"| AskOnce
   PostQ -->|"posts row + outbox line"| LocalDB
   PostQ -.->|"notifies"| Triggers
   PostStep -->|"Post saved: router.replace('/')"| Home
@@ -405,7 +410,25 @@ flowchart TD
     DeleteFn["Edge function delete-account (B32, NFR-6, deployed v2, verify_jwt on)<br/>POST {confirm: 'DELETE'} (else 400) with the user's token → getUser — the only<br/>account it can delete is the caller's; 409 if in moderators;<br/>1 sweep the caller's folder in post-images + avatars, 2 auth.admin.deleteUser<br/>(cascades every row); files first so any failure leaves the login and a retry works"]
     DeleteFn -->|"service role: moderators check, auth.admin.deleteUser → cascade"| DB
     DeleteFn -->|"service role: list + remove own folder"| Bucket
+    NotifyTrig{"B47 AFTER INSERT triggers notify_on_follow / _comment /<br/>_upvote (value = 1 only) / _team_post → private.notify_event:<br/>pg_net POST {event, keys} — keys only, never text; queued at commit"}
+    NotifyFn["Edge function notify (B47, deployed v1, verify_jwt OFF)<br/>trusts nothing in the call: re-reads the row (service role) → actor + recipients<br/>(followee · post author · team members minus author) → per recipient:<br/>self / block / recipient muted actor / switch off / no tokens → logged skip;<br/>else claim notification_log row (unique key = replay gate) → Expo;<br/>ticket DeviceNotRegistered → delete token; always an empty 204"]
+    DB -->|"insert into follows / comments / votes / team_posts"| NotifyTrig
+    NotifyTrig -->|"net.http_post /functions/v1/notify"| NotifyFn
+    NotifyFn -->|"service role: read rows, switches, blocks, mutes, push_tokens;<br/>write notification_log; delete dead tokens"| DB
   end
+  NotifyFn -->|"POST exp.host/--/api/v2/push/send (≤ 100 per request):<br/>title, '&lt;name&gt; commented on your post', data.path only"| ExpoPush[("Expo push service (free) → Apple / Google → the phone")]
+  ExpoPush -->|"tap"| TapNav
+  subgraph PushMod["Push on the phone (src/notifications, B47)"]
+    PushReg["pushRegistration.ts: lazy guarded require('expo-notifications') (own copy, not timerAlerts');<br/>unavailable when no app.json extra.eas.projectId (none yet — Tristen's eas init), Expo Go on Android,<br/>not iOS/Android, or no module; register(ask) → permission (prompt only if ask) →<br/>Android channel 'default' → getExpoPushTokenAsync → rpc register_push_token;<br/>watchTokenChanges re-saves; unregister deletes this token's row (≤ 3 s, swallowed)"]
+    AskOnce["askOnce.ts: maybeAskForPushOnce — kv flag astra.push.askedAfterFirstPost;<br/>register(ask:true) once per phone (an 'unavailable' answer doesn't use it up); never throws"]
+    UsePush["usePushNotifications (root layout): while signed in,<br/>register(ask:false) at start (never prompts) + watchTokenChanges;<br/>tap listener + getLastNotificationResponseAsync (then cleared)"]
+    TapNav["notificationNav.ts: pushTargetPath — only /profile/&lt;uuid&gt;,<br/>/post-comments/&lt;uuid&gt;, /team/&lt;uuid&gt;; anything else ignored"]
+    AskOnce --> PushReg
+    UsePush --> PushReg
+    UsePush --> TapNav
+  end
+  PushReg -->|"rpc register_push_token · delete push_tokens where token (RLS: own)"| DB
+  TapNav -->|"router.push(path)"| Guard
   ReqPass -->|"supabase.functions.invoke('analyze-workout')"| AnalyzeFn
 
   Gate -->|no: signUp with birthdate in metadata| AuthAPI
@@ -796,7 +819,20 @@ flowchart TD
    (500 characters, oldest first), without a report button yet. Coming back to the page or the
    tab reads everything again, so a vote just cast shows in the ranking. A program shared only
    with followers or a team has no votes or comments. Votes and comments need a connection.
-29. Everything else is a placeholder that renders its final layout with inert controls
+29. **Push notifications (B47, YOU-4's Notifications section).** Settings → **Notifications**
+   has four switches — New followers, Comments on your posts, Upvotes on your posts, Team posts —
+   all on until turned off. Each saves on the phone at once (works offline, syncs on reconnect),
+   and the server checks it before every push, so turning one off stops exactly that kind. Under
+   them a line says where push stands on this phone; when it's off, **Turn on push
+   notifications** shows the phone's permission prompt. Astra never asks on launch; besides that
+   button it asks once, right after the lifter's first Post. A push says who did what ("Alex
+   commented on your post") — never the comment's words — and tapping it opens that profile,
+   post's comments or Team page. Nobody is pushed about their own act, by someone they blocked
+   (or who blocked them), or by someone they muted; downvotes never push. Sign out first tells
+   the server to stop sending to this phone. **Until Tristen runs `npx eas init` (free) the app
+   has no Expo project id, so the line reads "aren't set up on this version of the app yet"** —
+   the switches still work and the server side is live.
+30. Everything else is a placeholder that renders its final layout with inert controls
    (the Gyms half of Communities).
 
 ## Data path today
@@ -1125,13 +1161,29 @@ flowchart TD
   `db/database.ts` gained `createDatabaseHolder` (the singleton, now a testable factory) and
   `deleteAppDatabase`; `SqlDriver` gained an optional `closeAsync` that waits its turn in the
   serialising queue. `social/postImages.ts` exports `localPostImagesFolder` for the wipe.
+- **B47 push notifications.** The settings row gained four switches (device V16, 0/1 integers,
+  default 1): `db/userSettings.ts` adds `NOTIFY_FIELDS`, `parseNotifySwitch` (only an explicit
+  off is off) and `settableFields` (the one list of uploaded columns, used by `sync/push.ts` and
+  `transport.pushUserSettings`, which now sends all six fields); the pull reads them too.
+  `settings/notificationSettings.ts` saves one switch per transaction + outbox line. On the
+  server, an insert into `follows` / `comments` / `votes` (upvote) / `team_posts` fires a trigger
+  that POSTs only the row's keys to the `notify` edge function through `pg_net`; the function
+  re-reads everything with the service role, logs each recipient's outcome in
+  `notification_log` (the replay gate) and sends through Expo's free push API. The phone's side
+  is `src/notifications/`: `pushRegistration.ts` (token → `register_push_token` RPC; delete on
+  sign-out), `usePushNotifications.ts` (root layout: silent re-registration while signed in, tap →
+  `notificationNav.ts`'s validated path → `router.push`) and `askOnce.ts` (the once-per-phone ask
+  after the first Post, from `post-workout/[id]` and `new-post`). Token saves are online-only (a
+  failure retries at the next start); the switches are offline-first like every setting.
 - **Still unwired:** follower / following counts don't open lists; another lifter's workout rows
   on a profile aren't tappable; there is no "remove photo"; the Library's catalog cards come from the bundle, not `astra.db` (only Your exercises reads it, B31); a custom can't be created from inside the logger's picker; customs add nothing to the muscle map; posts can't be
   edited, deleted or re-offered from old workouts (photo posts can't be deleted either, so their
   storage objects are never removed); feed cards don't
   open a detail screen; comments can't be deleted from the app (the RLS allows your own) and
-  aren't paged past 200; the muscle map appears only on the analysis screen; Settings has no
-  Notifications section (B47); body data has a statement but no visibility control (it has no
+  aren't paged past 200; the muscle map appears only on the analysis screen; push can't reach a
+  phone until the app has an Expo project id (`npx eas init`), no foreground notification handler is
+  set, so a push arriving while Astra is open may not show, and there is no in-app notification
+  list; body data has a statement but no visibility control (it has no
   reader yet); there is no per-workout visibility control or default-workout-visibility setting
   (new workouts are born public).
 

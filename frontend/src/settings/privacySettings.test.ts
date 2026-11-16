@@ -12,7 +12,7 @@ import { describe, expect, it } from '@jest/globals';
 
 import { prepareDatabase } from '@/db/database';
 import { onLocalWrite } from '@/db/dao';
-import { readUserSettingsRow, writeUserSettingsRowTx } from '@/db/userSettings';
+import { DEFAULT_USER_SETTINGS, readUserSettingsRow, writeUserSettingsRowTx } from '@/db/userSettings';
 import { pendingRows } from '@/sync/outbox';
 import { pushOutbox } from '@/sync/push';
 import { FakeServer } from '@/test-utils/fakeTransport';
@@ -30,7 +30,7 @@ describe('progress-pic privacy setting', () => {
   it('saving writes the choice and exactly one upload line, keeps the unit, and wakes the sync engine', async () => {
     const db = await prepareDatabase(createNodeSqliteDriver());
     await db.withTransactionAsync((tx) =>
-      writeUserSettingsRowTx(tx, { user_id: USER_ID, unit: 'kg', progress_pic_visibility: 'private', updated_at: 't0' }),
+      writeUserSettingsRowTx(tx, { ...DEFAULT_USER_SETTINGS, user_id: USER_ID, unit: 'kg', progress_pic_visibility: 'private', updated_at: 't0' }),
     );
     const heard: string[] = [];
     const unsubscribe = onLocalWrite(db, (tbl) => heard.push(tbl));
@@ -38,6 +38,7 @@ describe('progress-pic privacy setting', () => {
     await setProgressPicVisibility(db, USER_ID, 'followers', { now: 't1' });
 
     expect(await readUserSettingsRow(db, USER_ID)).toEqual({
+      ...DEFAULT_USER_SETTINGS,
       user_id: USER_ID,
       unit: 'kg',
       progress_pic_visibility: 'followers',

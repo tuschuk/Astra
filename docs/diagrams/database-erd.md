@@ -50,6 +50,9 @@ both applied live — `program_votes`, `program_comments`, `private.can_view_pro
 votes; see "Program votes, comments and Featured"),
 `20261116023347_analysis_trend.sql` (B42, applied live — the six nullable trend columns on
 `workout_analyses` and their CHECKs; see "Workout analyses"),
+`20261116052928_push_notifications.sql` (B47, applied live — `pg_net`, `push_tokens`,
+`register_push_token`, the four `user_settings.notify_*` switches, `notification_log`, and the
+four `notify_on_*` triggers that call the `notify` server function; see "Push notifications"),
 `20261114224613_signup_birthdate_gate.sql`
 (**in the repo but not yet applied to the live project** as of the B05 build. The build session
 could not reach the Supabase MCP. Until it is applied, live signup does not enforce 18+ and does
@@ -128,6 +131,30 @@ erDiagram
   programs ||--o{ program_comments : "program_id commented on (cascade, B41)"
   profiles ||--o{ program_comments : "user_id writes (cascade)"
   programs ||..|| program_scores : "view: one row per program + window scores (security_invoker, B41)"
+  profiles ||--o{ push_tokens : "user_id: this phone's push address (cascade, B47)"
+  profiles ||--o{ notification_log : "recipient_id told (cascade, B47)"
+  follows ||..o{ notification_log : "source_key follower:followee (no FK; trigger -> notify)"
+  comments ||..o{ notification_log : "source_key = comment id (no FK)"
+  votes ||..o{ notification_log : "source_key post:voter, upvotes only (no FK)"
+  team_posts ||..o{ notification_log : "source_key = team post id, one row per member (no FK)"
+  push_tokens {
+    text token PK "Expo push token, ExponentPushToken[...]; CHECK shape, max 200"
+    uuid user_id FK "who it belongs to now; moves on account switch (register_push_token)"
+    text platform "ios or android"
+    text device_name "max 100; nullable"
+    timestamptz created_at "reset when the token changes hands"
+    timestamptz last_seen_at "bumped on each registration (app start)"
+  }
+  notification_log {
+    uuid id PK "server-generated"
+    text event "follow | comment | vote | team_push"
+    text source_key "the row that caused it; UK (event, source_key, recipient_id) = the already-handled gate"
+    uuid recipient_id FK "who it was for"
+    uuid actor_id "who did it (no FK)"
+    text status "sending | sent | send_failed | no_tokens | skipped_setting | skipped_block | skipped_mute | skipped_self"
+    jsonb tickets "Expo's per-phone answers (ticket ids / errors)"
+    timestamptz created_at
+  }
   program_votes {
     uuid program_id PK, FK "the program voted on (published when cast)"
     uuid user_id PK, FK "the voter; PK (program_id, user_id) = one vote per lifter per program"
@@ -182,6 +209,10 @@ erDiagram
     text unit "kg or lb; default lb"
     workout_visibility default_workout_visibility "default public; no reader yet"
     workout_visibility progress_pic_visibility "who sees NEW progress pics; default private (B26)"
+    boolean notify_follows "push on a new follower; default true (B47)"
+    boolean notify_comments "push on a comment on your post; default true (B47)"
+    boolean notify_votes "push on an upvote of your post; default true (B47)"
+    boolean notify_team_pushes "push on a teammate's Team post; default true (B47)"
     timestamptz updated_at
   }
 
@@ -488,6 +519,42 @@ erDiagram
     timestamptz created_at
   }
 ```
+
+## Push notifications (B47)
+
+- **What fires:** four `AFTER INSERT` triggers — `notify_on_follow` (follows), `notify_on_comment`
+  (comments), `notify_on_upvote` (votes, `WHEN new.value = 1` — a downvote, or a vote changed by
+  UPDATE, never fires), `notify_on_team_post` (team_posts) — all run `private.notify_event()`
+  (security definer). It queues one `pg_net` POST to `<project>/functions/v1/notify` with only the
+  new row's keys (`{ event, keys }`), never its text. The call goes out after the insert commits;
+  a rolled-back insert sends nothing, and a failure to queue is swallowed (a warning) so it can
+  never refuse the follow / comment / vote / post. Results land in `net._http_response`.
+- **What `notify` does** (server function, `verify_jwt = false`, server key): re-reads the named
+  row, works out the recipients (followee; post author; every team member but the author), then for
+  each one writes a `notification_log` row before anything is sent. Order of checks: actor is the
+  recipient → `skipped_self`; a block either way → `skipped_block`; the recipient muted the actor →
+  `skipped_mute`; the recipient's matching `user_settings.notify_*` is false → `skipped_setting`
+  (a missing settings row counts as all on); no `push_tokens` row → `no_tokens`; otherwise
+  `sending`, then `sent` (any phone accepted) or `send_failed`, with Expo's tickets. A ticket saying
+  `DeviceNotRegistered` deletes that `push_tokens` row.
+- **Repeats send nothing:** `notification_log`'s unique `(event, source_key, recipient_id)` makes a
+  replayed or forged call insert nothing, so nothing is sent; unfollow-then-follow (same key) and
+  un-upvote-then-upvote (same key) also don't ping twice. A function that dies between `sending`
+  and the final status leaves the row at `sending` for good — that notification is lost, never
+  retried.
+- **`register_push_token(p_token, p_platform, p_device_name)`** — security definer, signed-in
+  callers only (anon refused): inserts the token for `auth.uid()`, or moves an existing row to them
+  (the shared-phone account switch). The table's CHECKs validate the token shape and platform.
+- **RLS:** `push_tokens` — owner select and owner delete only; no insert/update policies (writes go
+  through the RPC). `notification_log` — RLS on with no policies: server key only.
+- **Payload:** title + "<name> started following you / commented on your post / upvoted your post /
+  posted to <team>" and `data.path` (`/profile/<id>`, `/post-comments/<id>`, `/team/<id>`). No
+  comment text, workout data, photos or body data.
+- **Live probe (B47 build):** three throwaway users; every event logged for the recipient, a
+  switch turned off logged `skipped_setting` for exactly that event while the other three sent, a
+  teammate with Team pushes off logged `skipped_setting`; a replayed and a forged call added nothing;
+  fake tokens were deleted by `DeviceNotRegistered`; the RPC moved a token from user A to user B
+  (one row). Probe rows deleted.
 
 ## Team moderation (B38)
 
@@ -1239,6 +1306,8 @@ All tables have RLS on. "You" means the signed-in user (`auth.uid()`).
 | `team_assignments` (B37) | the assignee, and the team's coaches | insert only as `assigned_by` yourself, a coach, your own program, to a team member, never across a block; delete by the assignee or a coach |
 | `team_program_payload`, `team_workout_payload` (functions, B37) | signed-in members of the team, for content pushed to it (or a program assigned to you there) and still live; null otherwise | — |
 | `team_invites` (B36) | invites to you, and the owner sees their team's | insert only the owner, never across a block (`private.blocked_either`); delete by the invitee (decline) or the owner (cancel) |
+| `push_tokens` (B47) | only your own | delete only your own; no insert/update policies — writes only through `register_push_token` (signed-in, saves for `auth.uid()`, takes the token over from a previous owner) |
+| `notification_log` (B47) | nobody — RLS on, no policies; the `notify` function (service role) writes and reads it | nobody |
 | `reports` (B27) | moderators only (`private.is_moderator()`) | insert only as yourself, about a post or comment you can currently see (each table's own read rule decides), never your own; no updates or deletes — the founder works the queue via service role |
 
 **Workout visibility rule** (`private.workout_visible`): you always see your own; a block in either
@@ -1258,7 +1327,8 @@ they can see rows the caller's own RLS would hide.
   their entries and sets, posts, votes, comments, and the user's tombstones (live-probed at B27),
   and (B34) their programs with every week, workout and slot under them, and (B35) their program
   runs, and (B36) their team memberships and invites, and every team they created (with all of
-  that team's memberships and invites — members silently lose the team; no ownership transfer). A hard-deleted program workout sets `workouts.program_workout_id` to null (the session stays).
+  that team's memberships and invites — members silently lose the team; no ownership transfer),
+  and (B47) their push tokens and the notification-log rows addressed to them. A hard-deleted program workout sets `workouts.program_workout_id` to null (the session stays).
   Storage objects are not rows of this graph — the `moderate` function sweeps them.
   Deleting a post cascades to its votes and comments (B23); reports about it stay (no FK, B27).
 - Deleting a workout cascades to its `workout_exercises` and their `sets` (and the records citing
@@ -1300,7 +1370,9 @@ the analyses and before tombstones; version 13 (B35) added `program_runs` (same 
 foreign keys, downloaded on `pull_cursor:program_runs` after the four program tables) and the bare
 column `workouts.program_workout_id`; version 14 (B39) added `programs.visibility` (text, default
 `private`; `program_team_shares` is not mirrored); version 15 (B42) added the six trend columns to
-`workout_analyses` (integer / real, null on existing rows). **Upload order since B35** (`SYNC_ORDER`): `exercises`,
+`workout_analyses` (integer / real, null on existing rows); version 16 (B47) added the four
+`user_settings.notify_*` switches (integer 0/1, default 1; `push_tokens` and `notification_log`
+are not mirrored). **Upload order since B35** (`SYNC_ORDER`): `exercises`,
 `programs`, `program_weeks`, `program_workouts`, `workouts`, `workout_exercises`, `sets`,
 `personal_records`, `program_exercises`, `program_runs` (then `workouts` once more) — programs go
 before workouts so a session started from a program never reaches the server ahead of the
@@ -1340,9 +1412,11 @@ and `sync_state`, the download bookmarks. What this means for the server:
   in each sync, children's tables first. Deleting an id the server no longer has is a no-op, so
   retries are safe.
 - **`user_settings` (B15) syncs outside the id-keyed machinery.** The phone's kg/lb toggle and
-  (B26) its progress-pic privacy choice send `UPDATE user_settings SET unit = …,
-  progress_pic_visibility = … WHERE user_id = …` (both fields from the phone's whole row; a change
-  to one is merged into the stored row first, so it never undoes the other) — never an insert or upsert, since RLS
+  (B26) its progress-pic privacy choice and (B47) its four notification switches send
+  `UPDATE user_settings SET unit = …, progress_pic_visibility = …, notify_follows = …,
+  notify_comments = …, notify_votes = …, notify_team_pushes = … WHERE user_id = …` (every settable
+  field from the phone's whole row; a change to one is merged into the stored row first, so it
+  never undoes another) — never an insert or upsert, since RLS
   grants the owner select and update only and the signup trigger already made the row; no
   `updated_at` (the `moddatetime` trigger stamps it). An update that matches no row (a previous
   account's leftover outbox line, hidden by RLS) changes nothing and counts as sent. Every pull
