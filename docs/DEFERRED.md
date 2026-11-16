@@ -906,3 +906,24 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     or a product call.
   - **`mmdc` render** of both updated diagrams was declined by the permission layer, so it is
     left for Gate 2.
+- **B52 gym-leaderboards (builder):**
+  - **Live REST read not probed.** Headless runs can't make outbound HTTP, so the PostgREST board
+    read (`profile:profiles(username,display_name)` embed with no FK hint, plan G14, and the
+    three-key order clause) was not exercised against the live API. The schema side was probed
+    as the `authenticated` role in SQL with JWT claims. Gate 2: one REST read of a fixture board
+    with a real JWT.
+  - **Device check (Tristen):** open a gym page → Leaderboard. Both "Men" and "Women" should show
+    "No verified PRs yet." (every real board is empty until B53). Switch lifts with the chips;
+    pull to refresh; go offline and check the message and Retry.
+  - **Every real board is empty until B53** (which is behind B33, Blocked on the video provider).
+    This is plan Risk 3, recorded so nobody files an empty board as a bug.
+  - **Review judgement calls left:** the unique index keeps the plan's name
+    `leaderboard_entries_book_idx` (the reviewer suggested `…_member_lift_key`; renaming would
+    take a migration and the name is from the B13 "book" vocabulary). The `entry(…)` fixture
+    helper is written in both test files; move it to `feedFixtures` if a third user appears. The
+    fake's `compareCell` compares text cells as text, so a fixture that mixes text and number
+    weights would sort wrongly; PostgREST sends `numeric` as a JSON number, so fixtures use
+    numbers.
+  - **Not built (on evidence):** shared "T-1" tie ranks, paging past 200 (the recorded fix is one
+    read per lift *and* division), realtime board updates, showing board entries on profiles.
+  - **`mmdc` render** of both updated diagrams is left for Gate 2 (not allowed headless).

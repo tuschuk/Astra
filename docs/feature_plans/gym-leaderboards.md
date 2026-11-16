@@ -372,3 +372,42 @@ Run via `mattpocock-skills:grilling` in the planner session; Gate 1 is where Tri
   (fixture rows, B53 owns verified writes); nothing was widened or narrowed. The one coverage
   nuance — GYM-8 claimed whole while its pick-UI lives in B53's submission gate — is argued in
   Risk 2 and left for Gate 1 to confirm.
+
+## Build notes and deviations (builder run)
+
+- **Migration version:** `20261116130816_leaderboard_entries.sql` (renamed to the version
+  Supabase recorded). Applied live and probed as the `authenticated` / `anon` roles in SQL with JWT
+  claims (headless runs can't make HTTP):
+  - the tie ordered by earlier `verified_at`;
+  - a duplicate (gym, user, lift) refused with 23505, and the upsert on that key replaced the
+    value, leaving one row;
+  - every write by A refused with 42501 (insert / update / delete / truncate, own rows included);
+    anon select also 42501;
+  - a bad lift or division refused with 23514;
+  - switching left gym 1 with 2 rows and gym 2 with 0, and leaving changed nothing;
+  - account deletion cascaded the rows away;
+  - all probe rows and users were removed, and `get_advisors` (security) found nothing new.
+
+  The live **REST** read (the embed and the order clause through PostgREST) is not yet probed; see
+  DEFERRED.
+- **Deviation 1: `loadBoard` throws on failure** instead of returning an offline result. That is
+  the `gyms.ts` read style (`loadGym`, `loadGymMembers`). The screen catches the error and shows
+  `GYMS_OFFLINE` with Retry, so the lifter sees what the plan describes.
+- **Deviation 2: per-lift cache plus a re-read.** Each lift's board is kept in screen state as
+  planned, and it is also re-read on focus and whenever its chip is chosen. The kept board stays
+  on screen while the fresh read lands. This came from the lint rule against setState in effects
+  (`useFocusEffect` is the gym page's pattern), and it means a board is never stale after you
+  come back to it. It adds no truncation or fairness change: there is still one read per lift.
+- **Deviation 3: `GYM_MISSING` moved** from the gym page into `social/gyms.ts`, so the
+  leaderboard shares the sentence without importing a sibling route. `gym.test.tsx` now imports it
+  from there. `BOARD_EMPTY` lives in `leaderboards.ts`.
+- **Additions not in the screen table:** a one-line subtitle ("Best verified PR per member ·
+  ranked by weight") and pull-to-refresh, following the gym page's conventions. Each division
+  section carries a `testID` (`division-male` / `division-female`) for the route tests.
+- **Review (code-review skill, Standards + Spec):**
+  - fixed: the chip effect no longer re-reads the gym on every tap; pull-to-refresh also recovers
+    a failed gym read; the GYM_MISSING re-export was dropped; `BOARD_EMPTY` moved into the module;
+    the upsert test now sends `division`, since the column is NOT NULL and checked before the
+    conflict; the text-weight fixture is isolated in its own test.
+  - kept: the index name (from the plan, already applied live) and the duplicated fixture helper.
+    Both are recorded in DEFERRED.

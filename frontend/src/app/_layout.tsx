@@ -96,7 +96,8 @@ export default function RootLayout() {
  *   with Save and Start, B40; votes and a comments button, B41) and
  *   program-comments/[id] (a published program's comments, B41), messages
  *   (B48), and Gyms (B50): gyms (the distance-sorted directory) and gym/[id]
- *   (a gym's page, its members and Gym feed): the signed-in app — only with a
+ *   (a gym's page, its members and Gym feed), and gym/[id]/leaderboard (the
+ *   gym's verified-PR board, B52): the signed-in app — only with a
  *   session.
  * - (auth): sign-in / sign-up — only without one.
  * When the session appears or disappears, expo-router moves the user to
@@ -172,6 +173,7 @@ function RootNavigator({ fontsReady }: { fontsReady: boolean }) {
           <Stack.Screen name="messages/[userId]" />
           <Stack.Screen name="gyms/index" />
           <Stack.Screen name="gym/[id]/index" />
+          <Stack.Screen name="gym/[id]/leaderboard" />
         </Stack.Protected>
         <Stack.Protected guard={!signedIn}>
           <Stack.Screen name="(auth)" />

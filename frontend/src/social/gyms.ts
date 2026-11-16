@@ -52,6 +52,9 @@ export type GymResult = { ok: true } | { ok: false; message: string };
 /** The line any Gyms screen shows when it can't reach the server. */
 export const GYMS_OFFLINE = 'Gyms need a connection. Logging workouts and the Tool Kit still work offline.';
 
+/** The line a gym screen shows when the gym doesn't exist (a bad link, or a gym the directory no longer lists). */
+export const GYM_MISSING = 'This gym isn’t available.';
+
 /** Shown when a join, switch or leave didn't go through. */
 export const GYM_FAILED = 'That didn’t go through. Check your connection and try again.';
 
