@@ -14,7 +14,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { Card } from '@/components/ui/Card';
 import { Body, SectionLabel } from '@/components/ui/Text';
-import { colors, spacing, type } from '@/theme';
+import { colors, fontScaleCaps, spacing, type } from '@/theme';
 
 interface ResultCardProps {
   /** What the answer is ("Working weight"). */
@@ -43,7 +43,9 @@ export function ResultCard({ label, value, hint, secondary, children }: ResultCa
             {hint}
           </Body>
         ) : (
-          <Text style={styles.value}>{value}</Text>
+          <Text maxFontSizeMultiplier={fontScaleCaps.display} style={styles.value}>
+            {value}
+          </Text>
         )}
         {value !== null && secondary ? <Body variant="muted">{secondary}</Body> : null}
       </View>

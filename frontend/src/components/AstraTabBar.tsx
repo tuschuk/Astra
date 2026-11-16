@@ -11,6 +11,10 @@
  * Styling follows the nav recipe in docs/styling_guide.md: pure black bar,
  * red hairline top border, uppercase tracked labels, accent color on the
  * active item, red glow on the center action.
+ *
+ * Accessibility: each destination is announced as a tab with its name and
+ * whether it is the current one. The active label uses the lighter
+ * `accentText` red so the small word stays readable on black (B49).
  */
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
@@ -19,7 +23,7 @@ import type { Href } from 'expo-router';
 import { TabList, TabTrigger, type TabTriggerSlotProps } from 'expo-router/ui';
 import { Ionicons } from '@expo/vector-icons';
 
-import { colors, glows, layout, radii, spacing, type } from '@/theme';
+import { colors, fontScaleCaps, glows, layout, radii, spacing, type } from '@/theme';
 
 /** One tab's static config: route name, destination, label and icon pair. */
 export interface TabConfig {
@@ -125,7 +129,14 @@ export function AstraTabButton({ tab, isFocused = false, ref, ...pressableProps 
             size={22}
             color={isFocused ? colors.accent : colors.muted}
           />
-          <Text style={[type.labelSmall, styles.label, isFocused && styles.labelFocused]}>
+          {/* Grows with the phone's text size up to the label cap, then shrinks to fit its fifth
+              of the bar rather than wrapping (the tab's spoken name is the full label). */}
+          <Text
+            maxFontSizeMultiplier={fontScaleCaps.labelSmall}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+            style={[type.labelSmall, styles.label, isFocused && styles.labelFocused]}
+          >
             {tab.label}
           </Text>
         </>
@@ -210,7 +221,7 @@ const styles = StyleSheet.create({
     color: colors.muted,
   },
   labelFocused: {
-    color: colors.accent,
+    color: colors.accentText,
   },
   pressed: {
     opacity: 0.7,

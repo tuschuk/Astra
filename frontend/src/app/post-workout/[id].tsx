@@ -171,7 +171,7 @@ export default function PostWorkoutScreen() {
         Pick a flair and post it to your feed, or skip.
       </Body>
 
-      <SectionLabel size="small" style={styles.flairLabel}>
+      <SectionLabel size="small" accessibilityRole="header" style={styles.flairLabel}>
         Flair
       </SectionLabel>
       {flairs.length > 0 ? (
@@ -224,7 +224,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xl,
   },
   flairLabel: {
-    color: colors.accent,
+    color: colors.accentText,
     marginBottom: spacing.sm,
   },
   chips: {

@@ -311,7 +311,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   authorName: {
-    color: colors.accent,
+    color: colors.accentText,
   },
   social: {
     flexDirection: 'row',

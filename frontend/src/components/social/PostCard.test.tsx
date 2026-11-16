@@ -57,14 +57,23 @@ describe('PostCard — the author header (B25)', () => {
     const onOpenProfile = jest.fn();
     const post = shaped(rawPost({ id: 'p1', author, createdAt: '2026-11-15T08:00:00.000Z' }));
     await render(<PostCard post={post} now={NOW} onOpenProfile={onOpenProfile} />);
-    await fireEvent.press(screen.getByLabelText('Open Wendy’s profile'));
+    await fireEvent.press(screen.getByLabelText(/^Open Wendy’s profile/));
     expect(onOpenProfile).toHaveBeenCalledWith('u1');
   });
 
   it('is not tappable without a handler', async () => {
     const post = shaped(rawPost({ id: 'p1', author, createdAt: '2026-11-15T08:00:00.000Z' }));
     await render(<PostCard post={post} now={NOW} />);
-    expect(screen.getByLabelText('Open Wendy’s profile')).toBeDisabled();
+    expect(screen.getByLabelText(/^Open Wendy’s profile/)).toBeDisabled();
+  });
+
+  it('(B49) speaks the handle and the post’s age with the profile button, as commas not dots', async () => {
+    const post = shaped(rawPost({ id: 'p1', author, createdAt: '2026-11-15T08:00:00.000Z' }));
+    await render(<PostCard post={post} now={NOW} onOpenProfile={() => {}} />);
+    const button = screen.getByRole('button', { name: /^Open Wendy’s profile/ });
+    // The same words the row draws ("@wod_queen · <age>"), joined by commas for a screen reader.
+    const drawn = screen.getByText(/^@wod_queen · /).props.children as string;
+    expect(button.props.accessibilityLabel).toBe(`Open Wendy’s profile, ${drawn.replace(' · ', ', ')}`);
   });
 });
 
@@ -379,7 +388,7 @@ describe('PostCard — re-shares and sharing (B28)', () => {
     expect(screen.getByText('Re-shared from @alice')).toBeTruthy();
     expect(screen.getByTestId('reshared-original')).toBeTruthy();
     expect(screen.getByText('Leg day')).toBeTruthy();
-    await fireEvent.press(screen.getByLabelText('Open Alice’s profile'));
+    await fireEvent.press(screen.getByLabelText(/^Open Alice’s profile/));
     expect(onOpenProfile).toHaveBeenCalledWith('alice');
   });
 

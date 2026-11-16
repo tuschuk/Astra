@@ -18,6 +18,8 @@ import {
   prBookLabel,
   DELETED_EXERCISE,
   sessionPrLine,
+  spokenSetLabel,
+  spokenSetText,
   setsSummaryLabel,
   groupDropSets,
   parseDurationInput,
@@ -386,5 +388,41 @@ describe('sessionPrLine (B18 summary, B28 share card)', () => {
     expect(sessionPrLine(squat, 'lb')).toBe(`Squat · 5RM · ${formatWeight(102.058, 'lb')}`);
     expect(sessionPrLine({ ...squat, kind: 'e1rm', reps: null }, 'kg')).toBe(`Squat · e1RM · ${formatWeight(102.058, 'kg')}`);
     expect(sessionPrLine({ ...squat, exercise_name: null }, 'kg')).toBe(`${DELETED_EXERCISE} · 5RM · ${formatWeight(102.058, 'kg')}`);
+  });
+});
+
+describe('spokenSetText (B49)', () => {
+  it('says a warm-up mark as words and a drop arrow as “then”', () => {
+    expect(spokenSetText('W · 8 × 135 lb')).toBe('Warm-up, 8 × 135 lb');
+    expect(spokenSetText('8 × 225 lb → 8 × 185 lb → 10 × 155 lb')).toBe('8 × 225 lb, then 8 × 185 lb, then 10 × 155 lb');
+  });
+
+  it('turns any other middle dot into a pause and leaves a plain set alone', () => {
+    expect(spokenSetText('5 × 225 lb @ RPE 8 · 4:32')).toBe('5 × 225 lb @ RPE 8, 4:32');
+    expect(spokenSetText('5 × 225 lb')).toBe('5 × 225 lb');
+  });
+
+  it('only reads a leading W as a warm-up', () => {
+    expect(spokenSetText('7 rounds · W')).toBe('7 rounds, W');
+  });
+
+  it('spokenSetLabel speaks what the real formatter prints — no stray dot or arrow survives', () => {
+    // Round-trips through formatDropSet, so a change to its separators that spokenSetText
+    // doesn't know about fails here instead of quietly garbling what a screen reader says.
+    const s = (reps: number, weight_kg: number, extra: object = {}) => ({
+      reps,
+      weight_kg,
+      rpe: null,
+      is_warmup: false,
+      duration_seconds: null,
+      score: null,
+      ...extra,
+    });
+    expect(spokenSetLabel(2, [s(8, 100, { is_warmup: true }), s(8, 80)], 'kg')).toBe(
+      'Set 2: Warm-up, 8 × 100 kg, then 8 × 80 kg',
+    );
+    const spoken = spokenSetLabel(1, [s(5, 100, { rpe: 8, duration_seconds: 272, is_warmup: true }), s(4, 80)], 'kg');
+    expect(spoken).not.toMatch(/[·→]/);
+    expect(spoken.startsWith('Set 1: Warm-up, ')).toBe(true);
   });
 });

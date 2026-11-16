@@ -305,7 +305,7 @@ export default function LibraryScreen() {
       <ChipRow options={EQUIPMENT_ORDER} labelOf={(kind) => kind} value={equipment} onChange={setEquipment} />
 
       <View style={styles.customHeader}>
-        <SectionLabel>Your exercises</SectionLabel>
+        <SectionLabel accessibilityRole="header">Your exercises</SectionLabel>
         <Button label="New exercise" variant="ghost" onPress={() => setFormKey((k) => (k ?? 0) + 1)} />
       </View>
       {customResults.map((exercise) => (

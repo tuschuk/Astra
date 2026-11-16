@@ -29,7 +29,7 @@ import { TextField } from '@/components/ui/TextField';
 import { COMMENT_COUNTER_FROM, COMMENT_MAX_CHARS, COMMENT_TOO_LONG, commentBodyError } from '@/social/commentLimits';
 import type { CommentsPage, PostComment } from '@/social/comments';
 import { personLabels } from '@/social/names';
-import { colors, spacing } from '@/theme';
+import { colors, layout, spacing } from '@/theme';
 import { postDateLabel } from '@/workout/format';
 
 /** The line shown when a conversation has more comments than one load brings back. */
@@ -174,13 +174,24 @@ function CommentRow({ comment, onReport }: { comment: PostComment; onReport?: ()
   return (
     <View style={styles.row} testID="comment-row">
       <LetterAvatar initial={who.initial} />
-      <View style={styles.rowText}>
+      {/* Read as one utterance ("Wendy, @wod_queen, 2h ago: Nice lift"); the ⋯ stays its own stop. */}
+      <View
+        style={styles.rowText}
+        accessible
+        accessibilityLabel={`${[who.name, who.handle, postDateLabel(comment.createdAt)].filter(Boolean).join(', ')}: ${comment.body}`}
+      >
         <Body style={styles.name}>{who.name}</Body>
         <Body variant="small">{[who.handle, postDateLabel(comment.createdAt)].filter(Boolean).join(' · ')}</Body>
         <Body style={styles.body}>{comment.body}</Body>
       </View>
       {onReport ? (
-        <Pressable accessibilityRole="button" accessibilityLabel={`Report ${who.name}’s comment`} onPress={onReport} hitSlop={8}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Report ${who.name}’s comment`}
+          onPress={onReport}
+          hitSlop={8}
+          style={styles.reportButton}
+        >
           <Ionicons name="ellipsis-horizontal" size={18} color={colors.muted} />
         </Pressable>
       ) : null}
@@ -215,5 +226,12 @@ const styles = StyleSheet.create({
   },
   send: {
     marginTop: spacing.md,
+  },
+  reportButton: {
+    // The ⋯ button's own box reaches the minimum touch target (the 18px icon alone is too small).
+    minWidth: layout.minTouchTarget,
+    minHeight: layout.minTouchTarget,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 });

@@ -32,6 +32,7 @@ import { colors, spacing, type } from '@/theme';
 import {
   formatDropSet,
   groupDropSets,
+  spokenSetLabel,
   supersetRuns,
   totalSets,
   workoutDateLabel,
@@ -135,7 +136,9 @@ export default function SessionScreen() {
 function SessionExercise({ entry, unit }: { entry: WorkoutDetailEntry; unit: WeightUnit }) {
   return (
     <View style={styles.exercise}>
-      <Body style={styles.name}>{entry.exerciseName ?? CUSTOM_EXERCISE}</Body>
+      <Body accessibilityRole="header" style={styles.name}>
+        {entry.exerciseName ?? CUSTOM_EXERCISE}
+      </Body>
       {entry.notes ? (
         <Body variant="small" style={styles.note}>
           {entry.notes}
@@ -146,7 +149,12 @@ function SessionExercise({ entry, unit }: { entry: WorkoutDetailEntry; unit: Wei
       ) : (
         groupDropSets(entry.sets).map((segments, index) => (
           <View key={segments[0].id}>
-            <View style={styles.setRow}>
+            {/* One utterance per set for screen readers; a drop set's arrows are spoken as "then". */}
+            <View
+              style={styles.setRow}
+              accessible
+              accessibilityLabel={spokenSetLabel(index + 1, segments, unit)}
+            >
               <SectionLabel size="small" style={styles.setNumber}>
                 Set {index + 1}
               </SectionLabel>
@@ -183,7 +191,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   supersetLabel: {
-    color: colors.accent,
+    color: colors.accentText,
   },
   exercise: {
     gap: spacing.sm,
@@ -200,9 +208,11 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   setNumber: {
-    width: 48,
+    // minWidth: at large text sizes "SET 10" grows instead of clipping.
+    minWidth: 48,
   },
   setText: {
+    flex: 1,
     color: colors.text,
   },
 });

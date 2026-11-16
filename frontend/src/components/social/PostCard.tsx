@@ -65,7 +65,7 @@ import {
 } from '@/social/postPrivacy';
 import { RESHARE_MESSAGES, type ReshareResult } from '@/social/reshare';
 import type { VoteResult, VoteValue } from '@/social/votes';
-import { colors, radii, spacing } from '@/theme';
+import { colors, layout, radii, spacing } from '@/theme';
 import {
   formatDropSet,
   formatSet,
@@ -156,7 +156,7 @@ export function PostCard({
       <View style={styles.header}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Open ${who.name}’s profile`}
+          accessibilityLabel={authorSpoken(who, post.createdAt, now)}
           disabled={!onOpenProfile || !author.id}
           onPress={() => onOpenProfile?.(author.id)}
           style={styles.author}
@@ -167,7 +167,7 @@ export function PostCard({
             <Body variant="small">{[who.handle, postDateLabel(post.createdAt, now)].filter(Boolean).join(' · ')}</Body>
           </View>
         </Pressable>
-        <View style={styles.flair} accessibilityLabel={`Flair: ${flair.name}`}>
+        <View style={styles.flair} accessible accessibilityLabel={`Flair: ${flair.name}`}>
           <SectionLabel size="small" style={styles.flairText}>
             {flair.name}
           </SectionLabel>
@@ -178,6 +178,7 @@ export function PostCard({
             accessibilityLabel="Report post"
             onPress={() => setReporting(true)}
             hitSlop={8}
+            style={styles.iconButton}
           >
             <Ionicons name="ellipsis-horizontal" size={20} color={colors.muted} />
           </Pressable>
@@ -256,7 +257,7 @@ function ResharedOriginal({
       <View style={styles.original} testID="reshared-original">
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`Open ${who.name}’s profile`}
+          accessibilityLabel={authorSpoken(who, original.createdAt, now)}
           disabled={!onOpenProfile || !original.author.id}
           onPress={() => onOpenProfile?.(original.author.id)}
           style={styles.author}
@@ -572,10 +573,26 @@ function PostPhoto({ source }: { source: PhotoSource | null }) {
   );
 }
 
+/**
+ * What a screen reader says for a post's author row (B49): the action, then the lines the row
+ * draws beside the avatar — "Open Wendy’s profile, @wendy, 2h ago" — so the handle and the
+ * post's age aren't swallowed by the button. Middle dots aren't spoken; commas pause instead.
+ */
+function authorSpoken(who: ReturnType<typeof personLabels>, createdAt: string, now: Date | undefined): string {
+  return [`Open ${who.name}’s profile`, who.handle, postDateLabel(createdAt, now)].filter(Boolean).join(', ');
+}
+
 const styles = StyleSheet.create({
   card: {
     marginBottom: spacing.md,
     gap: spacing.xs,
+  },
+  iconButton: {
+    // The ⋯ button's own box reaches the minimum touch target (the 20px icon alone is too small).
+    minWidth: layout.minTouchTarget,
+    minHeight: layout.minTouchTarget,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   header: {
     flexDirection: 'row',

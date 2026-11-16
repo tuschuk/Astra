@@ -70,6 +70,8 @@ import {
   parseDurationInput,
   parseNumberInput,
   setErrorMessage,
+  spokenSetLabel,
+  spokenSetText,
   textErrorMessage,
 } from '@/workout/format';
 import { exerciseInfo, lastSessionSets, type ExerciseInfo, type LastSession } from '@/workout/history';
@@ -299,7 +301,9 @@ export function EntryCard({
         </SectionLabel>
       ) : null}
       <View style={styles.header}>
-        <Body style={styles.name}>{label}</Body>
+        <Body accessibilityRole="header" style={styles.name}>
+          {label}
+        </Body>
         <View style={styles.headerActions}>
           {entry.position > 0 ? (
             <ToggleIcon
@@ -382,13 +386,22 @@ export function EntryCard({
         const number = index + 1;
         const [top, ...drops] = segments;
         const setName = `set ${number} of ${label}`;
+        const topLine = formatSet(top, unit);
         return (
           <View key={top.id}>
             <View style={styles.setRow}>
-              <SectionLabel size="small" style={styles.setNumber}>
-                Set {number}
-              </SectionLabel>
-              <Body style={styles.setText}>{formatSet(top, unit)}</Body>
+              {/* The label and the set's text are one utterance ("Set 2: 8 × 135 lb") for screen
+                  readers; the buttons beside them stay separately reachable. */}
+              <View
+                accessible
+                accessibilityLabel={spokenSetLabel(number, [top], unit)}
+                style={styles.setSummary}
+              >
+                <SectionLabel size="small" style={styles.setNumber}>
+                  Set {number}
+                </SectionLabel>
+                <Body style={styles.setText}>{topLine}</Body>
+              </View>
               <NoteIcon set={top} name={setName} onPress={() => setEditingSetId(top.id)} />
               <ToggleIcon
                 text="W"
@@ -409,10 +422,16 @@ export function EntryCard({
             {renderSetNote(top, setName)}
             {drops.map((drop, dropIndex) => {
               const dropName = `drop ${dropIndex + 1} of ${setName}`;
+              const dropLine = formatSet({ ...drop, is_warmup: false }, unit);
               return (
                 <View key={drop.id}>
                   <View style={[styles.setRow, styles.dropRow]}>
-                    <Body style={[styles.setText, styles.dropText]}>↳ {formatSet({ ...drop, is_warmup: false }, unit)}</Body>
+                    <Body
+                      accessibilityLabel={`Drop ${dropIndex + 1}: ${spokenSetText(dropLine)}`}
+                      style={[styles.setText, styles.dropText]}
+                    >
+                      ↳ {dropLine}
+                    </Body>
                     <NoteIcon set={drop} name={dropName} onPress={() => setEditingSetId(drop.id)} />
                     <IconButton
                       icon="close"
@@ -729,15 +748,23 @@ const styles = StyleSheet.create({
     borderRadius: radii.md,
   },
   historyText: {
-    color: colors.accent,
+    color: colors.accentText,
   },
   setRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
   },
+  setSummary: {
+    // The "Set n" label and the set's text, read as one sentence (see the row above).
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
   setNumber: {
-    width: 48,
+    // minWidth, not width: at large text sizes "SET 10" grows past 48 instead of clipping.
+    minWidth: 48,
   },
   setText: {
     flex: 1,
@@ -750,7 +777,7 @@ const styles = StyleSheet.create({
     color: colors.muted,
   },
   supersetBadge: {
-    color: colors.accent,
+    color: colors.accentText,
   },
   scoreInput: {
     flex: 2,
@@ -805,8 +832,10 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   badge: {
-    width: 26,
-    height: 26,
+    // A floor, not a fixed box: the "W" grows with the phone's text size instead of clipping.
+    minWidth: 26,
+    minHeight: 26,
+    paddingHorizontal: spacing.xs,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,

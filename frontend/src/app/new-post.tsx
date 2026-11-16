@@ -234,7 +234,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xl,
   },
   label: {
-    color: colors.accent,
+    color: colors.accentText,
     marginBottom: spacing.sm,
   },
   chips: {

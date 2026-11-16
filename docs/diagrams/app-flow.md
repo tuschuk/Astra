@@ -1248,6 +1248,20 @@ flowchart TD
   (red alert line) and (moved from the Tool Kit at B26) ChoiceChips (a radio-group chip row, can
   be locked with `disabled` — Tool Kit, Home, profile tabs, Settings, the post visibility
   chooser), all styled from `theme/tokens.ts`.
+- **Accessibility (B49)** — patterns every core flow (log, feed, profile, library) follows, no
+  data path involved:
+  - **Text size.** All text grows with the phone's text-size setting. `theme/tokens.ts`
+    `fontScaleCaps` is the one table of ceilings for display, title, timer, stat and label/button
+    styles; body copy, inputs and card titles are uncapped. `Heading`, `SectionLabel`, `Button`
+    and `Body scaleAs` apply the caps, and text containers use minimum sizes, never fixed ones.
+  - **Contrast.** `theme/contrast.ts` holds the WCAG ratio math (used by tests only).
+    `theme/contrast.test.ts` checks every palette pair the app draws (text ≥ 4.5:1, icons ≥ 3:1).
+    Small red text uses `accentText`, and the brand `accent` is for fills, borders and icons.
+  - **Screen readers.** Section labels and exercise names are announced as headings. A logged
+    set row speaks one sentence built by `workout/format.ts` `spokenSetLabel` ("Set 2: Warm-up,
+    8 × 225 lb, then 8 × 185 lb"), and the row's buttons stay separate stops. Post author rows and
+    comments speak who and when. Refusal and error lines (`FormError`, a refused vote) are alerts.
+    Charts and the muscle map stay hidden and speak one summary sentence each.
 - `components/share/` (B28) holds ShareCard (the workout image card the share-card screen previews and captures; pure, props in). `social/reshare.ts` (B28) makes re-shares.
 - `components/social/` (B20) holds PostCard (one feed post — a workout, or since B22 a photo; since B23 with the vote / comments footer; since B25 a tappable author; since B26 the owner-only visibility chip; since B27 a ⋯ report button on other people's cards; since B28 re-share cards with the original embedded, Re-share on others' cards and Share on own workout cards), ReportSheet (B27: the report panel for a post or comment), UserCard (a person + FollowButton; since B25 tappable to their profile),
   FollowButton (B25: Follow / Following, optimistic with revert, `onSettled` after an accepted

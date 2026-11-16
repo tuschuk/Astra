@@ -48,6 +48,8 @@ describe('VoteControl', () => {
     expect(shownScore()).toBe('Score 2');
     expect(screen.getByLabelText('Upvote').props.accessibilityState.selected).toBe(true);
     expect(screen.getByText(VOTE_REFUSAL_MESSAGES.failed)).toBeTruthy();
+    // (B49) The refusal is an alert, so a screen reader announces it as it appears.
+    expect(screen.getByRole('alert')).toHaveTextContent(VOTE_REFUSAL_MESSAGES.failed);
   });
 
   it('a sender that throws counts as refused, and the arrows still work afterwards', async () => {

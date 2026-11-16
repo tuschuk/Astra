@@ -31,6 +31,15 @@ describe('CommentsPane', () => {
     expect(screen.queryByText(MORE_COMMENTS_LINE)).toBeNull();
   });
 
+  it('(B49) reads each comment as one sentence — who, when, then what they said — with ⋯ its own stop', async () => {
+    await render(
+      <CommentsPane load={async () => page} send={jest.fn<(b: string) => Promise<PostComment>>()} me="me" onReport={jest.fn()} />,
+    );
+    const row = await screen.findByLabelText(/^Ann, @ann_lifts, .+: First$/);
+    expect(row).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Report Ann’s comment' })).toBeTruthy();
+  });
+
   it('says more exist when the load was cut off', async () => {
     await render(<CommentsPane load={async () => ({ ...page, more: true })} send={jest.fn<(b: string) => Promise<PostComment>>()} me="me" />);
     expect(await screen.findByText(MORE_COMMENTS_LINE)).toBeTruthy();
