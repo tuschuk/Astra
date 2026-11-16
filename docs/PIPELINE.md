@@ -89,6 +89,16 @@ claude -p <prompt> --output-format json --permission-mode acceptEdits
   18+ signup trigger refuses otherwise), plus a matching `auth.identities` row; then call
   `/auth/v1/token?grant_type=password` with the publishable key. Delete the user afterwards
   (or, as in B32, let the function under test delete it).
+- A headless run can die after doing its work. The B42 builder (Nov 16, 2026) finished Code,
+  Test, Review and Document, then exited non-zero about 13 minutes after its last file write,
+  before committing; n8n recorded only "Command failed" because an Execute Command node keeps
+  no stderr from a failed command. Both launchers now redirect stderr to
+  `automation/state/builder.err.log` / `planner.err.log` (gitignored) so the next failure can be
+  read. Recovery recipe: confirm no `claude -p` process is still alive, run the check chain on
+  the uncommitted tree, read the plan file's build notes for how far Review and Document got,
+  fill whatever is missing (DEFERRED entries, diagrams), commit the work on the step's branch
+  as the build commit, and continue Gate 2 as usual. Do not `retry` the execution on a dirty
+  tree — the builder prompt assumes a clean branch.
 
 ## Failure handling (v1)
 
