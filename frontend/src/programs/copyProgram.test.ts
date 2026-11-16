@@ -104,4 +104,9 @@ describe('skippedExercisesLine', () => {
     expect(skippedExercisesLine(1)).toMatch(/^1 exercise is/);
     expect(skippedExercisesLine(2)).toMatch(/^2 exercises are/);
   });
+
+  it('names the coach on a team and the author on the Marketplace (B40)', () => {
+    expect(skippedExercisesLine(1)).toBe('1 exercise is the coach’s own and didn’t copy.');
+    expect(skippedExercisesLine(2, 'author')).toBe('2 exercises are the author’s own and didn’t copy.');
+  });
 });

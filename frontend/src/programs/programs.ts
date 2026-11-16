@@ -280,7 +280,7 @@ export const PROGRAM_VISIBILITY_WORDS: { [V in ProgramVisibility]: { label: stri
   team: { label: 'Team', meaning: 'Members of the Teams you share it with can see this program.' },
   published: {
     label: 'Published',
-    meaning: 'Anyone on Astra can see this program — it will be listed on the Marketplace (coming soon).',
+    meaning: 'Anyone on Astra can see this program — it is listed on the Marketplace.',
   },
 };
 

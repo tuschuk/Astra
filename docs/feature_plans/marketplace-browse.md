@@ -301,6 +301,44 @@ cycle rule: it composes `copyProgram` + `programRuns` only).
    uploading (refused by Postgres) it. The ERD note must state the column is server-generated
    and must stay out of `TABLE_COLUMNS`.
 
+## Build record — deviations from the plan (builder, Nov 16, 2026)
+
+Migration applied live as `20261116004257_marketplace_search.sql` (file renamed to the version
+Supabase recorded). Live SQL probe (rolled back): a word search as user B returns A's published
+program and not A's private one (with and without the app's visibility filter); `program_payload`
+non-null / null respectively; `search` is `attgenerated = 's'` and non-null on every existing row;
+"start" does not match "Starting Strength" (the recorded whole-word limitation).
+
+1. **`skippedExercisesLine(skipped, owner = 'coach')`** gained an owner word: the Marketplace
+   says "…the author's own and didn't copy" — B37's sentence named the coach, which is false on a
+   published program. Default unchanged, so the team flow's words are untouched.
+2. **Save and Start with skipped exercises stays on the page.** D6 said "on success route to the
+   Workout tab". It still does when everything copied; when some slots didn't copy the page
+   keeps the count visible with a **Go to the Workout tab** button, since routing away would
+   swallow the only place that count is shown. The run is active after the one tap either way
+   (MKT-5's DoD).
+3. **`saveProgramOnly`** joins `saveAndStartProgram` in `programs/saveAndStart.ts` (review fix):
+   both screens' save-only paths had rebuilt the same `{ ...copy, started: false }` result.
+   D5's "save-without-start stays `createProgramFromPayload` called directly" is replaced by a
+   one-line wrapper with the shared answer shape.
+4. **`programFacts` also returns `hasWorkouts`** (the disable-both-buttons check D6 asks for,
+   computed once), and **`programFactsLine`** formats "N weeks · M days/week" with singulars.
+5. **`MarketplaceProgram` carries `visibility`** (the page row read needs it per D4; the list
+   shares the one select).
+6. **`__tests__/screens.test.tsx` deleted** — its only case was the placeholder; the files table
+   allowed dropping it for `__tests__/marketplace.test.tsx`.
+7. **`app/_layout.tsx`** registers the new `marketplace-program/[id]` stack screen (every route
+   is listed there; the files table omitted it).
+8. The fake social client gained `programs`, `is`, `textSearch` (a whole-word / phrase imitation
+   of `websearch_to_tsquery('simple', …)`) and the programs author embed (G11).
+
+Review (mattpocock code-review, two axes) — no spec requirement broken; fixed: the duplicated
+save-only branch (3), `MARKETPLACE_SELECT` un-exported, an exact-string lb assertion, the tab's
+lede now says voting comes later (D6). Left as designed: the page serves any program RLS shows
+(G8), so a deep link to a team-shared program opens it with Save and Start — no screen links
+there today; "days/week" counts workouts with no exercises yet (the same thing `startProgramRun`
+counts as runnable).
+
 ## Grilling record (settled decisions)
 
 Conducted by the planner session (autonomous pipeline, both sides at full severity). What was

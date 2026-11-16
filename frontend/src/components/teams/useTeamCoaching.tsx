@@ -16,6 +16,9 @@
  *   - the owner: **Make coach** / **Remove coach** on a member's row.
  * Every change re-reads the page (`onChanged`). Refusals come back as a sentence in `message`.
  *
+ * Start and Save go through `programs/saveAndStart.ts` (B40) — the one copy-then-run home the
+ * Marketplace program page shares, so both screens copy and start a program the same way.
+ *
  * The copy and the run start are saved on the phone; reading the payload and removing the
  * assignment need the connection the team page already requires. A kill between the two leaves
  * a saved program and a standing assignment — tapping Start again makes a second copy, which
@@ -27,9 +30,9 @@ import React, { useCallback, useRef, useState } from 'react';
 
 import { ProgramPickerSheet } from '@/components/programs/ProgramPickerSheet';
 import type { SqlDriver } from '@/db/driver';
-import { createProgramFromPayload, skippedExercisesLine } from '@/programs/copyProgram';
-import { startProgramRun } from '@/programs/programRuns';
+import { skippedExercisesLine } from '@/programs/copyProgram';
 import { listPrograms } from '@/programs/programs';
+import { saveAndStartProgram, saveProgramOnly } from '@/programs/saveAndStart';
 import { useDisplayUnit } from '@/settings/displayUnit';
 import {
   assignProgram,
@@ -237,9 +240,12 @@ export function useTeamCoaching({ client, db, me, teamId, onChanged }: UseTeamCo
         router.push('/active-workout');
         return;
       }
+      // A pushed program is saved only; an assignment is saved AND started (the shared B40 home).
+      const payload = sheet.content.payload;
+      const saveOnly = sheet.content.kind === 'program';
       let copy;
       try {
-        copy = await createProgramFromPayload(db, me, sheet.content.payload);
+        copy = await (saveOnly ? saveProgramOnly : saveAndStartProgram)(db, me, payload);
       } catch (caught) {
         console.warn('Team: the program could not be copied', caught);
         setSheetMessage('That program couldn’t be saved on this phone. Try again.');
@@ -248,14 +254,11 @@ export function useTeamCoaching({ client, db, me, teamId, onChanged }: UseTeamCo
       // From here the copy exists: the footer action is spent (a second tap would copy again).
       setSheet((prev) => (prev ? { ...prev, done: true } : prev));
       const skipped = skippedExercisesLine(copy.skippedExercises);
-      if (sheet.content.kind === 'program') {
+      if (saveOnly) {
         setSheetMessage([PROGRAM_SAVED, skipped].filter(Boolean).join(' '));
         return;
       }
-      try {
-        await startProgramRun(db, me, copy.programId);
-      } catch (caught) {
-        console.warn('Team: the copied program could not be started', caught);
+      if (!copy.started) {
         setSheetMessage(ASSIGNMENT_SAVED_NOT_STARTED);
         return;
       }

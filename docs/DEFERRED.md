@@ -714,3 +714,25 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     team you left" → Stop sharing. Judge the section at phone width.
   - Mermaid render of both diagrams was not run by the builder (`mmdc` declined by the permission
     layer) — Gate 2 should render them once.
+- **B40 marketplace-browse** (built, awaiting Gate 2):
+  - **Live HTTP pass with a throwaway JWT** is Gate 2's (the builder ran the rolled-back SQL
+    claims probe only): `programs?select=…&visibility=eq.published&search=wfts(simple).<word>`
+    returns A's published program for B and not A's private one; no token → refused.
+  - **`programs.description`** (D1) — not added; lands with the first step that displays one
+    (B41 cards), one migration swapping the generated `search` expression to include it.
+  - **Search is whole-word only** (no prefix / typeahead: "start" misses "Starting Strength"), no
+    `ts_rank` relevance order (newest first), no author-name search (G2) — on device evidence.
+  - **Grow-the-limit paging** (30 at a time) — keyset paging when the shelf grows (feed shape).
+  - **Browse cards show name + author only** (D2) — counts/size on cards need a definer list
+    surface (child tables are author-only); B41 redesigns cards.
+  - **Blocked authors' published programs are not filtered** (B39's recorded option, still open).
+  - **The program page serves any program RLS shows** (G8): a deep link to a team-shared or
+    followers program opens it with Save and Start; nothing links there yet.
+  - **No confirm dialog before Save and Start replaces a running program** — the page shows
+    "This will replace your current program" instead (G7, parity with the team accept flow).
+  - **Device check (Tristen):** account A publishes a program → account B: Marketplace lists it →
+    search a word of its name → tap → author / weeks / days + full breakdown → Save and Start →
+    Workout tab shows the run → Start next session = A's Day 1 with targets; airplane mode →
+    Marketplace shows the connection message; B's copy survives kill + reopen and syncs up.
+    Judge the cards, the page and the button block at phone width.
+  - `mmdc` render of both diagrams not run by the builder — Gate 2.

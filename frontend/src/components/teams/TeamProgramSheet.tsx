@@ -14,25 +14,21 @@
  *   - a pushed workout → **Start this workout**: opens the logger on it, prefilled.
  * Or **Close**. The sheet only shows and reports the tap; the team page does the work and passes
  * back a busy flag and any message (a refusal, or "2 exercises are the coach's own…").
+ *
+ * The weeks / workouts / exercises themselves are drawn by `ProgramPayloadView` (B40), the one
+ * renderer the Marketplace program page shares; this file is the modal around it.
  */
 import React from 'react';
 import { Modal, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { WeightUnit } from '@training-math';
 
+import { PayloadWorkoutCard, ProgramPayloadView } from '@/components/programs/ProgramPayloadView';
 import { Button } from '@/components/ui/Button';
-import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Body, Heading, SectionLabel } from '@/components/ui/Text';
-import { DELETED_EXERCISE_NAME, formatProgramTargets } from '@/programs/programs';
-import {
-  payloadWorkoutLabel,
-  type PayloadSlot,
-  type PayloadWorkout,
-  type TeamProgramPayload,
-  type TeamWorkoutPayload,
-} from '@/social/teamCoaching';
-import { colors, layout, spacing, type } from '@/theme';
+import { payloadWorkoutLabel, type TeamProgramPayload, type TeamWorkoutPayload } from '@/social/teamCoaching';
+import { colors, layout, spacing } from '@/theme';
 
 /** Shown when the server no longer hands the content over. */
 export const PUSH_UNAVAILABLE = 'This program is no longer available.';
@@ -67,38 +63,6 @@ export interface TeamProgramSheetProps {
   onClose: () => void;
 }
 
-/** One exercise slot as a line: its name and its targets. */
-function SlotLine({ slot, unit }: { slot: PayloadSlot; unit: WeightUnit }) {
-  const targets = formatProgramTargets(
-    {
-      target_sets: slot.targetSets,
-      target_reps: slot.targetReps,
-      target_weight_kg: slot.targetWeightKg,
-      target_rpe: slot.targetRpe,
-    },
-    unit,
-  );
-  return (
-    <View style={styles.slot}>
-      <Body style={styles.slotName}>{slot.exerciseName ?? DELETED_EXERCISE_NAME}</Body>
-      <Body variant="small">{targets}</Body>
-    </View>
-  );
-}
-
-/** One workout's card: its label and its slots. */
-function WorkoutCard({ workout, label, unit }: { workout: PayloadWorkout; label: string; unit: WeightUnit }) {
-  return (
-    <Card style={styles.card}>
-      <Body style={styles.workoutName}>{label}</Body>
-      {workout.exercises.length === 0 ? <Body variant="small">No exercises yet.</Body> : null}
-      {workout.exercises.map((slot, i) => (
-        <SlotLine key={`${slot.position}-${i}`} slot={slot} unit={unit} />
-      ))}
-    </Card>
-  );
-}
-
 export function TeamProgramSheet({ content, unit, busy, done = false, message, onAction, onClose }: TeamProgramSheetProps) {
   const insets = useSafeAreaInsets();
   const payload = content?.payload ?? null;
@@ -111,25 +75,12 @@ export function TeamProgramSheet({ content, unit, busy, done = false, message, o
     body = (
       <>
         <SectionLabel size="small">From {w.programName}</SectionLabel>
-        <WorkoutCard workout={w} label={heading} unit={unit} />
+        <PayloadWorkoutCard workout={w} label={heading} unit={unit} />
       </>
     );
   } else if (content && content.kind !== 'workout' && content.payload) {
-    const p = content.payload;
-    heading = p.name;
-    body =
-      p.weeks.length === 0 ? (
-        <Body variant="muted">This program has no weeks yet.</Body>
-      ) : (
-        p.weeks.map((week, weekIndex) => (
-          <View key={`week-${weekIndex}`} style={styles.week}>
-            <SectionLabel>Week {weekIndex + 1}</SectionLabel>
-            {week.workouts.map((workout, i) => (
-              <WorkoutCard key={`w-${i}`} workout={workout} label={payloadWorkoutLabel(workout, i + 1)} unit={unit} />
-            ))}
-          </View>
-        ))
-      );
+    heading = content.payload.name;
+    body = <ProgramPayloadView payload={content.payload} unit={unit} />;
   }
 
   return (
@@ -167,24 +118,6 @@ const styles = StyleSheet.create({
     gap: spacing.md,
   },
   title: {
-    flexShrink: 1,
-  },
-  week: {
-    gap: spacing.sm,
-  },
-  card: {
-    gap: spacing.xs,
-  },
-  workoutName: {
-    ...type.cardTitle,
-  },
-  slot: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: spacing.md,
-  },
-  slotName: {
-    color: colors.text,
     flexShrink: 1,
   },
   footer: {
