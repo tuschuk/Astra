@@ -166,6 +166,18 @@ export interface WorkoutAnalysisRow {
   workout_updated_at: string;
   created_at: string;
   updated_at: string;
+  /**
+   * The trend (B42, engine version 2; null on version-1 rows): how many earlier sessions the
+   * averages cover, and their average volume, RPE and load per rep — all null below the
+   * threshold. See `_shared/analysis/trend.ts`.
+   */
+  trend_sessions: number | null;
+  trend_volume_avg_kg: number | null;
+  trend_rpe_avg: number | null;
+  trend_load_per_rep_avg_kg: number | null;
+  /** This session's own average RPE and load per rep (stored whenever computable). */
+  session_rpe_avg: number | null;
+  session_load_per_rep_kg: number | null;
 }
 
 /**
@@ -490,6 +502,12 @@ export const TABLE_COLUMNS: { readonly [T in MirroredTable]: readonly (keyof Mir
     'workout_updated_at',
     'created_at',
     'updated_at',
+    'trend_sessions',
+    'trend_volume_avg_kg',
+    'trend_rpe_avg',
+    'trend_load_per_rep_avg_kg',
+    'session_rpe_avg',
+    'session_load_per_rep_kg',
   ],
   flairs: ['id', 'name', 'position', 'upvotes_only'],
   posts: ['id', 'user_id', 'flair_id', 'kind', 'workout_id', 'image_path', 'visibility', 'created_at', 'updated_at'],

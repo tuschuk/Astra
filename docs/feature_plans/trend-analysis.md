@@ -475,6 +475,45 @@ Questions that changed or sharpened the plan:
   so deploy-before-migrate would 500 every analyze call; migrate-before-deploy is safe in both
   directions (the old function names no new column; the new columns are nullable). Recorded as
   a builder footgun with the safe order.
-- **Scope verdict:** right as written. The version-2 upgrade (G8) is argued above as the DoD's
+- **Scope verdict (planner):** right as written — see below for what the build changed.
+
+## Build notes and deviations (builder)
+
+1. **Reader filter is "no later than + not this id", not the strict pair.** Both readers fetch
+   `started_at <= workout.started_at and id <> workout.id` (server: PostgREST `.lte().neq()`;
+   phone: `julianday(started_at) <= julianday(?) and id <> ?`), ordered newest first, limit 40.
+   The strict `(started_at, id) <` tie-break lives only in `trendHistory`. Same-instant
+   later-id rows are over-fetched identically on both sides (they can use a cap slot, never
+   change the window otherwise). Avoids a quoted PostgREST `or(…)` filter, and the phone compares
+   instants (`julianday`), not text — the G13 concern handled at the fetch too.
+2. **`AnalysisInput.history` is required; `buildSummary` takes `Omit<AnalysisInput, 'history'>`**
+   so a reader can't forget it while summary-only callers stay simple. `AnalysisSet.rpe` is
+   required (`number | null`).
+3. **Trend lines carry their numbers.** `TrendLine` = `{ measure, label, value, average,
+   sentence }`; the screen formats `value`/`average` (`formatWeight` — the app's
+   `displayWeight` + unit helper — for kg, one decimal for RPE). The RPE sentence holds only the
+   delta ("About 0.5 above your recent sessions") and both RPEs are rounded to the one decimal
+   shown **before** the delta is worked out, so the printed pair and the sentence always agree
+   (review finding). Load-per-rep uses "heavier / lighter".
+4. **Named constant `TREND_AROUND_RPE = 0.2`** (RPE "right around" band) beside the plan's
+   `TREND_AROUND_PERCENT = 2`. Both sentences round the size, then apply direction (so ±x.5
+   rounds symmetrically).
+5. **Rows from a NEWER engine than the app are kept** (`engine_version < ANALYSIS_ENGINE_VERSION`
+   is the only "older rules" test), so an old app build never loops re-requesting a newer row.
+6. **The edge function coerces `weight_kg` and `rpe` to numbers** on every set read
+   (`asAnalysisSet`), so a numeric arriving as text could never make the server skip an RPE the
+   phone counts. `toAnalysisRow` likewise coerces the six trend numerics.
+7. **`MIN_SET_RPE` / `MAX_SET_RPE` are now exported from `@training-math`'s index** — the RPE
+   validity range in `sessionMeasures` reuses the set CHECK's constants rather than retyping 1–10.
+8. **Deploy:** migration applied first (`20261116023347`, renamed to the recorded version), then
+   `analyze-workout` redeployed as v3 (ACTIVE, `verify_jwt` true) with comment-stripped copies of
+   the repo files (code identical), the whole `_shared/analysis` + `_shared/training-math` graph.
+9. **Review (code-review skill, both axes) findings and outcomes:** RPE pair/sentence rounding
+   mismatch → fixed (3); `sessionMeasures` summed `setVolumeKg` itself → now `sessionVolumeKg`
+   (one volume home); version-1 rows' batch-cap / pending-guard untested → test added; the six
+   columns spelled field-by-field in `buildAnalysis` → spread. Not changed (judgement calls):
+   the fake transport restating the reader's fetch (it must mirror the real read), the six column
+   names listed in each storage layer (the existing per-layer pattern), `copy.ts` holding both
+   copy families (the file is "every string the analysis shows"). The version-2 upgrade (G8) is argued above as the DoD's
   own requirement rather than an addition; everything else that touches these numbers (deload,
   charts, recovery) stays with its own step.

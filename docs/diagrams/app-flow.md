@@ -213,7 +213,7 @@ flowchart TD
 
   subgraph Device["On the device"]
     Store[("expo-sqlite key-value store<br/>the saved Supabase session<br/>(survives killing the app)")]
-    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records, user_settings (B15: user_id, unit; V10, B26: progress_pic_visibility),<br/>workout_analyses (B18, download-only, new_prs as JSON text),<br/>flairs (B21, download-only, replaced whole), posts (B21, my own, upload-only;<br/>B22: kind, nullable workout_id, image_path); V11 (B31): exercises.deleted_at;<br/>V12 (B34): programs → program_weeks → program_workouts → program_exercises (soft-deleted, schema V12)<br/>V13 (B35): program_runs (never deleted, ended_at) + workouts.program_workout_id<br/>+ outbox (unsent changes; op = upsert or delete, B14) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
+    LocalDB[("astra.db: on-device SQLite (src/db)<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records, user_settings (B15: user_id, unit; V10, B26: progress_pic_visibility),<br/>workout_analyses (B18, download-only, new_prs as JSON text),<br/>flairs (B21, download-only, replaced whole), posts (B21, my own, upload-only;<br/>B22: kind, nullable workout_id, image_path); V11 (B31): exercises.deleted_at;<br/>V12 (B34): programs → program_weeks → program_workouts → program_exercises (soft-deleted, schema V12)<br/>V13 (B35): program_runs (never deleted, ended_at) + workouts.program_workout_id<br/>V15 (B42): workout_analyses + six trend columns (null on old rows)<br/>+ outbox (unsent changes; op = upsert or delete, B14) + sync_state (bookmarks)<br/>WAL; every write is one transaction")]
     LocalSeed["First-launch seed (library/seedLocal.ts)<br/>insert-if-missing all 151 exercises,<br/>id = uuidv5(namespace, slug); never queued"]
     WriteLocal["writeLocal / writeLocalRowsTx / writeLocalTree (db/dao.ts): the queued write paths<br/>rows + outbox lines + re-stamp & queue parent workout,<br/>all-or-nothing (writeLocalTree: a whole workout in one transaction)<br/>deleteLocalRowsTx (B14): delete rows + 'delete' outbox line + touch the root<br/>(a deleted workout also drops its analysis and, B21, its post + the post's unsent lines)"]
     Drafts["writeDraftRows / deleteDraftRowsTx (db/dao.ts): the in-progress path<br/>saved at once, NEVER queued; refused for a finished workout"]
@@ -240,7 +240,7 @@ flowchart TD
     ToolKit -->|"Close / system back: logger still mounted underneath, exactly as left"| Logger
     Logger -->|Finish| EmptyQ
     EmptyQ -->|"yes: 'Nothing logged yet'<br/>Discard workout / Keep lifting"| Logger
-    AnalysisScr["Workout analysis (app/analysis/[id].tsx, B18: ANA-1/2/4, NFR-9)<br/>workout title or date; encouraging headline + message (rule-picked, no AI);<br/>Volume (lifter's unit), Sets ('n sets · k warm-up'), Duration (m:ss);<br/>B19 'Muscles trained' card (ANA-3): front + back body figures (MuscleMap),<br/>trained muscles filled red, opacity 0.25 + 0.75 × intensity, the rest plain;<br/>legend 'Chest, Shoulders, Triceps' (most direct first); hidden when nothing maps;<br/>'New PRs': exercise · book · weight; B21 finish mode (post=1, only from Finish): Next;<br/>View workout; B28 Share (→ share card); Back;<br/>not-medical-advice statement in EVERY state (incl. loading / missing);<br/>re-read on every focus; works offline<br/>(another user's / unfinished id: 'not on this phone')"]
+    AnalysisScr["Workout analysis (app/analysis/[id].tsx, B18: ANA-1/2/4, NFR-9)<br/>workout title or date; encouraging headline + message (rule-picked, no AI);<br/>Volume (lifter's unit), Sets ('n sets · k warm-up'), Duration (m:ss);<br/>B42 'Against your trend' card (ANA-5 / LOG-10), only when the analysis has a trend (5+ earlier sessions):<br/>'Compared with your last N sessions'; Volume 'this vs average' + 'About 12% more than your recent average';<br/>one intensity line: Average RPE '8.0 vs 7.0' + 'About 1.0 above…' when both sides have RPE,<br/>else Load per rep (lifter's unit); words from trendCopy; absent below the threshold;<br/>B19 'Muscles trained' card (ANA-3): front + back body figures (MuscleMap),<br/>trained muscles filled red, opacity 0.25 + 0.75 × intensity, the rest plain;<br/>legend 'Chest, Shoulders, Triceps' (most direct first); hidden when nothing maps;<br/>'New PRs': exercise · book · weight; B21 finish mode (post=1, only from Finish): Next;<br/>View workout; B28 Share (→ share card); Back;<br/>not-medical-advice statement in EVERY state (incl. loading / missing);<br/>re-read on every focus; works offline<br/>(another user's / unfinished id: 'not on this phone')"]
     EmptyQ -->|"no: finish, clear slot,<br/>router.replace(analysis, post=1)"| AnalysisScr
     AnalysisScr -->|"View workout: router.push"| Saved
     Saved -->|"Analysis: router.push (no post=1 → no Next)"| AnalysisScr
@@ -314,10 +314,10 @@ flowchart TD
   HistSection -->|"Your history"| ExDetail
 
   subgraph AnaMod["Analysis on the phone (src/analysis/analysis.ts, B18)"]
-    ForScreen{"analysisForScreen: unsent lines in the workout tree / its PR rows?<br/>yes → LOCAL (no clock compare);<br/>no → STORED row unless stale (workout_updated_at &lt; workout.updated_at);<br/>no stored row → LOCAL"}
-    LocalA["localAnalysis: read workout + slots + sets + PR rows citing them<br/>+ exercise names → buildAnalysis (same rules as the server)"]
+    ForScreen{"analysisForScreen: unsent lines in the workout tree / its PR rows?<br/>yes → LOCAL (no clock compare);<br/>no → STORED row unless stale (workout_updated_at &lt; workout.updated_at)<br/>or made by older rules (B42: engine_version &lt; ANALYSIS_ENGINE_VERSION);<br/>no stored row → LOCAL"}
+    LocalA["localAnalysis: read workout + slots + sets (with rpe) + PR rows citing them<br/>+ exercise names + B42 history (the user's other finished workouts starting<br/>no later, julianday order, max 40, each with its sets) → buildAnalysis (same rules as the server)"]
     StoredA["storedAnalysis: the mirror row, new_prs JSON parsed"]
-    ReqPass["analysisRequestPass: finished workouts with no / stale analysis<br/>and no unsent lines, newest first, max 10 per sync;<br/>requestAnalysis each; save the reply (saveServerAnalysesTx);<br/>a failure is logged, retried next sync"]
+    ReqPass["analysisRequestPass: finished workouts with no / stale / older-engine (B42) analysis<br/>and no unsent lines, newest first, max 10 per sync;<br/>requestAnalysis each; save the reply (saveServerAnalysesTx);<br/>a failure is logged, retried next sync"]
     ForScreen --> LocalA
     ForScreen --> StoredA
     MuscleRead["sessionMuscleLoads (src/analysis/muscles.ts, B19):<br/>distinct exercises.slug of the user's workout's slots with ≥ 1 set<br/>(warm-ups count; custom / unknown slug → nothing) → catalog muscles<br/>→ combineMuscleLoads; read in the SAME keyed load as analysisForScreen"]
@@ -386,7 +386,7 @@ flowchart TD
     Trigger{"signup trigger handle_new_user<br/>refuses missing / under-18 birthdate;<br/>creates profile, settings, body data"}
     DB[("Postgres<br/>profiles, settings, body data, follows, blocks,<br/>exercises, workouts, workout_exercises, sets,<br/>personal_records (owner-only RLS; keep-best trigger<br/>never lets an UPDATE lower a record; delete+insert can),<br/>sync_tombstones (B14: written by delete triggers, owner-only read),<br/>workout_analyses (B18: owner read only; NO write policies),<br/>flairs + posts (B20: posts read per workout_visible; write only own post of own workout;<br/>B22: kind / image_path, own-folder CHECK; B26: progress-pic-private CHECK dropped, the author picks;<br/>trigger sync_workout_visibility: a post's visibility change moves its workout, invoker rights;<br/>B27: mutes, moderators, reports (queue, founder reads in the dashboard); workout_visible hides muted lifters;<br/>votes / comments also filtered by their author (block either way / muted);<br/>B34: programs → program_weeks → program_workouts → program_exercises, author-only RLS (owns_program), soft deletes;<br/>B35: program_runs (owner-only RLS, no one-active constraint) + workouts.program_workout_id)<br/>see database-erd.md")]
     Bucket[("Storage bucket post-images (B22, private)<br/>10 MiB cap, jpeg / png / webp only;<br/>write only in your own userId/ folder;<br/>read own folder, or any object a visible post cites (workout_visible)")]
-    AnalyzeFn["Edge function analyze-workout (B18, deployed, verify_jwt on)<br/>POST {workoutId} with the user's token → getUser;<br/>reads AS THE CALLER (RLS); 404 unless the caller OWNS the workout;<br/>422 if unfinished; buildAnalysis (no model); upsert by id<br/>with the SERVICE ROLE (one statement); returns the stored row"]
+    AnalyzeFn["Edge function analyze-workout (B18, deployed, verify_jwt on)<br/>POST {workoutId} with the user's token → getUser;<br/>reads AS THE CALLER (RLS); 404 unless the caller OWNS the workout;<br/>422 if unfinished; B42 readHistory as caller (own finished workouts starting no later,<br/>newest first, max 40, + their sets, paged); buildAnalysis (no model); upsert by id<br/>with the SERVICE ROLE (one statement); returns the stored row (deployed v3, B42)"]
     AuthAPI --> Trigger --> DB
     AnalyzeFn -->|"select as caller; upsert workout_analyses as service role"| DB
     ModerateFn["Edge function moderate (B27, NFR-7, deployed v2, verify_jwt on)<br/>POST {action: remove-post | remove-comment | remove-account, targetId}<br/>with the founder's token → getUser; 403 unless in moderators (read as service role);<br/>remove-post: delete post (votes/comments cascade) → delete its post-images object → resolve open reports;<br/>remove-comment: delete → resolve; remove-account: 409 for a moderator, else auth.admin.deleteUser<br/>(cascade) → sweep post-images/id/ + avatars/id/. No app screen calls it — the founder, by hand"]
@@ -428,7 +428,7 @@ flowchart TD
 
   subgraph Shared["Shared training math (backend/supabase/functions/_shared/training-math)<br/>import name in the app: @training-math"]
     MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification<br/>+ recordBooks fold (which set holds each book), beatsRecord, compareRecordBooks (B13),<br/>session volume (volume.ts: warm-ups and weightless sets add 0),<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store, the logger's<br/>display (displayWeight), the Tool Kit (B16) and the analysis rules (B18)"]
-    AnaRules["Analysis rules (_shared/analysis, B18), import name @analysis:<br/>buildSummary (sessionVolumeKg, set counts, duration, PRs citing the sets),<br/>pickCopy (4 states: pr / weighted / unloaded / empty), NOT_MEDICAL_ADVICE,<br/>buildAnalysis + ANALYSIS_ENGINE_VERSION = 1; pure, deterministic;<br/>B19 combineMuscleLoads: per-muscle MAX across a session's exercises (phone only so far)"]
+    AnaRules["Analysis rules (_shared/analysis, B18), import name @analysis:<br/>buildSummary (sessionVolumeKg, set counts, duration, PRs citing the sets),<br/>pickCopy (4 states: pr / weighted / unloaded / empty), NOT_MEDICAL_ADVICE,<br/>buildAnalysis + ANALYSIS_ENGINE_VERSION = 2; pure, deterministic;<br/>B42 trend.ts: trendHistory (strictly before, id tie-break, 40 scanned, empties dropped, 10 kept),<br/>sessionMeasures (volume, mean RPE, load per rep), buildTrend (null below 5 sessions);<br/>copy.ts trendCopy (render-time trend lines, never stored);<br/>B19 combineMuscleLoads: per-muscle MAX across a session's exercises (phone only so far)"]
     MathMod --> AnaRules
   end
   AnaRules -->|"buildAnalysis (Deno, relative import)"| AnalyzeFn
@@ -575,6 +575,14 @@ flowchart TD
    exercise with a logged set counts, warm-ups included; an exercise added but never done, or a
    custom exercise (no library muscle data), adds nothing. The card is left out when nothing maps.
    It is always read from the phone, never stored, so it is offline and follows edits at once.
+   Since B42 (ANA-5, LOG-10) an **Against your trend** card sits under the numbers once the
+   lifter has at least 5 earlier sessions with sets logged: "Compared with your last N sessions"
+   (up to 10), this session's volume beside the recent average with "About 12% more than your
+   recent average" (or less, or "Right around…"), and one intensity line — **Average RPE**
+   ("8.0 vs 7.0", "About 1.0 above your recent sessions") when this session and enough earlier
+   ones carry RPE, otherwise **Load per rep** in the lifter's unit. With fewer sessions the card
+   is simply not there. Old analyses grow the card too: the phone shows its own up-to-date
+   computation at once and asks the server to redo the stored copy over the next syncs.
    Since B21 (LOG-7), when Finish opened it the analysis also has a **Next** button (the saved
    workout's Analysis button opens it without one, so old workouts are never offered again).
    Next opens the **Post step**: the workout's title, a row of flair chips (the flair list the
@@ -943,6 +951,19 @@ flowchart TD
   queue an upload of it). Pull's fourth bookmark (`pull_cursor:workout_analyses`) follows the
   records; a workout tombstone or a local `deleteLocalRowsTx('workouts')` also drops the
   analysis row. Device schema V7.
+- **Trend (B42).** `_shared/analysis/trend.ts` owns the whole rule: `trendHistory` takes the
+  candidates a reader fetched and keeps those started strictly before the workout (instants via
+  `timestampMs`, same instant → lower id), the 40 newest, minus empty finishes, then the 10
+  newest; `sessionMeasures` gives volume (`sessionVolumeKg`), mean RPE (non-warm-up, 1–10) and
+  load per rep; `buildTrend` returns the six `workout_analyses` trend fields (trend ones null
+  below 5 sessions; RPE / load averages null under 3 contributing sessions). Readers only fetch:
+  the edge function's `readHistory` (PostgREST `lte started_at`, `neq id`, `ended_at not null`,
+  ordered desc, limit 40, then `selectIn` entries and sets) and the phone's `readHistory` in
+  `src/analysis/analysis.ts` (`julianday` compare, same cap). `ANALYSIS_ENGINE_VERSION = 2`;
+  `analysisForScreen` and `workoutsNeedingAnalysis` both treat an older stored version like a
+  stale row. The words are `trendCopy` in `copy.ts`, built on screen from the stored numbers
+  (never stored); each line carries its two numbers, RPEs pre-rounded to the one decimal shown.
+  Device schema V15; `toAnalysisRow` coerces the six numerics.
 - **Muscle map (B19).** The combining rule is `combineMuscleLoads` in
   `_shared/analysis/muscles.ts` (per-muscle maximum, generic string keys, no catalog import).
   `src/analysis/muscles.ts` `sessionMuscleLoads` runs one parameterized query (the user's

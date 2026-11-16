@@ -16,6 +16,7 @@ import {
   type AnalysisRecord,
   type AnalysisSet,
   type AnalysisWorkout,
+  type TrendSessionInput,
   type WorkoutAnalysis,
 } from '../_shared/analysis/index.ts';
 
@@ -52,7 +53,7 @@ function entry(n: number, slot: number, exerciseId: string): AnalysisEntry {
 }
 
 function set(e: AnalysisEntry, position: number, reps: number | null, weightKg: number | null, warm = false): AnalysisSet {
-  return { id: `${e.id.slice(0, 34)}${position}${position}`, workout_exercise_id: e.id, position, reps, weight_kg: weightKg, is_warmup: warm };
+  return { id: `${e.id.slice(0, 34)}${position}${position}`, workout_exercise_id: e.id, position, reps, weight_kg: weightKg, is_warmup: warm, rpe: null };
 }
 
 /** Fixture 1 — multi-exercise weighted session. */
@@ -110,11 +111,16 @@ const f7: Fixture = { workout: workout(7, 0, null), entries: [], sets: [], recor
 const FIXTURES = [f1, f2, f3, f4, f5, f6, f7];
 
 /** A fake database holding the fixtures, recording every save. */
-function fakeDeps(visible: readonly Fixture[] = FIXTURES) {
+function fakeDeps(visible: readonly Fixture[] = FIXTURES, history: readonly TrendSessionInput[] = []) {
   const saved = new Map<string, StoredAnalysisRow>();
   const saves: WorkoutAnalysis[] = [];
+  const historyReads: AnalysisWorkout[] = [];
   let clock = 0;
   const deps: AnalyzeDeps = {
+    readHistory: async (w) => {
+      historyReads.push(w);
+      return [...history];
+    },
     readWorkout: async (id) => visible.find((f) => f.workout.id === id)?.workout ?? null,
     readEntries: async (id) => visible.find((f) => f.workout.id === id)?.entries ?? [],
     readSets: async (ids) => visible.flatMap((f) => f.sets).filter((s) => ids.includes(s.workout_exercise_id)),
@@ -129,11 +135,18 @@ function fakeDeps(visible: readonly Fixture[] = FIXTURES) {
       return row;
     },
   };
-  return { deps, saved, saves };
+  return { deps, saved, saves, historyReads };
 }
 
-/** The expected stored analysis for a fixture, from hand-worked numbers. */
-function expected(f: Fixture, numbers: Pick<WorkoutAnalysis, 'total_volume_kg' | 'total_sets' | 'working_sets' | 'duration_seconds' | 'new_prs'>) {
+/**
+ * The expected stored analysis for a fixture, from hand-worked numbers. These fixtures carry no
+ * RPE and no history, so the trend is absent; `loadPerRep` is the session's volume ÷ loaded reps.
+ */
+function expected(
+  f: Fixture,
+  numbers: Pick<WorkoutAnalysis, 'total_volume_kg' | 'total_sets' | 'working_sets' | 'duration_seconds' | 'new_prs'>,
+  loadPerRep: number | null = null,
+) {
   const copy = pickCopy(numbers);
   return {
     id: f.workout.id,
@@ -143,6 +156,12 @@ function expected(f: Fixture, numbers: Pick<WorkoutAnalysis, 'total_volume_kg' |
     headline: copy.headline,
     message: copy.message,
     workout_updated_at: f.workout.updated_at,
+    trend_sessions: null,
+    trend_volume_avg_kg: null,
+    trend_rpe_avg: null,
+    trend_load_per_rep_avg_kg: null,
+    session_rpe_avg: null,
+    session_load_per_rep_kg: loadPerRep,
   };
 }
 
@@ -157,7 +176,8 @@ async function analyze(f: Fixture) {
 describe('analyze-workout fixtures', () => {
   it('1: a multi-exercise weighted session', async () => {
     expect(await analyze(f1)).toEqual(
-      expected(f1, { total_volume_kg: 1630, total_sets: 5, working_sets: 4, duration_seconds: 3750, new_prs: [] }),
+      // Load per rep: 1630 kg over 5 + 5 + 5 + 3 = 18 loaded reps = 90.5555… → 90.556.
+      expected(f1, { total_volume_kg: 1630, total_sets: 5, working_sets: 4, duration_seconds: 3750, new_prs: [] }, 90.556),
     );
     expect(pickCopy({ new_prs: [], total_volume_kg: 1630, total_sets: 5 }).state).toBe('weighted');
   });
@@ -175,7 +195,7 @@ describe('analyze-workout fixtures', () => {
           { exercise_id: SQUAT, exercise_name: 'Squat', kind: 'true1rm', reps: null, value_kg: 180 },
           { exercise_id: SQUAT, exercise_name: 'Squat', kind: 'repMax', reps: 5, value_kg: 150 },
         ],
-      }),
+      }, 155), // 930 kg over 6 reps
     );
     expect(analysis.headline).toBe('2 new personal records!');
   });
@@ -260,5 +280,64 @@ describe('analyze-workout requests', () => {
     const { deps, saves } = fakeDeps();
     await handleAnalyzeRequest({ workoutId: f1.workout.id, user_id: 'someone-else' }, USER, deps);
     expect(saves[0].user_id).toBe(USER);
+  });
+});
+
+describe('analyze-workout trend (B42)', () => {
+  /** An earlier session `hoursBefore` fixture 1 started, with one set per [reps, kg, rpe]. */
+  function earlier(n: number, hoursBefore: number, sets: [number | null, number | null, number | null][]): TrendSessionInput {
+    const id = wid(100 + n);
+    return {
+      id,
+      started_at: new Date(Date.parse(f1.workout.started_at) - hoursBefore * 3_600_000).toISOString(),
+      sets: sets.map(([reps, kg, rpe], i) => ({
+        id: `${id.slice(0, 34)}${i}${i}`,
+        workout_exercise_id: `${id}-slot`,
+        position: i,
+        reps,
+        weight_kg: kg,
+        is_warmup: false,
+        rpe,
+      })),
+    };
+  }
+
+  it('hands the workout to readHistory and stores the trend computed from what it returned', async () => {
+    // Five earlier sessions with volumes 500, 600, 700, 800, 900 → average 700. Fixture 1 has
+    // 1630 kg, so the screen will say about 133% more. No RPE anywhere: the RPE arm stays null,
+    // load per rep (each 100 kg/rep: 5×100, 6×100, …) averages 100.
+    const history = [5, 6, 7, 8, 9].map((reps, i) => earlier(i, 24 * (i + 1), [[reps, 100, null]]));
+    const { deps, historyReads } = fakeDeps(FIXTURES, history);
+    const response = await handleAnalyzeRequest({ workoutId: f1.workout.id }, USER, deps);
+    if (response.status !== 200) throw new Error('expected 200');
+    expect(historyReads).toEqual([f1.workout]);
+    expect(response.body).toMatchObject({
+      trend_sessions: 5,
+      trend_volume_avg_kg: 700,
+      trend_rpe_avg: null,
+      trend_load_per_rep_avg_kg: 100,
+      session_rpe_avg: null,
+      session_load_per_rep_kg: 90.556,
+    });
+  });
+
+  it('four earlier sessions are below the threshold: every trend column is null', async () => {
+    const history = [5, 6, 7, 8].map((reps, i) => earlier(i, 24 * (i + 1), [[reps, 100, 8]]));
+    const { deps } = fakeDeps(FIXTURES, history);
+    const response = await handleAnalyzeRequest({ workoutId: f1.workout.id }, USER, deps);
+    if (response.status !== 200) throw new Error('expected 200');
+    expect(response.body).toMatchObject({
+      trend_sessions: null,
+      trend_volume_avg_kg: null,
+      trend_rpe_avg: null,
+      trend_load_per_rep_avg_kg: null,
+    });
+  });
+
+  it('refused requests never read history', async () => {
+    const { deps, historyReads } = fakeDeps();
+    await handleAnalyzeRequest({ workoutId: f7.workout.id }, USER, deps);
+    await handleAnalyzeRequest({ workoutId: f1.workout.id }, '22222222-2222-4222-8222-222222222222', deps);
+    expect(historyReads).toEqual([]);
   });
 });

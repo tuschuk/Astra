@@ -226,14 +226,30 @@ describe('createSupabaseTransport', () => {
   });
 
   it('B18: pulls the user’s analyses after a bookmark, converting new_prs to text', async () => {
-    const { client, requests } = recordingClient([{ data: [{ id: 'w1', total_volume_kg: 5, new_prs: [] }] }]);
+    const { client, requests } = recordingClient([
+      { data: [{ id: 'w1', total_volume_kg: 5, new_prs: [], trend_sessions: 6, trend_rpe_avg: '8.25' }] },
+    ]);
     const rows = await createSupabaseTransport(client).pullWorkoutAnalyses('u1', null, 500);
-    expect(rows).toEqual([{ id: 'w1', total_volume_kg: 5, new_prs: '[]' }]);
+    // B42: the six trend numerics come back as numbers, a missing one as null.
+    expect(rows).toEqual([
+      {
+        id: 'w1',
+        total_volume_kg: 5,
+        new_prs: '[]',
+        trend_sessions: 6,
+        trend_volume_avg_kg: null,
+        trend_rpe_avg: 8.25,
+        trend_load_per_rep_avg_kg: null,
+        session_rpe_avg: null,
+        session_load_per_rep_kg: null,
+      },
+    ]);
     expect(requests[0]).toEqual([
       ['from', 'workout_analyses'],
       [
         'select',
-        'id,user_id,engine_version,total_volume_kg,total_sets,working_sets,duration_seconds,new_prs,headline,message,workout_updated_at,created_at,updated_at',
+        'id,user_id,engine_version,total_volume_kg,total_sets,working_sets,duration_seconds,new_prs,headline,message,workout_updated_at,created_at,updated_at,' +
+          'trend_sessions,trend_volume_avg_kg,trend_rpe_avg,trend_load_per_rep_avg_kg,session_rpe_avg,session_load_per_rep_kg',
       ],
       ['eq', 'user_id', 'u1'],
       ['order', 'updated_at', { ascending: true }],

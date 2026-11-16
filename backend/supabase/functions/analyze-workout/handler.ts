@@ -11,8 +11,9 @@
  *      theirs → 404 (the two look the same on purpose, so nobody can probe for other people's
  *      workouts);
  *   3. refuse a workout still in progress (422) — only finished workouts are analyzed (ANA-1);
- *   4. read its exercise slots, sets, the personal records citing those sets, and the
- *      exercise names, again as the caller;
+ *   4. read its exercise slots, sets, the personal records citing those sets, the exercise
+ *      names, and (B42) the caller's earlier finished workouts with their sets — the history
+ *      the trend compares against — again as the caller;
  *   5. hand all of it to the shared rules (`buildAnalysis`) — this file computes nothing itself;
  *   6. save the result keyed by the workout id (one analysis per workout; a repeat replaces it)
  *      and return the stored row.
@@ -27,6 +28,7 @@ import {
   type AnalysisRecord,
   type AnalysisSet,
   type AnalysisWorkout,
+  type TrendSessionInput,
   type WorkoutAnalysis,
 } from '../_shared/analysis/index.ts';
 
@@ -51,6 +53,12 @@ export interface AnalyzeDeps {
   readRecords(setIds: readonly string[]): Promise<AnalysisRecord[]>;
   /** Exercise id → name, for the given exercises the caller can see. */
   readExerciseNames(exerciseIds: readonly string[]): Promise<Record<string, string>>;
+  /**
+   * The owner's other finished workouts that started no later than `workout`, newest first, at
+   * most `TREND_SCAN_LIMIT` of them, each with all its sets (B42). The shared trend rules do the
+   * exact selection, so this only has to fetch.
+   */
+  readHistory(workout: AnalysisWorkout): Promise<TrendSessionInput[]>;
   /** Inserts or replaces the analysis keyed by its id, returning the row as stored. */
   saveAnalysis(analysis: WorkoutAnalysis): Promise<StoredAnalysisRow>;
 }
@@ -97,7 +105,8 @@ export async function handleAnalyzeRequest(
   const records = await deps.readRecords(sets.map((s) => s.id));
   const exerciseIds = [...new Set(entries.map((e) => e.exercise_id).filter((id): id is string => id != null))];
   const exerciseNames = await deps.readExerciseNames(exerciseIds);
+  const history = await deps.readHistory(workout);
 
-  const analysis = buildAnalysis({ workout, entries, sets, records, exerciseNames });
+  const analysis = buildAnalysis({ workout, entries, sets, records, exerciseNames, history });
   return { status: 200, body: await deps.saveAnalysis(analysis) };
 }

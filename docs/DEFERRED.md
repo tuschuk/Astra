@@ -768,3 +768,22 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
     score drops on the next focus of the tab; airplane mode → tab and comments screen show the
     connection message. Judge the Featured section and the page's social row at phone width.
   - `mmdc` render of both diagrams not run by the builder — Gate 2.
+- **B42 trend-analysis** (built, awaiting Gate 2; the builder run ended with a non-zero exit after
+  its Review and Document steps, so Gate 2 wrote this entry and the build commit from the
+  builder's uncommitted tree):
+  - **Device check (Tristen):** open the analysis of a workout with at least five earlier logged
+    sessions -> the "Against your trend" card shows "Compared with your last N sessions", the
+    volume line and (with RPE logged) the RPE line; a lifter with fewer than five sessions sees no
+    card; log a session with no RPE -> the intensity line falls back to load per rep; airplane
+    mode -> the card still renders from the local computation; after sync the stored row (engine
+    version 2) matches it.
+  - Deload / next-session rules reading the trend columns - B44 (Blocked). Long-term charts - B46.
+    Recovery-aware adjustments and any cited performance figures - B56.
+  - Not built, each a one-place change in `_shared/analysis/trend.ts` if device evidence asks:
+    calendar-window trends, split-aware or per-exercise comparisons, median instead of mean,
+    bodyweight-informed volume.
+  - History edits do not re-stamp an already computed trend (the B18 staleness class); a
+    half-synced phone computes a thinner trend offline until sync.
+  - The version-2 recompute wave re-requests every existing analysis row, ten per sync; watch
+    read sizes on accounts with many workouts.
+  - Trend lines are not on share cards or posts.

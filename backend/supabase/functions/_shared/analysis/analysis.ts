@@ -6,19 +6,22 @@
  */
 import { pickCopy } from './copy.ts';
 import { buildSummary, type AnalysisInput, type AnalysisSummary } from './summary.ts';
+import { buildTrend, type AnalysisTrend } from './trend.ts';
 
 /**
  * Which version of the rules produced an analysis, stored on every row. Raise it whenever a
  * rule or a string changes, so an old row can be told apart from (and recomputed by) the new
- * rules. Version 1: B18's summary + four-state copy.
+ * rules — the phone re-requests, and prefers its own computation over, any stored row made by an
+ * older version (`frontend/src/analysis/analysis.ts`).
+ * Version 1: B18's summary + four-state copy. Version 2: B42's trend fields (`trend.ts`).
  */
-export const ANALYSIS_ENGINE_VERSION = 1;
+export const ANALYSIS_ENGINE_VERSION = 2;
 
 /**
  * A complete analysis, column for column as the `workout_analyses` table stores it (minus the
  * table's own `created_at` / `updated_at`). `id` is the workout's id — one analysis per workout.
  */
-export interface WorkoutAnalysis extends AnalysisSummary {
+export interface WorkoutAnalysis extends AnalysisSummary, AnalysisTrend {
   id: string;
   user_id: string;
   engine_version: number;
@@ -47,5 +50,6 @@ export function buildAnalysis(input: AnalysisInput): WorkoutAnalysis {
     headline,
     message,
     workout_updated_at: input.workout.updated_at,
+    ...buildTrend(input),
   };
 }

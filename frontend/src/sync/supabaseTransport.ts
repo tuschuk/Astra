@@ -57,15 +57,24 @@ function columnsOf(tbl: MirroredTable): string {
 /**
  * Turns a `workout_analyses` row as the server sends it into the phone's row shape (B18). The
  * one table whose column types differ between the two: the server's `new_prs` is JSON (it
- * arrives as a list) while the phone keeps it as text, and `total_volume_kg` is a numeric that
- * is made sure to be a number. Done here, once, so no reader has to care.
+ * arrives as a list) while the phone keeps it as text, and `total_volume_kg` and the six trend
+ * numerics (B42) are made sure to be numbers (a missing or null trend value stays null). Done
+ * here, once, so no reader has to care.
  */
 export function toAnalysisRow(raw: Record<string, unknown>): WorkoutAnalysisRow {
   const prs = raw.new_prs;
+  // A numeric column as a number; an absent or null one (a version-1 row, or below the threshold) as null.
+  const numberOrNull = (value: unknown): number | null => (value == null ? null : Number(value));
   return {
     ...(raw as unknown as WorkoutAnalysisRow),
     total_volume_kg: Number(raw.total_volume_kg),
     new_prs: typeof prs === 'string' ? prs : JSON.stringify(prs ?? []),
+    trend_sessions: numberOrNull(raw.trend_sessions),
+    trend_volume_avg_kg: numberOrNull(raw.trend_volume_avg_kg),
+    trend_rpe_avg: numberOrNull(raw.trend_rpe_avg),
+    trend_load_per_rep_avg_kg: numberOrNull(raw.trend_load_per_rep_avg_kg),
+    session_rpe_avg: numberOrNull(raw.session_rpe_avg),
+    session_load_per_rep_kg: numberOrNull(raw.session_load_per_rep_kg),
   };
 }
 

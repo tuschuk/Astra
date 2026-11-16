@@ -5,6 +5,7 @@
  * Real SQLite (node driver), never the live project.
  */
 import { describe, expect, it } from '@jest/globals';
+import { ANALYSIS_ENGINE_VERSION } from '@analysis';
 
 import { prepareDatabase } from '@/db/database';
 import { getRowsByIds, upsertRows, type WorkoutRow } from '@/db/dao';
@@ -246,6 +247,227 @@ describe('workoutsNeedingAnalysis', () => {
     expect(await workoutsNeedingAnalysis(db, USER_ID)).toEqual([id]);
     expect(await workoutsNeedingAnalysis(db, 'someone-else')).toEqual([]);
     expect(draft.getSnapshot().workout.ended_at).toBeNull();
+  });
+});
+
+/** One logged squat set: reps, kg (omit for bodyweight), RPE (omit for none). */
+type LoggedSet = { reps: number; kg?: number; rpe?: number };
+
+/** Finishes a squat-only workout starting at `start` with the given sets (none = an empty finish). */
+async function finishWith(db: SqlDriver, start: string, loggedSets: LoggedSet[]): Promise<string> {
+  const store = await startActiveWorkout(db, USER_ID, steadyOptions(start));
+  if (loggedSets.length > 0) {
+    const squat = await store.addExercise(SQUAT);
+    for (const s of loggedSets) {
+      await store.logSet(squat.id, { reps: s.reps, weight: s.kg == null ? undefined : { value: s.kg, unit: 'kg' }, rpe: s.rpe });
+    }
+  }
+  return (await store.finish()).id;
+}
+
+const day = (n: number) => `2026-11-${String(n).padStart(2, '0')}T09:00:00.000Z`;
+
+describe('the trend (B42, ANA-5 / LOG-10)', () => {
+  /**
+   * Five qualifying sessions and one empty finish, then today (volume / mean RPE / load per rep):
+   *   d1 3×100 @9 → 300 / 9 / 100     d2 8×50, 8×50 → 800 / – / 50    d3 5×120 → 600 / – / 120
+   *   d4 10×60 @7 → 600 / 7 / 60      d5 empty (excluded)            d6 5×100 @8 ×2 → 1000 / 8 / 100
+   *   today 5×110 @8.5, 5×110 @9 → 1100 / 8.75 / 110
+   * Averages over 5 sessions: volume 3300 / 5 = 660; RPE (9 + 7 + 8) / 3 = 8; load (100 + 50 +
+   * 120 + 60 + 100) / 5 = 86.
+   */
+  async function seedHistory(db: SqlDriver) {
+    const ids = {
+      d1: await finishWith(db, day(1), [{ reps: 3, kg: 100, rpe: 9 }]),
+      d2: await finishWith(db, day(2), [{ reps: 8, kg: 50 }, { reps: 8, kg: 50 }]),
+      d3: await finishWith(db, day(3), [{ reps: 5, kg: 120 }]),
+      d4: await finishWith(db, day(4), [{ reps: 10, kg: 60, rpe: 7 }]),
+      d5: await finishWith(db, day(5), []),
+      d6: await finishWith(db, day(6), [{ reps: 5, kg: 100, rpe: 8 }, { reps: 5, kg: 100, rpe: 8 }]),
+      today: await finishWith(db, day(7), [{ reps: 5, kg: 110, rpe: 8.5 }, { reps: 5, kg: 110, rpe: 9 }]),
+    };
+    return ids;
+  }
+
+  it('above the threshold the numbers match the history, and the server row equals the phone’s computation', async () => {
+    const { db, server, engine } = await setup();
+    const ids = await seedHistory(db);
+    const local = await localAnalysis(db, USER_ID, ids.today);
+    expect(local).toMatchObject({
+      engine_version: ANALYSIS_ENGINE_VERSION,
+      total_volume_kg: 1100,
+      trend_sessions: 5,
+      trend_volume_avg_kg: 660,
+      trend_rpe_avg: 8,
+      trend_load_per_rep_avg_kg: 86,
+      session_rpe_avg: 8.75,
+      session_load_per_rep_kg: 110,
+    });
+
+    await engine.syncNow();
+    expect(server.analyses.size).toBe(7);
+    for (const id of Object.values(ids)) {
+      const shown = await analysisForScreen(db, USER_ID, id);
+      expect(shown?.source).toBe('stored');
+      expect(shown?.analysis).toEqual(await localAnalysis(db, USER_ID, id));
+    }
+  });
+
+  it('below the threshold the trend columns are null on the stored row (d6 has 4 qualifying before it)', async () => {
+    const { db, engine } = await setup();
+    const ids = await seedHistory(db);
+    await engine.syncNow();
+    expect(await storedAnalysis(db, USER_ID, ids.d6)).toMatchObject({
+      trend_sessions: null,
+      trend_volume_avg_kg: null,
+      trend_rpe_avg: null,
+      trend_load_per_rep_avg_kg: null,
+      session_rpe_avg: 8,
+      session_load_per_rep_kg: 100,
+    });
+    // The empty d5 is computed against d1..d4 (4) — also absent.
+    expect((await storedAnalysis(db, USER_ID, ids.d5))?.trend_sessions).toBeNull();
+  });
+
+  it('both paths pick the same window over downloaded rows with mixed stamp formats, a tie and the scan cap', async () => {
+    // 45 one-set workouts seeded on the server (as another phone would have uploaded them). Some
+    // stamps are "+00:00" with microseconds, some "Z"; workouts 20 and 21 share one instant written
+    // both ways (a tie broken by id). A fresh phone downloads them all.
+    const server = new FakeServer();
+    const wid = (i: number) => `a0000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+    const eid = (i: number) => `b0000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+    const sid = (i: number) => `c0000000-0000-4000-8000-${String(i).padStart(12, '0')}`;
+    const startOf = (i: number) => {
+      const ms = Date.parse('2026-09-01T09:00:00.000Z') + (i === 21 ? 20 : i) * 86_400_000;
+      const iso = new Date(ms).toISOString();
+      if (i === 20) return iso.replace('.000Z', '+00:00'); // the same instant as 21's "…000Z"
+      return i % 2 === 0 ? iso.replace('.000Z', '.000123+00:00') : iso;
+    };
+    const N = 45;
+    const rows = Array.from({ length: N }, (_, i) => i);
+    server.seed(
+      'workouts',
+      rows.map((i) => ({
+        id: wid(i),
+        user_id: USER_ID,
+        title: null,
+        notes: null,
+        started_at: startOf(i),
+        ended_at: new Date(Date.parse(startOf(i)) + 3_600_000).toISOString(),
+        visibility: 'private' as const,
+        program_workout_id: null,
+        created_at: startOf(i),
+      })),
+    );
+    server.seed(
+      'workout_exercises',
+      rows.map((i) => ({ id: eid(i), workout_id: wid(i), exercise_id: SQUAT, position: 0, notes: null, superset_group: null, created_at: startOf(i) })),
+    );
+    server.seed(
+      'sets',
+      rows.map((i) => ({
+        id: sid(i),
+        workout_exercise_id: eid(i),
+        position: 0,
+        reps: 1 + (i % 5),
+        weight_kg: 50 + i,
+        rpe: i % 3 === 0 ? null : 6 + (i % 4),
+        is_warmup: false,
+        drop_set_position: null,
+        duration_seconds: null,
+        score: null,
+        notes: null,
+        created_at: startOf(i),
+      })),
+    );
+    const { db, engine } = await setup(server);
+    await engine.syncNow(); // downloads everything, then analyzes the newest 10
+    for (const target of [wid(N - 1), wid(21), wid(20)]) {
+      const fromServer = await server.requestAnalysis(target);
+      const { created_at: _c, updated_at: _u, ...stored } = fromServer;
+      const local = await localAnalysis(db, USER_ID, target);
+      expect({ ...stored, new_prs: JSON.parse(stored.new_prs) }).toEqual(local);
+      expect(local?.trend_sessions).toBe(10);
+    }
+  });
+
+  it('a stored version-1 row: the screen shows the local version-2 trend at once, and the pass re-requests it', async () => {
+    const { db, server, engine } = await setup();
+    const ids = await seedHistory(db);
+    await engine.syncNow();
+    await engine.syncNow(); // the download bookmark catches up with the rows the pass saved
+    // As if made before B42, on the server and on this phone: engine version 1, no trend.
+    const v1 = {
+      engine_version: 1,
+      trend_sessions: null,
+      trend_volume_avg_kg: null,
+      trend_rpe_avg: null,
+      trend_load_per_rep_avg_kg: null,
+      session_rpe_avg: null,
+      session_load_per_rep_kg: null,
+    };
+    for (const [id, row] of server.analyses) server.analyses.set(id, { ...row, ...v1 });
+    await db.runAsync(
+      `update workout_analyses set engine_version = 1, trend_sessions = null, trend_volume_avg_kg = null,
+       trend_rpe_avg = null, trend_load_per_rep_avg_kg = null, session_rpe_avg = null, session_load_per_rep_kg = null`,
+    );
+    const shown = await analysisForScreen(db, USER_ID, ids.today);
+    expect(shown?.source).toBe('local');
+    expect(shown?.analysis.trend_sessions).toBe(5);
+
+    const needing = await workoutsNeedingAnalysis(db, USER_ID);
+    expect(needing[0]).toBe(ids.today); // newest first, as ever
+    expect(needing).toHaveLength(7);
+    const requests = server.analysisRequests.length;
+    await engine.syncNow();
+    expect(server.analysisRequests.length).toBe(requests + 7);
+    const after = await analysisForScreen(db, USER_ID, ids.today);
+    expect(after?.source).toBe('stored');
+    expect(after?.analysis.engine_version).toBe(ANALYSIS_ENGINE_VERSION);
+    expect(after?.analysis.trend_sessions).toBe(5);
+    expect(await workoutsNeedingAnalysis(db, USER_ID)).toEqual([]);
+  });
+
+  it('version-1 rows obey the batch cap, newest first, and the unsent-changes guard — a new workout goes first', async () => {
+    const { db } = await setup();
+    // 13 synced workouts; the 12 older carry version-1 analyses, the newest (index 12) has none.
+    const workouts: WorkoutRow[] = Array.from({ length: 13 }, (_, i) => ({
+      id: `a0000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      user_id: USER_ID,
+      title: null,
+      notes: null,
+      started_at: new Date(Date.parse('2026-10-01T09:00:00.000Z') + i * 86_400_000).toISOString(),
+      ended_at: new Date(Date.parse('2026-10-01T10:00:00.000Z') + i * 86_400_000).toISOString(),
+      visibility: 'public',
+      program_workout_id: null,
+      created_at: '2026-10-01T09:00:00.000Z',
+      updated_at: '2026-10-01T09:00:00.000Z',
+    }));
+    await upsertRows(db, 'workouts', workouts);
+    for (const w of workouts.slice(0, 12)) {
+      await db.runAsync(
+        `insert into workout_analyses (id, user_id, engine_version, total_volume_kg, total_sets, working_sets,
+           duration_seconds, new_prs, headline, message, workout_updated_at, created_at, updated_at)
+         values (?, ?, 1, 0, 0, 0, 3600, '[]', 'h', 'm', ?, ?, ?)`,
+        [w.id, USER_ID, w.updated_at, w.updated_at, w.updated_at],
+      );
+    }
+    // A newer workout still waiting to upload is skipped, version or not.
+    const pending = await finishWith(db, day(1), [{ reps: 5, kg: 100 }]);
+
+    const batch = await workoutsNeedingAnalysis(db, USER_ID);
+    expect(batch).not.toContain(pending);
+    expect(batch).toEqual(workouts.slice(3).reverse().map((w) => w.id));
+    expect(batch[0]).toBe(workouts[12].id); // the never-analyzed newest leads the upgrade wave
+  });
+
+  it('a row from NEWER rules than this app is kept, not re-requested', async () => {
+    const { db, engine } = await setup();
+    const id = await finishWith(db, day(1), [{ reps: 5, kg: 100 }]);
+    await engine.syncNow();
+    await db.runAsync('update workout_analyses set engine_version = ?', [ANALYSIS_ENGINE_VERSION + 1]);
+    expect(await workoutsNeedingAnalysis(db, USER_ID)).toEqual([]);
+    expect((await analysisForScreen(db, USER_ID, id))?.source).toBe('stored');
   });
 });
 

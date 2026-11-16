@@ -13,16 +13,26 @@
  *   - `storedAnalysis` — the server's analysis as last downloaded, or null;
  *   - `analysisForScreen` — which of the two the analysis screen shows (the freshness rule);
  *   - `analysisRequestPass` — the sync engine's last step: ask the server to analyze every
- *     finished workout that has no analysis yet, or whose analysis is out of date after an edit.
+ *     finished workout that has no analysis yet, or whose analysis is out of date after an edit
+ *     or was made by older rules (B42).
+ *
+ * Since B42 the analysis also compares the session with the lifter's own recent history (the
+ * trend): `readAnalysisInput` therefore also reads the user's earlier finished workouts and their
+ * sets (`readHistory`), and the shared rules pick the window — the same rules over the same rows
+ * as the server function.
  *
  * Every query is parameterized and filtered by the signed-in user's id (the device file can still
  * hold a previous account's rows).
  */
 import {
+  ANALYSIS_ENGINE_VERSION,
   buildAnalysis,
   timestampMs,
+  TREND_SCAN_LIMIT,
   type AnalysisInput,
   type AnalysisPr,
+  type AnalysisSet,
+  type TrendSessionInput,
   type WorkoutAnalysis,
 } from '@analysis';
 
@@ -65,20 +75,7 @@ async function readAnalysisInput(db: SqlExecutor, userId: string, workoutId: str
     'select id, exercise_id, position from workout_exercises where workout_id = ?',
     [workoutId],
   );
-  const rawSets = await db.getAllAsync<{
-    id: string;
-    workout_exercise_id: string;
-    position: number;
-    reps: number | null;
-    weight_kg: number | null;
-    is_warmup: number;
-  }>(
-    `select s.id, s.workout_exercise_id, s.position, s.reps, s.weight_kg, s.is_warmup
-     from sets s join workout_exercises we on we.id = s.workout_exercise_id
-     where we.workout_id = ?`,
-    [workoutId],
-  );
-  const sets = rawSets.map((s) => ({ ...s, is_warmup: s.is_warmup === 1 }));
+  const sets = (await setsOfWorkouts(db, [workoutId])).map(({ workout_id: _w, ...s }) => s);
   const records = await recordsCitingSets(db, userId, sets.map((s) => s.id));
   const exerciseIds = [...new Set(entries.map((e) => e.exercise_id).filter((id): id is string => id != null))];
   const exerciseNames: Record<string, string> = {};
@@ -89,11 +86,62 @@ async function readAnalysisInput(db: SqlExecutor, userId: string, workoutId: str
     );
     for (const n of names) exerciseNames[n.id] = n.name;
   }
-  return { workout, entries, sets, records, exerciseNames };
+  const history = await readHistory(db, userId, workout);
+  return { workout, entries, sets, records, exerciseNames, history };
 }
 
 /** Most ids bound into one local statement (SQLite's bound-value limit is far above this). */
 const ID_CHUNK = 500;
+
+/**
+ * Every set logged in the given workouts (through their slots), in the shape the shared rules
+ * take, each tagged with its workout. Includes `rpe` for the trend's intensity (B42).
+ */
+async function setsOfWorkouts(
+  db: SqlExecutor,
+  workoutIds: readonly string[],
+): Promise<(AnalysisSet & { workout_id: string })[]> {
+  const out: (AnalysisSet & { workout_id: string })[] = [];
+  for (let i = 0; i < workoutIds.length; i += ID_CHUNK) {
+    const part = workoutIds.slice(i, i + ID_CHUNK);
+    const rows = await db.getAllAsync<
+      Omit<AnalysisSet, 'is_warmup'> & { is_warmup: number; workout_id: string }
+    >(
+      `select we.workout_id, s.id, s.workout_exercise_id, s.position, s.reps, s.weight_kg, s.is_warmup, s.rpe
+       from sets s join workout_exercises we on we.id = s.workout_exercise_id
+       where we.workout_id in (${placeholders(part.length)})`,
+      part,
+    );
+    out.push(...rows.map((s) => ({ ...s, is_warmup: s.is_warmup === 1 })));
+  }
+  return out;
+}
+
+/**
+ * The trend's history candidates for one workout (B42): the user's other finished workouts that
+ * started no later than it, newest first, at most `TREND_SCAN_LIMIT`, each with all its sets.
+ * Start times are compared as instants (`julianday`), not text, because this database holds both
+ * "…Z" stamps (written here) and "…+00:00" ones (downloaded). Same-instant ties are fetched on
+ * purpose; the shared trend rules (`trendHistory`) do the exact selection — the same rules the
+ * server function runs over its own identical fetch.
+ */
+async function readHistory(
+  db: SqlExecutor,
+  userId: string,
+  workout: { id: string; started_at: string },
+): Promise<TrendSessionInput[]> {
+  const workouts = await db.getAllAsync<{ id: string; started_at: string }>(
+    `select id, started_at from workouts
+     where user_id = ? and ended_at is not null and id <> ? and julianday(started_at) <= julianday(?)
+     order by julianday(started_at) desc, id desc
+     limit ?`,
+    [userId, workout.id, workout.started_at, TREND_SCAN_LIMIT],
+  );
+  if (workouts.length === 0) return [];
+  const setsOf = new Map<string, AnalysisSet[]>(workouts.map((w) => [w.id, []]));
+  for (const { workout_id, ...s } of await setsOfWorkouts(db, workouts.map((w) => w.id))) setsOf.get(workout_id)?.push(s);
+  return workouts.map((w) => ({ id: w.id, started_at: w.started_at, sets: setsOf.get(w.id) ?? [] }));
+}
 
 /** The user's personal records whose proof is one of `setIds`. */
 async function recordsCitingSets(db: SqlExecutor, userId: string, setIds: readonly string[]) {
@@ -181,11 +229,23 @@ function isStale(analysisWorkoutUpdatedAt: string, workoutUpdatedAt: string): bo
 }
 
 /**
+ * True when a stored analysis was made by older rules than this app runs (B42: version-1 rows
+ * have no trend). Such a row is treated like a stale one in both places that ask — the screen
+ * shows the phone's own up-to-date computation instead, and the request pass asks the server to
+ * redo it — so old workouts grow their trend section without any separate upgrade job. A row
+ * from NEWER rules than this app (an older app build) is kept: it is the better copy.
+ */
+function isOlderEngine(engineVersion: number): boolean {
+  return engineVersion < ANALYSIS_ENGINE_VERSION;
+}
+
+/**
  * What the analysis screen shows for one workout (the freshness rule, plan G5 / G12):
  *   1. a workout with unsent changes always shows the phone's own computation — the stored row
  *      predates the change (decided by fact, not by comparing clocks);
  *   2. otherwise the stored row, unless it is stale (computed from an older version of the
- *      workout — both stamps are the server's by then);
+ *      workout — both stamps are the server's by then) or was made by older rules (B42, plan
+ *      G12 — a version-1 row would otherwise hide the trend until the server redoes it);
  *   3. with no stored row (offline, not synced yet, or a workout finished before B18) — the
  *      phone's computation.
  * Since both copies come from the same rules, the screen looks the same either way unless the
@@ -200,7 +260,7 @@ export async function analysisForScreen(db: SqlExecutor, userId: string, workout
   const named = { title: workout.title ?? null, started_at: workout.started_at };
   if (!(await hasPendingInputs(db, workoutId))) {
     const stored = await storedAnalysis(db, userId, workoutId);
-    if (stored && !isStale(stored.workout_updated_at, workout.updated_at)) {
+    if (stored && !isStale(stored.workout_updated_at, workout.updated_at) && !isOlderEngine(stored.engine_version)) {
       return { analysis: stored, source: 'stored', workout: named };
     }
   }
@@ -210,17 +270,23 @@ export async function analysisForScreen(db: SqlExecutor, userId: string, workout
 
 /**
  * The user's finished workouts that need a server analysis, newest first, at most `limit`:
- * those with no analysis on the phone, or a stale one — skipping any with unsent changes (the
- * server would compute from data this phone has already changed; the next sync, after the
- * upload, asks instead).
+ * those with no analysis on the phone, a stale one, or one made by older rules (B42's version
+ * upgrade — old rows refresh `limit` per sync, newest first, so a new workout is never queued
+ * behind the backlog) — skipping any with unsent changes (the server would compute from data
+ * this phone has already changed; the next sync, after the upload, asks instead).
  */
 export async function workoutsNeedingAnalysis(
   db: SqlExecutor,
   userId: string,
   limit: number = ANALYSIS_BATCH_LIMIT,
 ): Promise<string[]> {
-  const candidates = await db.getAllAsync<{ id: string; updated_at: string; analyzed_from: string | null }>(
-    `select w.id, w.updated_at, a.workout_updated_at as analyzed_from
+  const candidates = await db.getAllAsync<{
+    id: string;
+    updated_at: string;
+    analyzed_from: string | null;
+    engine_version: number | null;
+  }>(
+    `select w.id, w.updated_at, a.workout_updated_at as analyzed_from, a.engine_version
      from workouts w left join workout_analyses a on a.id = w.id
      where w.user_id = ? and w.ended_at is not null
      order by w.started_at desc, w.id desc`,
@@ -229,7 +295,13 @@ export async function workoutsNeedingAnalysis(
   const out: string[] = [];
   for (const c of candidates) {
     if (out.length >= limit) break;
-    if (c.analyzed_from != null && !isStale(c.analyzed_from, c.updated_at)) continue;
+    if (
+      c.analyzed_from != null &&
+      !isStale(c.analyzed_from, c.updated_at) &&
+      !isOlderEngine(c.engine_version ?? 0)
+    ) {
+      continue;
+    }
     if (await hasPendingInputs(db, c.id)) continue;
     out.push(c.id);
   }
