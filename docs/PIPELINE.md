@@ -92,9 +92,13 @@ claude -p <prompt> --output-format json --permission-mode acceptEdits
 - A headless run can die after doing its work. The B42 builder (Nov 16, 2026) finished Code,
   Test, Review and Document, then exited non-zero about 13 minutes after its last file write,
   before committing; n8n recorded only "Command failed" because an Execute Command node keeps
-  no stderr from a failed command. Both launchers now redirect stderr to
-  `automation/state/builder.err.log` / `planner.err.log` (gitignored) so the next failure can be
-  read. Recovery recipe: confirm no `claude -p` process is still alive, run the check chain on
+  no stderr from a failed command. Both launchers now write stdout and stderr to
+  `automation/state/{builder,planner}.out.log` / `.err.log` (gitignored), replay stdout for
+  n8n and preserve the exit code, so the next failure can be read. (The B49 planner died
+  after 256 s with an empty stderr log and no commit, leaving an empty branch; the model
+  itself answered a smoke test seconds later, so it was a one-off crash. Recipe: `git branch
+  -D` the empty branch from `main`, then `retry` the execution — a planner retry on a clean
+  tree is safe.) Recovery recipe: confirm no `claude -p` process is still alive, run the check chain on
   the uncommitted tree, read the plan file's build notes for how far Review and Document got,
   fill whatever is missing (DEFERRED entries, diagrams), commit the work on the step's branch
   as the build commit, and continue Gate 2 as usual. Do not `retry` the execution on a dirty

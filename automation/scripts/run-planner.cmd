@@ -6,6 +6,9 @@ setlocal
 cd /d "%~dp0..\.."
 node automation\scripts\pipeline.mjs prompt planner > automation\state\planner-prompt.txt
 if errorlevel 1 exit /b 1
-rem stderr goes to a log file so a failed run can be diagnosed afterwards (n8n keeps only the
-rem exit status and stdout of a failed Execute Command node).
-claude -p --output-format json --permission-mode acceptEdits --model claude-fable-5 < automation\state\planner-prompt.txt 2> automation\state\planner.err.log
+rem stdout and stderr both go to log files first (n8n keeps neither when a command fails),
+rem then stdout is replayed for n8n and the exit code is preserved.
+claude -p --output-format json --permission-mode acceptEdits --model claude-fable-5 < automation\state\planner-prompt.txt > automation\state\planner.out.log 2> automation\state\planner.err.log
+set RC=%ERRORLEVEL%
+type automation\state\planner.out.log
+exit /b %RC%
