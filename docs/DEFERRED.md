@@ -801,3 +801,11 @@ _Things postponed during sessions, so they aren't lost. Remove items when they'r
   - Workout tab tiles are never prefilled, even with a workout in progress.
   - `mmdc` render of the app-flow diagram was declined by the permission layer for the builder
     — Gate 2.
+- **B46 profile-trends (builder):**
+  - ProfileView branches on `section` in five places (loader, items, empty state, renderItem,
+    chips); a per-section map would gather them. Out of B46's scope — a refactor of B25 code.
+  - The trend reads are unbounded by design (plan Risk 1); if a device measures slow, aggregate
+    per workout in SQL or cap the points in `workout/trendSeries.ts`.
+  - Trend charts are look-only (no tap-a-point, no zoom); B49's accessibility pass may raise the
+    bar beyond one spoken sentence per chart.
+  - `mmdc` render of the updated app-flow diagram was declined by the permission layer — Gate 2.

@@ -163,7 +163,10 @@ flowchart TD
   Home -->|"card author tap (B25): router.push('/profile/[id]')"| ProfileScr["Profile (app/profile/[id].tsx, B25)<br/>ProfileView for the route id (my own id → my own view); Back"]
   FindScr -->|"card tap (B25): router.push('/profile/[id]')"| ProfileScr
   ProfileScr --> ProfileView
-  ProfileView["ProfileView (components/profile, B25)<br/>header: Avatar (public avatars URL, else letter) · display name · @username · bio<br/>(own null → 'Add a bio…', other null → 'No bio yet.') · Followers / Following counts ('—' while unknown);<br/>own: Edit profile · other: FollowButton (optimistic; refusal flips back + line) → header re-read so counts match;<br/>header offline → 'Counts and posts need a connection.' + Retry; no profile row → 'This lifter isn't available.';<br/>tabs Posts | History | PRs (ChoiceChips), reloaded on focus, Posts / History page at the list end:<br/>B27, others only: Mute / Unmute and Block / Unblock under Follow (Follow + Mute hidden while blocking);<br/>'You muted this lifter…' / 'You blocked this lifter…' line; refusal → calm line;<br/>Posts = PostCards (vote, comments, others' ⋯ report; own: the B26 visibility chip, success rewrites the tab's list) · History own = WorkoutListItem → workout/[id], other = rows → session/[id] (B37)<br/>· PRs = one card per exercise, formatPrLine in the viewer's unit"]
+  ProfileView["ProfileView (components/profile, B25)<br/>header: Avatar (public avatars URL, else letter) · display name · @username · bio<br/>(own null → 'Add a bio…', other null → 'No bio yet.') · Followers / Following counts ('—' while unknown);<br/>own: Edit profile · other: FollowButton (optimistic; refusal flips back + line) → header re-read so counts match;<br/>header offline → 'Counts and posts need a connection.' + Retry; no profile row → 'This lifter isn't available.';<br/>tabs Posts | History | PRs (ChoiceChips), reloaded on focus, Posts / History page at the list end:<br/>B27, others only: Mute / Unmute and Block / Unblock under Follow (Follow + Mute hidden while blocking);<br/>'You muted this lifter…' / 'You blocked this lifter…' line; refusal → calm line;<br/>Posts = PostCards (vote, comments, others' ⋯ report; own: the B26 visibility chip, success rewrites the tab's list) · History own = WorkoutListItem → workout/[id], other = rows → session/[id] (B37)<br/>· PRs = one card per exercise, formatPrLine in the viewer's unit<br/>B46 (YOU-7 trends), OWN profile only: a fourth tab Trends → TrendsSection (others keep exactly three tabs)"]
+  ProfileView -->|"own Trends tab (B46): useTrendData.reload on focus while Trends is open;<br/>chip tap → selectExercise (re-reads that e1RM series only)"| TrendsSec["TrendsSection (components/profile, B46, YOU-7 trends half) — offline, phone only<br/>window chips 3M · 6M · 1Y · All (default All; cut from the read time, filterWindow);<br/>Volume card: TrendChart (axis from 0), one point per finished session;<br/>Estimated 1RM card (Epley): exercise chips (newest-trained first, a deleted custom kept as<br/>'Custom exercise') + TrendChart (axis fitted); no finished workouts → 'Charts grow here as you<br/>log workouts.'; window empty → 'Nothing in this window yet.'; no qualifying set → the 1–30 reps line;<br/>read failure → 'couldn't be read' + Retry (a failed re-read / pick keeps what is shown)"]
+  TrendsSec --> TrendChartC["TrendChart (components/profile, B46): react-native-svg line + dots (≤ 40) + guide lines,<br/>geometry from chartLayout.ts (pure: round ticks chosen AFTER kg → lb, fixed month names,<br/>day labels under 60 days, single point = one dot, flat series padded);<br/>draws only after onLayout gives a width; screen reader hears chartSentence<br/>('Volume per session: 3 sessions from … to …, latest 280 kg, highest 900 kg.')"]
+  TrendsSec -->|"volumeSeries · trendExercises · e1rmSeries (workout/trendSeries.ts):<br/>finished workouts' sets, user_id filtered; SQL prefilter only narrows,<br/>sessionVolumeKg / recordsFromSets decide; ordered by timestampMs"| LocalDB
   ProfileView -->|"own header: saveOwnProfile on load; read first at mount (offline identity)"| OwnProfileStore[("kv-store key astra.social.ownProfile.userId<br/>JSON v1: username, displayName, bio, avatarPath<br/>(no counts); per account, not synced")]
   ProfileView -->|"own History: listPastWorkouts(db, me, 20, before-cursor) · own PRs: allCurrentPrs (workout/prs.ts + prList.groupPrs)"| LocalDB
   ProfileView --> ProfileQ
@@ -432,7 +435,7 @@ flowchart TD
   CustomMod -->|"my live customs (useCustomExercises, on focus)"| Picker
 
   subgraph Shared["Shared training math (backend/supabase/functions/_shared/training-math)<br/>import name in the app: @training-math"]
-    MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification<br/>+ recordBooks fold (which set holds each book), beatsRecord, compareRecordBooks (B13),<br/>session volume (volume.ts: warm-ups and weightless sets add 0),<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store, the logger's<br/>display (displayWeight), the Tool Kit (B16) and the analysis rules (B18)"]
+    MathMod["Pure functions, no I/O, all weights in kg:<br/>Epley e1RM, RPE chart, %1RM, plate loader,<br/>kg/lb conversion + display rounding, PR classification<br/>+ recordBooks fold (which set holds each book), beatsRecord, compareRecordBooks (B13),<br/>session volume (volume.ts: warm-ups and weightless sets add 0),<br/>server limits on a set + storage rounding (limits.ts)<br/>called by the active-workout store, the logger's<br/>display (displayWeight), the Tool Kit (B16), the analysis rules (B18)<br/>and the profile trends (B46: sessionVolumeKg, recordsFromSets, MAX_EPLEY_REPS, displayWeight)"]
     AnaRules["Analysis rules (_shared/analysis, B18), import name @analysis:<br/>buildSummary (sessionVolumeKg, set counts, duration, PRs citing the sets),<br/>pickCopy (4 states: pr / weighted / unloaded / empty), NOT_MEDICAL_ADVICE,<br/>buildAnalysis + ANALYSIS_ENGINE_VERSION = 2; pure, deterministic;<br/>B42 trend.ts: trendHistory (strictly before, id tie-break, 40 scanned, empties dropped, 10 kept),<br/>sessionMeasures (volume, mean RPE, load per rep), buildTrend (null below 5 sessions);<br/>copy.ts trendCopy (render-time trend lines, never stored);<br/>B19 combineMuscleLoads: per-muscle MAX across a session's exercises (phone only so far)"]
     MathMod --> AnaRules
   end
@@ -657,6 +660,16 @@ flowchart TD
    can be changed, not removed; "That username is taken." if someone has it), bio (300
    characters) and photo (square crop, up to 5 MB, JPEG / PNG / WebP; refused at pick time
    otherwise). Saving needs a connection.
+   **Trends (B46, the trends half of YOU-7), your own profile only, with no signal needed.** A
+   fourth tab draws two long-term charts from every workout on the phone: **Volume** (reps ×
+   weight per finished session — warm-ups and bodyweight sets add nothing, so a bodyweight day
+   sits at 0; a workout finished with no sets is left out) and **Estimated 1RM** for one exercise
+   (the best Epley estimate of each session it was in, the same rule the PR list uses; pick the
+   exercise from a chip row, which starts on the one trained most recently). Chips above cut both
+   charts to the last 3 / 6 months, 1 year, or All. Finish a workout and come back to You: the
+   charts re-read and the new session is the newest point on the right. A screen reader hears
+   one sentence per chart with the real numbers. Someone else's profile has no Trends tab — a
+   chart from only the sessions you're allowed to see would misstate their training.
 19. **Who can see a post (B26, YOU-5, NFR-5) — needs a connection.** Every one of the lifter's own
    cards (Home and their own Posts tab — workout posts, progress pics and PR photos) carries a
    small chip: **Only you**, **Followers** or **Public**. Tapping it opens the three choices;
@@ -1137,7 +1150,10 @@ flowchart TD
   change), Avatar (B25: the public-bucket photo, else LetterAvatar — the initial badge),
   and `usePostPhotoSource` (B25: the viewer-token photo fetch Home and profiles share).
 - `components/profile/ProfileView.tsx` (B25) is the whole profile body, used by the You tab and
-  `profile/[id]`; since B36 it shows the lifter's Teams section.
+  `profile/[id]`; since B36 it shows the lifter's Teams section; since B46 your own profile adds
+  the Trends tab: `TrendsSection` (what the tab shows), `useTrendData` (its state and numbered
+  re-reads), `TrendChart` (the SVG drawing) and `chartLayout.ts` (the pure geometry), fed by
+  `workout/trendSeries.ts` (device-only reads + the window cut).
 - `components/social/usePostListActions.ts` (B36) is the one wiring of a post card's buttons
   (vote, report, audience chip, re-share, Share card, comments, author) — Home, ProfileView and the
   team page all use it.

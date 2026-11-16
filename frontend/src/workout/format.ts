@@ -216,7 +216,34 @@ export function formatPrBadge(records: readonly Pick<PersonalRecordRow, 'kind' |
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
+/**
+ * The short month names every date label uses — fixed text rather than the phone's locale, so
+ * every phone and test machine prints the same thing. Exported (B46) for the profile charts' axis
+ * labels, so charts and lists spell months one way.
+ */
+export const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
+
+/**
+ * A moment as "Mar 3, 2026", in the phone's own time zone — `workoutDateLabel` without the
+ * weekday. (B46) The profile charts' spoken sentence uses it. Input: milliseconds since 1970.
+ */
+export function shortDateLabel(ms: number): string {
+  const d = new Date(ms);
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+}
+
+/**
+ * A number with thousands separators, written by hand so every phone prints it the same (the
+ * phone's locale tools would print "8.400" on some): 8400 → "8,400"; with `decimals` 1,
+ * 8400.5 → "8,400.5". (B46) The profile charts' axis labels and sentence use it.
+ */
+export function groupThousands(value: number, decimals = 0): string {
+  const fixed = Math.abs(value).toFixed(decimals);
+  const [whole, fraction] = fixed.split('.');
+  const grouped = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const sign = value < 0 && Number(fixed) !== 0 ? '-' : '';
+  return `${sign}${grouped}${fraction ? `.${fraction}` : ''}`;
+}
 
 /**
  * The name a workout goes by until titles exist (B12): its start date in the phone's own time
