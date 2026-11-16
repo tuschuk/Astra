@@ -54,6 +54,15 @@ beforeEach(async () => {
 });
 
 describe('ProfileView', () => {
+  it('(B46) another lifter’s profile keeps exactly its three tabs — no Trends', async () => {
+    await renderSignedIn(<ProfileView profileId="pat" />);
+    expect(await screen.findByText('Pat session')).toBeTruthy();
+    for (const tab of ['Show posts', 'Show workout history', 'Show personal records']) {
+      expect(screen.getByLabelText(tab)).toBeTruthy();
+    }
+    expect(screen.queryByLabelText('Show trends')).toBeNull();
+  });
+
   it('offline, another lifter shows no remembered identity; Retry brings the profile back', async () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
     // A remembered copy exists for someone else — it must never stand in for Pat.

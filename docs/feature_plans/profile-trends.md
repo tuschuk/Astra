@@ -300,3 +300,38 @@ Run in the planner session at full severity (headless; Gate 1 is where Tristen o
 - **Scope verdict (planner):** right as written. The step stays a pure frontend read-and-draw
   over data earlier steps made trustworthy; the one place it could have sprawled (other
   lifters' profiles) is explicitly out with the reasoning recorded.
+
+## Builder deviations (B46 build)
+
+Recorded by the builder; none changes the step's scope or a Rule.
+
+1. **New file `components/profile/useTrendData.ts` (+ test).** The plan put the loader inside
+   ProfileView; it became a small hook (state, two numbered read counters, the picked exercise)
+   so ProfileView only calls `reload()` from its existing `loadSection('trends')` arm. ProfileView
+   still owns *when* (the focus effect, open tab only).
+2. **Window "now" is the read time.** `filterWindow` counts back from `readAtMs`, stamped when the
+   series were read (every focus), not `Date.now()` during render — the React purity lint refuses
+   the latter, and the read time is the honest "now" for the data shown.
+3. **`trendExercises` decides qualification per set with `recordsFromSets`** (not by the SQL
+   alone), so the picker can never offer an exercise whose chart is empty; the SQL prefilter takes
+   `MAX_EPLEY_REPS` as a parameter from `@training-math` (review: no literal 30 anywhere, copy
+   included). A fractional-reps row is tested end to end (Risk 2's guard test).
+4. **Two general formatters moved into `workout/format.ts`** — `groupThousands` (hand-written
+   thousands separators) and `shortDateLabel` ("Mar 3, 2026"), beside `MONTHS` (now exported) —
+   per review (Duplicated Code / misplaced formatter). `chartLayout.ts` keeps only chart geometry.
+5. **Tick counts.** Y ticks aim for 4 and land on 3–5 (rarely 6) after snapping to nice steps;
+   x ticks are at most 4, neighbouring duplicates merged, "Nov 12" day labels when the span is
+   under 60 days, "Nov 2026" otherwise (G12's fixed names either way).
+6. **A failed exercise pick keeps the chart already drawn** (and reverts the chip) instead of
+   blanking both charts; only a failed *first* read shows the error + Retry. Review finding: the
+   two failure paths now follow ProfileView's one rule (a failed re-read keeps what's shown).
+7. **Exercise chips** are `ChoiceChips` inside a horizontal `ScrollView` (the plan's horizontal
+   scroll); the window chips use `fill`.
+8. **Card sublabels** say what the number is — "Per session, in kg · warm-ups and bodyweight sets
+   add nothing" and "Best estimate per session (Epley formula), in kg" — the estimate wording the
+   CLAUDE.md numeric-claims rule asks for. No performance claims.
+9. **The three-tabs-for-others assertion** lives in `ProfileView.test.tsx`, not the
+   `profile/[id]` route test. The You route test's offline proof runs with the fake server
+   offline the whole time (stronger than "answers only header/teams").
+10. **Not changed (review judgement call):** ProfileView's per-section ternaries gained a fourth
+    arm rather than becoming a per-section map — a refactor of B25 code outside this step.

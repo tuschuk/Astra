@@ -14,11 +14,15 @@
  *     on your own profile your role), each opening that team's page. The server decides which of
  *     someone else's teams you see: their open teams, and invite-only teams you share. No teams
  *     to show → no section;
- *   - three tabs: **Posts** (their posts as feed cards, newest first, twenty at a time — the server
+ *   - three tabs (four on your own profile): **Posts** (their posts as feed cards, newest first, twenty at a time — the server
  *     decides which ones the viewer may see), **History** (every finished workout, newest first,
  *     paging back to the very first one), and **PRs** (current records per exercise, e.g.
  *     "1RM 140 kg · e1RM 151.7 kg · 5RM 130 kg", in the viewer's kg / lb unit). On your own
  *     Posts tab (B26) each card has the "who can see this" chip — Only you / Followers / Public.
+ *     (B46, YOU-7) Your own profile adds **Trends**: long-term Volume and estimated-1RM charts
+ *     drawn from every workout on this phone (`TrendsSection`). Someone else's profile has no
+ *     Trends tab — a chart built from only the sessions you may see would show gaps and dips
+ *     that aren't their real training.
  *   - (B27) on someone else's profile, **Mute / Unmute** and **Block / Unblock** under the follow
  *     button. Mute hides their posts, workouts and comments from you, one way, without telling
  *     them and without unfollowing. Block (asked first) hides both ways and removes follows both
@@ -30,7 +34,7 @@
  *     cards, Share opens the image share card for the phone's share sheet.
  *
  * Where the data comes from:
- *   - your own History and PRs are read from the phone, so they work with no signal, and a past
+ *   - your own History, PRs and Trends are read from the phone, so they work with no signal, and a past
  *     workout opens its saved-workout screen when tapped;
  *   - everything about another lifter is read from the server as you (never stored on the phone);
  *     tapping one of their workouts (B37) opens the whole session, read online (`/session/[id]`).
@@ -54,6 +58,8 @@ import { PostCard, UNNAMED_EXERCISE } from '@/components/social/PostCard';
 import { usePostListActions } from '@/components/social/usePostListActions';
 import { usePostPhotoSource } from '@/components/social/usePostPhotoSource';
 import { TeamListItem } from '@/components/teams/TeamListItem';
+import { TrendsSection } from '@/components/profile/TrendsSection';
+import { useTrendData } from '@/components/profile/useTrendData';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { ChoiceChips, type ChoiceOption } from '@/components/ui/ChoiceChips';
@@ -93,13 +99,19 @@ import { listPastWorkouts, type PastWorkoutSummary } from '@/workout/history';
 import { allCurrentPrs } from '@/workout/prs';
 import { colors, radii, spacing, type } from '@/theme';
 
-/** The three tabs under the header. */
-export type ProfileSection = 'posts' | 'history' | 'prs';
+/** The tabs under the header — 'trends' (B46) only on your own profile. */
+export type ProfileSection = 'posts' | 'history' | 'prs' | 'trends';
 
 const SECTION_OPTIONS: readonly ChoiceOption<ProfileSection>[] = [
   { value: 'posts', label: 'Posts', spoken: 'Show posts' },
   { value: 'history', label: 'History', spoken: 'Show workout history' },
   { value: 'prs', label: 'PRs', spoken: 'Show personal records' },
+];
+
+/** (B46) Your own profile's tabs: the three, plus Trends. */
+const OWN_SECTION_OPTIONS: readonly ChoiceOption<ProfileSection>[] = [
+  ...SECTION_OPTIONS,
+  { value: 'trends', label: 'Trends', spoken: 'Show trends' },
 ];
 
 /** How many of your own past workouts one page of History reads from the phone. */
@@ -155,7 +167,8 @@ type HeaderState =
 type Item =
   | { key: string; kind: 'post'; post: FeedPost }
   | { key: string; kind: 'history'; row: HistoryRow }
-  | { key: string; kind: 'prs'; group: ExercisePrs };
+  | { key: string; kind: 'prs'; group: ExercisePrs }
+  | { key: string; kind: 'trends' };
 
 interface ProfileViewProps {
   /** Whose profile to show. */
@@ -178,10 +191,14 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
   const header: HeaderState = headerState?.forId === profileId ? headerState.state : { status: 'loading' };
   // Your own remembered name / bio / photo, shown until (or instead of, offline) the server's.
   const [cached, setCached] = useState<OwnProfileIdentity | null>(() => (own && me ? getCachedOwnProfile(me) : null));
-  const [section, setSection] = useState<ProfileSection>('posts');
+  const [chosenSection, setSection] = useState<ProfileSection>('posts');
+  // Trends exists only on your own profile; if this view shows someone else, it falls back to Posts.
+  const section: ProfileSection = !own && chosenSection === 'trends' ? 'posts' : chosenSection;
   const [posts, setPosts] = useState<PagedList<FeedPost, FeedCursor>>({ status: 'idle' });
   const [history, setHistory] = useState<PagedList<HistoryRow, HistoryCursor>>({ status: 'idle' });
   const [prs, setPrs] = useState<PrList>({ status: 'idle' });
+  // (B46) The Trends tab's charts, read from the phone — only ever for your own profile.
+  const trends = useTrendData(own ? db : null, own ? me : null, own && dbError);
   // (B27) Whether I block / mute this lifter, and a safety change in flight / its refusal.
   const [relationState, setRelation] = useState<{ forId: string; value: Relation } | null>(null);
   const relation = relationState?.forId === profileId ? relationState.value : null;
@@ -315,10 +332,25 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
     }
   }, [own, db, dbError, me, client, profileId]);
 
-  /** (Re)loads the first page of one tab — the one the lifter is looking at. */
+  /**
+   * (Re)loads the first page of one tab — the one the lifter is looking at. For Trends (B46) that
+   * re-reads the charts' whole history. Because only the open tab is re-read, that full read runs
+   * only while Trends is on screen, and coming back to the profile after finishing a workout
+   * redraws the charts with it as the newest point.
+   */
+  const reloadTrends = trends.reload;
   const loadSection = useCallback(
-    (which: ProfileSection) => (which === 'posts' ? loadPosts() : which === 'history' ? loadHistory() : loadPrs()),
-    [loadPosts, loadHistory, loadPrs],
+    (which: ProfileSection): Promise<void> =>
+      which === 'posts'
+        ? loadPosts()
+        : which === 'history'
+          ? loadHistory()
+          : which === 'prs'
+            ? loadPrs()
+            : own
+              ? reloadTrends()
+              : Promise.resolve(),
+    [loadPosts, loadHistory, loadPrs, reloadTrends, own],
   );
 
   /**
@@ -563,7 +595,7 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
       ) : null}
 
       <View style={styles.sections}>
-        <ChoiceChips options={SECTION_OPTIONS} selected={section} onSelect={setSection} fill />
+        <ChoiceChips options={own ? OWN_SECTION_OPTIONS : SECTION_OPTIONS} selected={section} onSelect={setSection} fill />
       </View>
     </View>
   );
@@ -581,13 +613,16 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
               row,
             }))
           : []
-        : prs.status === 'ready'
-          ? prs.groups.map((group) => ({ key: `prs:${group.exerciseId}`, kind: 'prs', group }))
-          : [];
+        : section === 'prs'
+          ? prs.status === 'ready'
+            ? prs.groups.map((group) => ({ key: `prs:${group.exerciseId}`, kind: 'prs', group }))
+            : []
+          : // (B46) Trends is one row that shows its own loading, error and empty states.
+            [{ key: 'trends', kind: 'trends' }];
 
   const current = section === 'posts' ? posts : section === 'history' ? history : prs;
   const empty =
-    current.status === 'error' ? (
+    section === 'trends' ? undefined : current.status === 'error' ? (
       <EmptyState
         icon="cloud-offline-outline"
         message={
@@ -656,6 +691,18 @@ export function ProfileView({ profileId, topBar }: ProfileViewProps) {
         <OtherWorkoutRow
           workout={row.workout}
           onPress={() => router.push({ pathname: '/session/[id]', params: { id: row.workout.id } })}
+        />
+      );
+    }
+    if (item.kind === 'trends') {
+      return (
+        <TrendsSection
+          data={trends.data}
+          timeWindow={trends.timeWindow}
+          onSelectWindow={trends.setTimeWindow}
+          onSelectExercise={(id) => void trends.selectExercise(id)}
+          onRetry={() => void trends.reload()}
+          unit={unit}
         />
       );
     }

@@ -43,13 +43,29 @@ jest.mock('@/lib/supabase', () => ({
 jest.mock('@/settings/displayUnit', () => ({ useDisplayUnit: () => 'kg' }));
 
 const mockPush = jest.fn();
+// (B46) Focus callbacks are kept so a test can "come back to the tab" with `refocus()`.
+const mockFocusCallbacks = new Set<() => void>();
 jest.mock('expo-router', () => {
   const { useEffect } = jest.requireActual<typeof import('react')>('react');
   return {
     useRouter: () => ({ push: mockPush }),
-    useFocusEffect: (effect: () => void) => useEffect(effect, [effect]),
+    useFocusEffect: (effect: () => void) =>
+      useEffect(() => {
+        mockFocusCallbacks.add(effect);
+        effect();
+        return () => {
+          mockFocusCallbacks.delete(effect);
+        };
+      }, [effect]),
   };
 });
+
+/** Comes back to the You tab: every live focus callback runs again, as on a real focus. */
+async function refocus(): Promise<void> {
+  await act(async () => {
+    for (const effect of mockFocusCallbacks) effect();
+  });
+}
 
 const ME = SIGNED_IN_USER_ID;
 const HIDDEN = { includeHiddenElements: true };
@@ -194,6 +210,49 @@ describe('You — own profile (B25)', () => {
     const first = screen.getAllByLabelText(/^Open workout from/)[0];
     await fireEvent.press(first);
     expect(mockPush).toHaveBeenLastCalledWith({ pathname: '/workout/[id]', params: { id: shownIds[0] } });
+  });
+
+  it('(B46) Trends: both charts render from logged workouts and update after a new one — offline', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    // The server is unreachable the whole time: the charts read only the phone.
+    mockSocial = createFakeSocialClient({}, { offline: true });
+    await logWorkout('2026-10-01T12:00:00.000Z', [
+      [SQUAT, 5, 100],
+      [BENCH, 5, 80],
+    ]);
+    await logWorkout('2026-10-08T12:00:00.000Z', [[SQUAT, 3, 120]]);
+    await renderSignedIn(<YouScreen />);
+    await fireEvent.press(await screen.findByLabelText('Show trends'));
+
+    // Volume: 5×100 + 5×80 = 900, then 3×120 = 360. Squat (trained most recently) e1RM: 100×5 →
+    // 116.7, then 120×3 → 132.
+    expect(
+      await screen.findByLabelText(
+        'Volume per session: 2 sessions from Oct 1, 2026 to Oct 8, 2026, latest 360 kg, highest 900 kg.',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByLabelText('Squat estimated 1RM: 2 sessions from Oct 1, 2026 to Oct 8, 2026, latest 132 kg, highest 132 kg.'),
+    ).toBeTruthy();
+
+    // Finish another workout, come back to You: the new session is the newest point on both.
+    await logWorkout('2026-10-15T12:00:00.000Z', [[SQUAT, 2, 140]]);
+    await refocus();
+    expect(
+      await screen.findByLabelText(
+        'Volume per session: 3 sessions from Oct 1, 2026 to Oct 15, 2026, latest 280 kg, highest 900 kg.',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByLabelText(
+        'Squat estimated 1RM: 3 sessions from Oct 1, 2026 to Oct 15, 2026, latest 149.3 kg, highest 149.3 kg.',
+      ),
+    ).toBeTruthy();
+
+    // The picker switches the e1RM chart to another exercise.
+    await fireEvent.press(screen.getByLabelText('Show Bench Press estimated 1RM'));
+    expect(await screen.findByLabelText('Bench Press estimated 1RM: 1 session on Oct 1, 2026, 93.3 kg.')).toBeTruthy();
+    warn.mockRestore();
   });
 
   it('offline: my remembered name and bio still show; counts are a dash with the connection line', async () => {

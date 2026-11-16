@@ -30,7 +30,24 @@ import {
   workoutDateLabel,
   workoutDetailsLabel,
   workoutDurationLabel,
+  groupThousands,
+  shortDateLabel,
 } from './format';
+
+describe('groupThousands / shortDateLabel (B46)', () => {
+  it('writes separators by hand, the same on every phone', () => {
+    expect(groupThousands(0)).toBe('0');
+    expect(groupThousands(999)).toBe('999');
+    expect(groupThousands(9210)).toBe('9,210');
+    expect(groupThousands(1234567)).toBe('1,234,567');
+    expect(groupThousands(8400.5, 1)).toBe('8,400.5');
+    expect(groupThousands(2.5, 1)).toBe('2.5');
+  });
+
+  it('writes a date as "Mar 3, 2026" in the phone’s own time zone', () => {
+    expect(shortDateLabel(new Date(2026, 2, 3, 12).getTime())).toBe('Mar 3, 2026');
+  });
+});
 
 /** 185 lb as the store saves it (converted, rounded to the column's 2 decimals). */
 const KG_185LB = roundWeightKgForStorage(lbToKg(185));
